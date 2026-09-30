@@ -1,6 +1,6 @@
 // Wallet-layer offline selftests — NO network, NO onchain calls.
 // Run: node src/wallet.test.js (also appended to npm test via selftest.js)
-import { verifyWalletSignature, issueSession, readSession, sessionCookie, sessionFromReq, isValidSuiAddress } from './walletAuth.js';
+import { verifyWalletSignature, issueSession, readSession, sessionCookie, sessionFromReq, isValidSuiAddress, issueNonce, consumeNonce, authMessage } from './walletAuth.js';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 
 let pass = 0, fail = 0;
@@ -27,14 +27,36 @@ const kp = Ed25519Keypair.fromSecretKey(Uint8Array.from({ length: 32 }, (_, i) =
 const address = kp.getPublicKey().toSuiAddress();
 const { verifyPersonalMessageSignature } = await import('@mysten/sui/verify');
 const { AUTH_MESSAGE } = await import('./walletAuth.js');
-const sig = (await kp.signPersonalMessage(new TextEncoder().encode(AUTH_MESSAGE))).signature;
-const good = await verifyWalletSignature({ address, signature: sig });
-ok(good && good.address === address.toLowerCase(), 'valid wallet signature verifies');
-const wrong = (await kp.signPersonalMessage(new TextEncoder().encode('wrong message'))).signature;
-ok((await verifyWalletSignature({ address, signature: wrong })) === null, 'wrong message rejected');
-ok((await verifyWalletSignature({ address, signature: sig.slice(0, -4) + 'AAAA' })) === null, 'corrupted signature rejected');
-ok((await verifyWalletSignature({ address: '0x1234', signature: sig })) === null, 'bad address rejected');
-ok((await verifyWalletSignature({ address, signature: 'junk' })) === null, 'junk signature rejected');
+
+// --- nonce flow (replay resistance) ---
+const n1 = issueNonce();
+ok(typeof n1.nonce === 'string' && n1.nonce.length >= 16, 'issueNonce returns a random nonce');
+ok(typeof n1.expiresAt === 'number' && n1.expiresAt > Date.now(), 'issueNonce sets a future expiry');
+ok(n1.message === authMessage(n1.nonce) && n1.message.includes(n1.nonce), 'authMessage is deterministic and embeds the nonce');
+ok(n1.message !== AUTH_MESSAGE, 'nonce message differs from the fixed legacy message');
+ok(consumeNonce(n1.nonce) === true, 'consumeNonce accepts a fresh nonce');
+ok(consumeNonce(n1.nonce) === false, 'reused nonce rejected');
+ok(consumeNonce('never-issued') === false, 'unknown nonce rejected');
+ok(consumeNonce(undefined) === false, 'undefined nonce rejected');
+{
+  const nExp = issueNonce(1); // 1ms injectable TTL
+  await new Promise((r) => setTimeout(r, 15));
+  ok(consumeNonce(nExp.nonce) === false, 'expired nonce rejected');
+}
+
+const n2 = issueNonce();
+const sig = (await kp.signPersonalMessage(new TextEncoder().encode(n2.message))).signature;
+const good = await verifyWalletSignature({ address, signature: sig, nonce: n2.nonce });
+ok(good && good.address === address.toLowerCase(), 'valid signature over the nonce message verifies');
+const wrong = (await kp.signPersonalMessage(new TextEncoder().encode(AUTH_MESSAGE))).signature;
+ok((await verifyWalletSignature({ address, signature: wrong, nonce: n2.nonce })) === null, 'signature over the wrong (fixed) message rejected');
+const n3 = issueNonce();
+const sig3 = (await kp.signPersonalMessage(new TextEncoder().encode(n3.message))).signature;
+ok((await verifyWalletSignature({ address, signature: sig3, nonce: n2.nonce })) === null, 'signature bound to a different nonce rejected');
+ok((await verifyWalletSignature({ address, signature: sig, nonce: undefined })) === null, 'missing nonce rejected');
+ok((await verifyWalletSignature({ address, signature: sig.slice(0, -4) + 'AAAA', nonce: n2.nonce })) === null, 'corrupted signature rejected');
+ok((await verifyWalletSignature({ address: '0x1234', signature: sig, nonce: n2.nonce })) === null, 'bad address rejected');
+ok((await verifyWalletSignature({ address, signature: 'junk', nonce: n2.nonce })) === null, 'junk signature rejected');
 
 // --- registry (temp store) ---
 process.env.DD_REGISTRY_PATH = '.wallet-registry.selftest.json';
@@ -45,6 +67,12 @@ const u = reg.getUser('0x' + 'cd'.repeat(32));
 ok(u && u.accountId === '0x' + 'ef'.repeat(32), 'registry upsert + get');
 reg.markAccountLinked('0x' + 'cd'.repeat(32), '0x' + 'ee'.repeat(32));
 ok(reg.getUser('0x' + 'cd'.repeat(32)).accountId === '0x' + 'ee'.repeat(32), 'markAccountLinked updates');
+// Recovery case: row missing entirely (lost registry) -> upsert a minimal row.
+const lostAddr = '0x' + '77'.repeat(32);
+ok(reg.getUser(lostAddr) === null, 'recovery address absent before markAccountLinked');
+const upserted = reg.markAccountLinked(lostAddr, '0x' + '88'.repeat(32));
+ok(upserted && upserted.accountId === '0x' + '88'.repeat(32), 'markAccountLinked upserts a missing row');
+ok(reg.getUser(lostAddr)?.accountId === '0x' + '88'.repeat(32), 'upserted recovery row is retrievable');
 try { fs.unlinkSync('.wallet-registry.selftest.json'); } catch { /* best effort */ }
 
 // --- delegate client factory (pure config check, no network) ---
@@ -62,8 +90,23 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
   process.env.SESSION_SECRET = 'test-secret-123';
   const enc = cu.encryptSecret('deadbeef00');
   ok(enc.enc === true && /\/.+\//.test(enc.v.split('.')[2] || '') === false && enc.v.split('.').length === 3, 'encryptSecret emits iv.tag.ct');
+  ok(enc.kdf === 'scrypt' && typeof enc.salt === 'string' && enc.salt.length > 0, 'encryptSecret uses scrypt with a stored per-value salt');
   ok(!JSON.stringify(enc).includes('deadbeef00'), 'ciphertext does not contain plaintext');
   ok(cu.decryptSecret(enc) === 'deadbeef00', 'decryptSecret roundtrip');
+  {
+    // Backward compatibility: legacy no-salt rows used bare SHA-256(secret).
+    const nodeCrypto = await import('node:crypto');
+    const legacyKey = nodeCrypto.createHash('sha256').update('test-secret-123').digest();
+    const iv = nodeCrypto.randomBytes(12);
+    const cipher = nodeCrypto.createCipheriv('aes-256-gcm', legacyKey, iv);
+    const ct = Buffer.concat([cipher.update('legacy-key', 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const legacy = { enc: true, v: `${iv.toString('base64')}.${tag.toString('base64')}.${ct.toString('base64')}` };
+    ok(cu.decryptSecret(legacy) === 'legacy-key', 'legacy no-salt rows still decrypt (SHA-256 fallback)');
+    let threwLegacy = false;
+    try { cu.decryptSecret({ enc: true, salt: enc.salt, v: legacy.v }); } catch { threwLegacy = true; }
+    ok(threwLegacy, 'legacy ciphertext + wrong salt fails loudly (GCM auth)');
+  }
   const tampered = { enc: true, v: enc.v.slice(0, -2) + 'xx' };
   let threwT = false;
   try { cu.decryptSecret(tampered); } catch { threwT = true; }
@@ -106,6 +149,19 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
   ok(rl.rateLimit({ key, limit: 2, windowMs: 1000 }).allowed === true, 'rate limit 1st ok');
   ok(rl.rateLimit({ key, limit: 2, windowMs: 1000 }).allowed === true, 'rate limit 2nd ok');
   ok(rl.rateLimit({ key, limit: 2, windowMs: 1000 }).allowed === false, 'rate limit 3rd blocked');
+}
+
+// --- clientIp trusts the proxy hop, not client-supplied XFF ---
+{
+  const rl = await import('./rateLimit.js');
+  const xff = { headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2, 3.3.3.3' }, socket: { remoteAddress: '9.9.9.9' } };
+  ok(rl.clientIp(xff) === '3.3.3.3', 'clientIp uses the rightmost (trusted) XFF hop, not the leftmost');
+  const spoofed = { headers: { 'x-forwarded-for': '6.6.6.6, 7.7.7.7' }, socket: { remoteAddress: '9.9.9.9' } };
+  ok(rl.clientIp(spoofed) === '7.7.7.7', 'clientIp cannot be rotated via a prepended XFF value');
+  const real = { headers: { 'x-real-ip': '5.5.5.5', 'x-forwarded-for': '1.1.1.1' }, socket: { remoteAddress: '9.9.9.9' } };
+  ok(rl.clientIp(real) === '5.5.5.5', 'clientIp prefers x-real-ip when present');
+  ok(rl.clientIp({ headers: {}, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp falls back to socket address');
+  ok(rl.clientIp({ headers: {} }) === 'unknown', 'clientIp defaults to unknown');
 }
 
 import fs from 'node:fs';

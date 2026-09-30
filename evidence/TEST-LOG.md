@@ -1,8 +1,12 @@
 # TEST-LOG — DoseDaughter (Walrus Sessions 8)
 
 > Append-style probe log. REAL rows only from `evidence/DEMO-TRANSCRIPT.md` §§1–9.
-> Every `local-*` id below is a LOCAL DEMO record in `app/.local-memory.json`
-> (file-backed stand-in, zero network) — NOT Walrus Mainnet. Mainnet was never called.
+> Early rows' `local-*` ids are LOCAL DEMO records in `app/.local-memory.json`
+> (file-backed stand-in, zero network) — NOT Walrus Mainnet. The later
+> "MAINNET E2E" and "MAINNET SEED COMPLETE" sections ARE real Walrus Mainnet,
+> with real blob IDs.
+>
+> **Current suite:** `npm test` = 125 passed (69 core + 56 wallet/crypto) as of the latest run.
 
 ## E2E probes — 2026-09-20 ~22:46 UTC, `PORT=3001 node src/server.js`, MEMWAL_MODE unset → local, no LLM key
 
@@ -41,6 +45,8 @@
 |---|-------|------------------------|--------|
 | 17 | Mainnet memory verify (needs `MEMWAL_ACCOUNT_ID` + `MEMWAL_PRIVATE_KEY`) | `npm run verify:memwal` | ⏳ PENDING |
 | 18 | Mainnet seed 10 facts (needs keys, `MEMWAL_MODE=mainnet`) | `npm run seed:10` | ⏳ PENDING |
+
+> **Later completed (kept for history):** row 17 was completed by row 26 (`node src/verify.js` on Mainnet); row 18 by row 34 (sequential idempotent seeder, 12/12 blobs). Both ran for real — see the MAINNET sections below.
 
 ## model-independence — 2026-09-20 ~23:20 UTC, `PORT=3002 node src/server.js`, MEMWAL_MODE unset → local, OpenRouter key in-process only (never printed/stored)
 
@@ -86,8 +92,8 @@ sequential paced idempotent seeder. Transient 503/500/504s during congestion; al
 Relayer incidents survived: 503 AUTH_UPSTREAM_UNAVAILABLE, 500 seal-encrypt/durable-upload, 504 job
 waits ×2, stuck idempotency job (escaped by dropping key), recall aborts during index settle.
 
-| 35 | 2026-09-22 | demo-mom | Metformin blob id re-verified via live recall (ledger transcription caught + fixed) | 1 recall hit | JbCdbC3Hx85f5Ddg0H5bkxdjeTbHGrmWVgawEggKRyo matches ledger 12:33 block | ✅ PASS | ledger line corrected; honesty rule: verify links, never infer |
-| 36 | 2026-09-22 | MystenLabs/MemWal | Filed #966 (wedged job poisons idempotency key) with live logs | issue live | https://github.com/MystenLabs/MemWal/issues/966 | ✅ FILED | dupe-checked vs #932/#814 |
-| 37 | 2026-09-22 | MystenLabs/MemWal | Filed #967 (bulk accepts 12, lands 0 — silent loss) | issue live | https://github.com/MystenLabs/MemWal/issues/967 | ✅ FILED | dupe-checked vs #767/#940/#611 |
-| 38 | 2026-09-22 | MystenLabs/MemWal | Filed #968 (recall has no relevance cutoff; filler d≥0.9) with measured distances | issue live | https://github.com/MystenLabs/MemWal/issues/968 | ✅ FILED | dupe-checked vs #373/#715 |
-| 39 | 2026-09-22 | docs/images | 4 article visuals rendered 2× DPI (banner/stop-receipt/before-after/architecture) | 4 PNGs | 218–2500 KB each, sources in docs/images/src/*.html | ✅ PASS | playbook + alt text in docs/images/VISUALS.md |
+| 40 | 2026-09-22 | demo-mom | Metformin blob id re-verified via live recall (ledger transcription caught + fixed) | 1 recall hit | JbCdbC3Hx85f5Ddg0H5bkxdjeTbHGrmWVgawEggKRyo matches ledger 12:33 block | ✅ PASS | ledger line corrected; honesty rule: verify links, never infer |
+| 41 | 2026-09-22 | MystenLabs/MemWal | Filed #966 (wedged job poisons idempotency key) with live logs | issue live | https://github.com/MystenLabs/MemWal/issues/966 | ✅ FILED | dupe-checked vs #932/#814 |
+| 42 | 2026-09-22 | MystenLabs/MemWal | Filed #967 (bulk accepts 12, lands 0 — silent loss) | issue live | https://github.com/MystenLabs/MemWal/issues/967 | ✅ FILED | dupe-checked vs #767/#940/#611 |
+| 43 | 2026-09-22 | MystenLabs/MemWal | Filed #968 (recall has no relevance cutoff; filler d≥0.9) with measured distances | issue live | https://github.com/MystenLabs/MemWal/issues/968 | ✅ FILED | dupe-checked vs #373/#715 |
+| 44 | 2026-09-22 | docs/images | 4 article visuals rendered 2× DPI (banner/stop-receipt/before-after/architecture) | 4 PNGs | 218–2500 KB each, sources in docs/images/src/*.html | ✅ PASS | playbook + alt text in docs/images/VISUALS.md |

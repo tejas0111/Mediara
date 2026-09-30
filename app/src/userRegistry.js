@@ -59,14 +59,28 @@ export function upsertUser({ address, accountId, delegatePrivateKey, delegatePub
   return row;
 }
 
+// Mark an account as linked. UPSERTS: if the registry row is missing (the exact
+// recovery case this exists for — account lives onchain but the local row was
+// lost, e.g. redeploy), a minimal row is created with address + accountId. The
+// delegate key is NOT recoverable this way; callers that need one must run the
+// link flow again.
 export function markAccountLinked(address, accountId) {
   const db = load();
   const key = String(address).toLowerCase();
-  if (!db.users[key]) return null;
-  db.users[key].accountId = accountId;
-  db.users[key].pendingPhase = null;
-  db.users[key].pendingTxBytes = null;
-  db.users[key].updatedAt = new Date().toISOString();
+  const prev = db.users[key] || {};
+  const now = new Date().toISOString();
+  const row = {
+    ...prev,
+    address: key,
+    accountId,
+    pendingPhase: null,
+    pendingTxBytes: null,
+    // Only claim encryption when there is actually a secret on file.
+    keyEncrypted: prev.delegatePrivateKey != null ? (prev.keyEncrypted ?? encryptionEnabled()) : false,
+    onboardedAt: prev.onboardedAt || now,
+    updatedAt: now,
+  };
+  db.users[key] = row;
   save(db);
-  return db.users[key];
+  return row;
 }

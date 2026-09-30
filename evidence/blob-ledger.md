@@ -4,7 +4,7 @@ Agent ID (MEMWAL_ACCOUNT_ID): 0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc987
 Namespace pattern: `user-<id>` (e.g. `user-demo-mom`)
 Ledger rule: every `rememberAndWait` result is appended here with its walruscan link, so the agent ID and blob count can be verified publicly.
 
-Status: **13 blobs live on Mainnet** (12 seeded Sept 21 + 1 taught live in chat). Every link below was either captured from a tool response or re-verified via live recall — never inferred. One wrong transcription (Metformin, caught Sept 22) was corrected after re-verification.
+Status: **13 demo-persona memory facts live on Mainnet** (12 seeded Sept 21 + 1 taught live in chat); this ledger records **15 unique blob IDs** (13 facts + 1 verify probe + 1 manual probe copy). Every link below was either captured from a tool response or re-verified via live recall — never inferred. One wrong transcription (Metformin, caught Sept 22) was corrected after re-verification.
 
 ## 2026-09-21T12:00Z — first blobs verified on Mainnet
 Agent (MEMWAL_ACCOUNT_ID): 0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc9879f605324bdbbb783

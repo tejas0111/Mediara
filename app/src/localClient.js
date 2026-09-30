@@ -15,7 +15,23 @@ const STORE = path.join(__dirname, '..', '.local-memory.json');
 function load() {
   try { return JSON.parse(fs.readFileSync(STORE, 'utf8')); } catch { return { namespaces: {} }; }
 }
-function save(db) { fs.writeFileSync(STORE, JSON.stringify(db, null, 2)); }
+// Atomic write: serialize to a unique tmp file, then rename. rename() is atomic
+// on the same filesystem, so a concurrent reader or a crash never observes a
+// half-written / corrupt .local-memory.json.
+function save(db) {
+  const tmp = `${STORE}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  fs.renameSync(tmp, STORE);
+}
+// In-process mutex: every mutation across all local clients shares one promise
+// chain, so read-modify-write sequences cannot interleave and lose facts when
+// concurrent requests hit the same file.
+let writeChain = Promise.resolve();
+function withLock(fn) {
+  const run = writeChain.then(fn);
+  writeChain = run.then(() => {}, () => {});
+  return run;
+}
 
 // Synonym groups canonicalize to the first entry (approximates semantic match).
 const GROUPS = [
@@ -71,14 +87,16 @@ export function createLocalClient({ namespace }) {
     async health() { return { ok: true, mode: 'local' }; },
     async remember(text) {
       text = String(text ?? '');
-      const db = load();
-      db.namespaces[ns] = db.namespaces[ns] || [];
-      const blob_id = `local-${crypto.createHash('sha1').update(`${ns}:${text}`).digest('hex').slice(0, 12)}`;
-      const job_id = `job-${blob_id}`;
-      db.namespaces[ns] = db.namespaces[ns].filter((m) => m.text !== text);
-      db.namespaces[ns].push({ text, blob_id, job_id, at: new Date().toISOString() });
-      save(db);
-      return { job_id };
+      return withLock(() => {
+        const db = load();
+        db.namespaces[ns] = db.namespaces[ns] || [];
+        const blob_id = `local-${crypto.createHash('sha1').update(`${ns}:${text}`).digest('hex').slice(0, 12)}`;
+        const job_id = `job-${blob_id}`;
+        db.namespaces[ns] = db.namespaces[ns].filter((m) => m.text !== text);
+        db.namespaces[ns].push({ text, blob_id, job_id, at: new Date().toISOString() });
+        save(db);
+        return { job_id };
+      });
     },
     async waitForRememberJob(job_id) {
       const db = load();

@@ -1,0 +1,4 @@
+/* Same-origin placeholder for Deep Chat's default web-font request.
+ * Deep Chat (MIT) links a Google Fonts stylesheet by default; we redirect that
+ * to this empty file so no third-party request is made and the strict CSP holds.
+ * The component falls back to the system font stack. */

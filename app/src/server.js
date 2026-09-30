@@ -9,15 +9,25 @@
 // session cookie); onboarded users get a per-user MemWal delegate client so chat
 // memory lands in THEIR OWN MemWalAccount (they own it; app wallet never touched).
 import 'dotenv/config';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createClient, namespaceFor, recallRelevant, recallAll, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage } from './page.js';
-import { AUTH_MESSAGE, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
+import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser } from './userRegistry.js';
 import { limiter, clientIp } from './rateLimit.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+// Escape anything echoed into an HTML error page (never reflect raw upstream text).
+const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// A session cookie that fails to parse means EXPIRED (not anonymous). Used to
+// avoid silently downgrading an expired signed-in user to the shared channel.
+const hasSessionCookie = (req) => /(?:^|;\s*)dd_session=/.test(req.headers.cookie || '');
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 function clientFor(userId) {
@@ -37,6 +47,7 @@ function userClientFor(address) {
 }
 
 const app = express();
+app.disable('x-powered-by');
 // Security headers on every response. CSP allows inline scripts (the UI is
 // server-rendered, no build step) but blocks every external origin.
 app.use((req, res, next) => {
@@ -44,9 +55,12 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'");
+  // script-src is 'self' only (no inline scripts) — the UI JS is served from /assets.
+  res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'");
   next();
 });
+// Static UI assets (vendored Deep Chat bundle + our CSS/JS).
+app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
 // 16 KB JSON bodies — chat messages and tx signatures are tiny; anything
 // larger is abuse. (Express's json parser rejects oversize with 413.)
 app.use(express.json({ limit: '16kb' }));
@@ -55,6 +69,8 @@ app.use(express.json({ limit: '16kb' }));
 const authLimiter = limiter({ keyFn: (req) => `auth:${clientIp(req)}`, limit: 10, windowMs: 60_000 });
 const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientIp(req)}`, limit: 12, windowMs: 60_000 });
 const chatLimiter = limiter({ keyFn: (req) => `chat:${clientIp(req)}`, limit: 30, windowMs: 60_000 });
+// Read routes fan out to several recall queries; cap them too (audit M9).
+const readLimiter = limiter({ keyFn: (req) => `read:${clientIp(req)}`, limit: 60, windowMs: 60_000 });
 
 async function callLLM(system, userMessage) {
   // OpenRouter (Gemini Flash default — Beyond Big Two eligible). Falls back to echo if no key.
@@ -63,7 +79,7 @@ async function callLLM(system, userMessage) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   const model = process.env.LLM_MODEL || 'google/gemini-2.5-flash';
   if (!apiKey) return `[no LLM key] system would inject ${system.length} chars of memory. You said: ${userMessage}`;
-  const models = [model, 'inclusionai/ling-3.0-flash-vl:free', 'liquid/lfm-2.5-2.6b:free'].filter((m, i, a) => a.indexOf(m) === i);
+  const models = [model, 'inclusionai/ling-3.0-flash-vl:free', 'liquid/lfm-2.5-2.6b:free', 'nex-agi/nex-n2.5-mini:free'].filter((m, i, a) => a.indexOf(m) === i);
   let lastErr = '';
   for (const m of models) {
     try {
@@ -100,8 +116,18 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // (agent account on mainnet / local stand-in in dev). Never mixed.
     const sess = sessionFromReq(req);
     const walletClient = sess ? userClientFor(sess.address) : null;
+    // An expired session must NOT silently fall through to the shared channel —
+    // that would write a signed-in user's private facts to a public namespace.
+    if (!sess && hasSessionCookie(req)) {
+      return res.status(401).json({ error: 'Your session expired — sign in again to keep using your own vault.' });
+    }
+    // Never silently downgrade a signed-in user to the shared channel — that would
+    // write their private health facts into a world-readable namespace. Fail loud.
+    if (sess && !walletClient) {
+      return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
+    }
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(userId) };
-    const client = walletClient?.client || clientFor(userId).client;
+    const client = walletClient ? walletClient.client : clientFor(userId).client;
     const label = walletClient ? `User ${sess.address.slice(0, 10)}…` : `User ${userId}`;
 
     const recalled = await recallRelevant(client, message, 5);
@@ -132,11 +158,15 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
-app.get('/api/summary', async (req, res) => {
+app.get('/api/summary', readLimiter, async (req, res) => {
   // Doctor-visit summary compiled from recall ONLY — no chat history, no model memory.
   try {
-    const userId = req.query.user || 'demo-mom';
-    const { client, mode } = clientFor(userId);
+    res.setHeader('Cache-Control', 'no-store');
+    // Mirror /memory: a signed-in onboarded user gets THEIR OWN vault, not demo-mom.
+    const sess = sessionFromReq(req);
+    const mine = sess ? userClientFor(sess.address) : null;
+    const userId = mine ? mine.ns.replace(/^user-/, '') : (req.query.user || 'demo-mom');
+    const { client, mode } = mine ? { client: mine.client, mode: 'mainnet' } : clientFor(userId);
     const recalled = await recallAll(client, [
       'medications allergies routine family',
       'Metformin Amlodipine insulin dose',
@@ -159,8 +189,9 @@ app.get('/api/summary', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
 });
 
-app.get('/memory', async (req, res) => {
+app.get('/memory', readLimiter, async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store');
     // A signed-in onboarded wallet user sees THEIR OWN vault; everyone else
     // sees the requested (or default demo) namespace.
     const sess = sessionFromReq(req);
@@ -180,7 +211,7 @@ app.get('/memory', async (req, res) => {
       rows: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })),
       agentShort: mine ? null : String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10),
     }));
-  } catch (e) { res.status(500).send(`<pre>${String(e.message || e)}</pre>`); }
+  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
 
 app.get('/', (req, res) => {
@@ -213,18 +244,24 @@ app.get('/demo', async (req, res) => {
       afterNs,
       day7Empty: r7.length === 0,
     }));
-  } catch (e) { res.status(500).send(`<pre>${String(e.message || e)}</pre>`); }
+  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
 
 // ---------------- wallet identity + per-user memory ----------------
 // Sign-in: the browser asks the wallet to sign a FIXED personal message; we
 // verify the signature server-side and set an HMAC session cookie. No fee.
-app.get('/api/auth/message', (req, res) => res.json({ message: AUTH_MESSAGE }));
+app.get('/api/auth/message', (req, res) => {
+  const { nonce, message } = issueNonce();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ nonce, message });
+});
 
 app.post('/api/auth/verify', authLimiter, async (req, res) => {
   try {
-    const { address, signature } = req.body || {};
-    const ok = await verifyWalletSignature({ address, signature });
+    const { address, signature, nonce } = req.body || {};
+    // Single-use, short-TTL challenge: a captured signature can never be replayed.
+    if (!consumeNonce(nonce)) return res.status(401).json({ error: 'sign-in challenge expired or already used — reload and try again' });
+    const ok = await verifyWalletSignature({ address, signature, nonce });
     if (!ok) return res.status(401).json({ error: 'signature verification failed' });
     const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
     res.setHeader('Set-Cookie', sessionCookie(issueSession(ok.address), { secure }));

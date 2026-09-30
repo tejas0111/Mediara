@@ -31,12 +31,16 @@ export async function walletStatus(address) {
   let onchain = null;
   if (!user?.accountId) onchain = await accountForOwner(address);
   const accountId = user?.accountId || onchain?.accountId || null;
+  // "onboarded" means THIS server can act as the user's delegate: an account id
+  // AND a delegate key on file. An account that exists onchain without a stored
+  // delegate key is NOT usable — the user must (re)link, not just view.
+  const hasDelegate = Boolean(user?.accountId && user?.delegatePrivateKey);
   return {
     address,
-    onboarded: Boolean(accountId),
-    // true => account exists onchain but this server lost its registry row
-    // (e.g. redeploy): user only needs the LINK step, not create.
-    needsRelink: Boolean(!user?.accountId && onchain?.accountId),
+    onboarded: hasDelegate,
+    // true => account exists onchain but this server has no usable delegate row
+    // (e.g. redeploy lost the registry): user needs the LINK step, not create.
+    needsRelink: Boolean(!hasDelegate && accountId),
     accountId,
   };
 }
@@ -68,8 +72,20 @@ export async function prepareLinkDelegate(address) {
   const user = getUser(address);
   let accountId = user?.accountId || (await accountForOwner(address))?.accountId || null;
   if (!accountId) throw new Error('No MemWalAccount found for this address — create one first');
-  if (!user?.delegatePrivateKey) throw new Error('No delegate key on file — call prepareCreateAccount first');
-  const delegatePublicKey = Uint8Array.from(Buffer.from(user.delegatePublicKey, 'hex'));
+  // Recovery path: if we have an onchain account but no delegate key on file
+  // (registry row lost on redeploy), generate + persist a fresh key now and link
+  // it. Without this, a "needsRelink" user could never become usable again.
+  let delegatePrivateKey = user?.delegatePrivateKey;
+  let delegatePublicKeyHex = user?.delegatePublicKey;
+  let delegateAddress = user?.delegateAddress;
+  if (!delegatePrivateKey || !delegatePublicKeyHex) {
+    const delegate = await generateDelegateKey();
+    delegatePrivateKey = delegate.privateKey;
+    delegatePublicKeyHex = Buffer.from(delegate.publicKey).toString('hex');
+    delegateAddress = delegate.suiAddress;
+    upsertUser({ address, accountId, delegatePrivateKey, delegatePublicKey: delegatePublicKeyHex, delegateAddress });
+  }
+  const delegatePublicKey = Uint8Array.from(Buffer.from(delegatePublicKeyHex, 'hex'));
   const tx = buildLinkDelegateTx(address, accountId, delegatePublicKey);
   const bytes = await tx.build({ client: buildClient() });
   const txBytesBase64 = Buffer.from(bytes).toString('base64');
@@ -120,10 +136,23 @@ export async function completeOnboarding(address, signatureBase64) {
   return { stage: 'linked', accountId, digest, nextStep: null };
 }
 
-// Recover a lost registry: re-link an account that already exists onchain.
+// Recover a lost registry: the account already exists onchain, but this server
+// has no (or a stale) local row. We can only restore the registry row here.
+//
+// IMPORTANT: without a fresh wallet signature the server cannot register a new
+// delegate key onchain. Relinking is therefore *partial* recovery: it restores
+// `address → accountId`, and reports whether a delegate key still needs to be
+// linked. When `needsDelegateLink` is true the client must run the link flow
+// (prepareLinkDelegate → wallet signs → completeOnboarding) to become usable.
 export async function relinkExisting(address) {
   const account = await accountForOwner(address);
-  if (!account) return null;
+  if (!account?.accountId) return null;
+  const before = getUser(address); // decrypted view; null if row missing/corrupt
+  const alreadyLinked = Boolean(before?.accountId);
   markAccountLinked(address, account.accountId);
-  return { accountId: account.accountId, alreadyLinked: true };
+  return {
+    accountId: account.accountId,
+    alreadyLinked,
+    needsDelegateLink: !before?.delegatePrivateKey,
+  };
 }

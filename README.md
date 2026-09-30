@@ -1,6 +1,6 @@
 # DoseDaughter 🐘
 
-**A caregiver chatbot that never re-asks a dose.** It remembers your mother's medications, allergies, and routines across conversations — permanently, on Walrus — and blocks unsafe answers before they happen.
+**A caregiver chatbot that never re-asks a dose.** It remembers your mother's medications, allergies, and routines across conversations — permanently, on Walrus — and flags unsafe answers before the model replies.
 
 Built for **Walrus Session 8: Chatbots That Remember** (Sept 18 – Oct 9, 2026).
 
@@ -15,11 +15,11 @@ Family caregivers manage a parent's medications from memory and scattered notes.
 DoseDaughter stores every fact the family teaches it as an **encrypted blob on Walrus Mainnet** via [Walrus Memory](https://www.walrus.xyz) — then recalls it at the right moment:
 
 - **Teach once, remember forever.** *"Mom takes Metformin 500mg at 8pm after food"* → stored as a Walrus blob, recalled in every future session.
-- **Deterministic allergy STOP.** Ask *"Can she take ibuprofen for her headache?"* and a coded guard fires **before the LLM even runs**, citing the exact blob that recorded the allergy. Safety doesn't depend on the model behaving.
+- **Allergy STOP guard.** Ask *"Can she take ibuprofen for her headache?"* and a coded, rule-based guard runs **before the LLM** — blocking by drug class (Advil, Aleve and Excedrin all match an ibuprofen allergy), ignoring negated facts, and citing the exact blob that recorded it. It works with no LLM key, so safety doesn't hinge on the model behaving — though it does depend on recall returning the allergy fact (a dedicated allergy recall keeps it in context).
 - **Doctor-visit summary from recall only.** `GET /api/summary` compiles medications, allergies, routine, and care contacts — no hallucination, every line traceable to a blob.
 - **Public receipts.** A `/memory` page shows every stored fact with a live [walruscan.com](https://walruscan.com) link. Nothing to hide, everything to verify.
 
-**All memory lives on Walrus Mainnet** — 13 verified blobs for the demo persona, every one linkable. No Postgres, no vector DB, no server-side state.
+**All memory lives on Walrus Mainnet** — 13 memory facts for the demo persona (12 seeded + 1 taught live), all live on Mainnet; the [blob ledger](evidence/blob-ledger.md) records every blob ID (15 unique, including probes). No Postgres, no vector DB, no server-side memory store.
 
 ## Quickstart (2 minutes, no keys)
 
@@ -27,8 +27,8 @@ DoseDaughter stores every fact the family teaches it as an **encrypted blob on W
 git clone https://github.com/tejas0111/dosedaughter.git
 cd dosedaughter/app
 npm install
-cp .env.example .env        # defaults work for the local demo
-npm test                    # 41 offline self-tests, no network
+cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
+npm test                    # 69 core + 56 wallet offline tests, no network
 npm run dev                 # server on :3001
 ```
 
@@ -74,15 +74,15 @@ write gate (shouldRemember) ──► Walrus Memory ──► Walrus Mainnet blo
 
 - **Recall before generation** — relevant memories are fetched and injected *before* the LLM sees the message.
 - **Write gate after** — a `shouldRemember()` classifier decides what's worth storing; questions and chit-chat are never saved.
-- **Deterministic safety** — allergy conflicts block the reply before the LLM runs, citing the blob ID.
+- **Allergy STOP guard** — runs before the LLM and blocks when the allergy is in recalled memory (distance < 0.7), citing the blob ID.
 - **Per-user namespaces** — `user-<id>` isolates every family member's memory.
 
-Full architecture, design decisions, and the fact schema: [docs/](docs/).
+Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Repository layout
 
 ```
-app/                  Express server, Telegram bot, MemWal wrapper, seeder, 41 self-tests
+app/                  Express server, Telegram bot, MemWal wrapper, seeder, 69 core + 56 wallet self-tests
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -93,21 +93,29 @@ Everything claimed here is verifiable:
 
 | Claim | Proof |
 |---|---|
-| 13 blobs live on Walrus Mainnet | [evidence/blob-ledger.md](evidence/blob-ledger.md) — every ID with walruscan link |
-| Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 39 dated probes |
+| 13 demo-persona memory facts live on Walrus Mainnet | [evidence/blob-ledger.md](evidence/blob-ledger.md) — every blob ID with walruscan link (15 unique, incl. probes) |
+| Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 41/41 offline self-tests pass | `npm test` — run it yourself |
+| 125/125 offline self-tests pass (69 core + 56 wallet/crypto) | `npm test` — runs both suites; run it yourself |
 
 Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc9879f605324bdbbb783`
+
+**Judge path:** the graded memory lives in the Mainnet namespace `user-demo-mom`. Run with `MEMWAL_MODE=mainnet` + keys (or open the deployed URL) and use `/demo` (Day 1 vs Day 7 live recall) and `/memory?user=demo-mom` (every fact with its walruscan blob link). Local mode is a keyless dev stand-in only — the rubric's "all memory on Mainnet" refers to the deployed path.
 
 ## Stack
 
 - **Node.js ≥ 20** + Express
 - [`@mysten-incubation/memwal`](https://www.npmjs.com/package/@mysten-incubation/memwal) — Walrus Memory SDK (Seal-encrypted blobs on Walrus Mainnet)
-- **Gemini 2.5 Flash** via OpenRouter (swappable — proven working with 3 free non-OpenAI/Anthropic models)
+- **Gemini 2.5 Flash** via OpenRouter (swappable — Gemini default with a free-model fallback chain; recall→reply verified live on three free non-OpenAI/Anthropic models, two wired into the fallback chain)
 - Optional Telegram channel (`node-telegram-bot-api`)
-- Vercel-ready (`api/index.js` + `DEPLOY.md`)
+- Vercel-ready for the shared demo (`api/index.js` + `DEPLOY.md`) — see deployment caveat below
+
+**Deployment caveat:** per-user wallet memory stores delegate keys in a local JSON registry (`app/src/userRegistry.js`). Vercel's serverless disk is ephemeral, so a redeploy loses those keys and users must relink their wallet; the memory blobs themselves remain on Mainnet.
+
+## Credits
+
+The chat interface uses **[Deep Chat](https://github.com/OvidijusParsiunas/deep-chat)** by Ovidijus Parsiunas (MIT), vendored locally at `app/public/deep-chat.bundle.js` (no CDN at runtime; its default Google Fonts request is redirected to a same-origin empty stylesheet for privacy). Full license and attribution: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Medical disclaimer
 

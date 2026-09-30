@@ -43,40 +43,126 @@ export function truncateFact(text) {
   return out;
 }
 
+// ---- Substance knowledge (deterministic; no LLM key needed) ---------------
+// Canonical drug -> drug class. Same-class substances are interchangeable for an
+// allergy check (an ibuprofen allergy must block Aleve/naproxen and Excedrin/
+// aspirin), while paracetamol stays a SEPARATE class (Tylenol must NOT block).
+export const DRUG_CLASS = {
+  ibuprofen: 'nsaid',
+  naproxen: 'nsaid',
+  aspirin: 'nsaid',
+  diclofenac: 'nsaid',
+  indomethacin: 'nsaid',
+  celecoxib: 'nsaid',
+  meloxicam: 'nsaid',
+  ketoprofen: 'nsaid',
+  etoricoxib: 'nsaid',
+  paracetamol: 'paracetamol',
+};
+// Brand/OTC name -> canonical drug.
+export const BRAND_SYNONYMS = new Map(Object.entries({
+  advil: 'ibuprofen', motrin: 'ibuprofen', nurofen: 'ibuprofen', brufen: 'ibuprofen',
+  aleve: 'naproxen', naprosyn: 'naproxen',
+  excedrin: 'aspirin',
+  disprin: 'aspirin', ecotrin: 'aspirin', bayer: 'aspirin',
+  voltaren: 'diclofenac', cataflam: 'diclofenac',
+  tylenol: 'paracetamol', panadol: 'paracetamol', calpol: 'paracetamol', acetaminophen: 'paracetamol',
+}));
+const KNOWN_DRUG_WORDS = [...new Set([...Object.keys(DRUG_CLASS), ...BRAND_SYNONYMS.keys()])];
+const DRUG_ALT = KNOWN_DRUG_WORDS.join('|');
+const NO_DRUG_RE = new RegExp(`\\bno\\s+(?:more\\s+)?(?:${DRUG_ALT})\\b`, 'i');
+
+// Singularize so plural variants ('ibuprofens') still match ('ibuprofen').
+const singular = (w) => (w.length > 4 && w.endsWith('s') ? w.slice(0, -1) : w);
+// Resolve a token to a canonical drug, or null. ONLY real drugs/substances
+// resolve — symptom words ("rash", "swelling", "reaction") never do, so the
+// safety net can never report "STOP — do not give rash."
+function resolveSubstance(word) {
+  const t = singular(String(word || '').toLowerCase().replace(/[^a-z]/g, ''));
+  if (!t) return null;
+  if (BRAND_SYNONYMS.has(t)) return BRAND_SYNONYMS.get(t);
+  if (DRUG_CLASS[t]) return t;
+  return null;
+}
+function substancesIn(text) {
+  const out = new Set();
+  for (const w of String(text || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/)) {
+    const s = resolveSubstance(w);
+    if (s) out.add(s);
+  }
+  return out;
+}
+function classesIn(text) {
+  const out = new Set();
+  for (const s of substancesIn(text)) if (DRUG_CLASS[s]) out.add(DRUG_CLASS[s]);
+  if (/\bnsaids?\b/i.test(text)) out.add('nsaid');
+  return out;
+}
+// Negated allergy facts must never block ("not allergic", "no known allergy").
+function isNegatedAllergy(text) {
+  return /\b(?:not|isn'?t|aren'?t|wasn'?t|weren'?t|never|no|denies|without)\b[^.!?]{0,25}\ballerg/i.test(String(text || ''));
+}
+
 // Write gate: only new, durable, user-stated facts are saved. Chit-chat,
 // questions, and model guesses are never written.
 export function shouldRemember(text) {
   if (typeof text !== 'string' || !text || text.length > 500) return false;
   const t = text.toLowerCase();
   if (/\?\s*$/.test(t)) return false; // questions are never facts
-  // Meds/allergy phrasing, "my ..." caregiver facts, daily routines, and any
-  // clock time (with or without "at": "8pm", "7:30pm", "10pm").
-  return /i take|\btakes?\b|\btaking\b|allerg|my (mom|dad|dose|routine)|every day|\bat \d|\d:\d|\d\s?(am|pm)\b|dinner|bedtime|breakfast|lunch|routine|reminder|medication|prescription/.test(t);
+  // Durable safety/care facts — natural allergy phrasing must not be missed.
+  if (/\ballerg/.test(t)) return true;
+  if (/\bavoid(?:s|ed|ing)?\b/.test(t)) return true;
+  if (/\bcan(?:no|'?t|not)\s+(?:have|take)\b/.test(t)) return true;
+  if (/\bintoleran/.test(t)) return true;
+  if (/\breaction\s+to\b|\bhad\s+a\s+reaction\b/.test(t)) return true;
+  if (/\bmakes?\s+(?:me|her|him|them|us|mom|dad|mother|father)\s+sick\b/.test(t)) return true;
+  if (/\b(?:gives?|gave)\s+(?:me|her|him|them|us|mom|dad|mother|father)\s+a\s+rash\b/.test(t)) return true;
+  if (/\b(?:rash|hives|swelling)\b/.test(t)) return true;
+  if (/\bstops?\s+taking\b|\bstopped\s+taking\b/.test(t)) return true;
+  if (/\bswitch(?:ed|es|ing)?\s+from\b/.test(t)) return true;
+  if (NO_DRUG_RE.test(t)) return true;
+  // Meds / caregiver facts / routines. Bare meal words are deliberately NOT
+  // enough ("dinner was nice" is chit-chat); a time/context is required.
+  return /i take|\btakes?\b|\btaking\b|my (mom|dad|dose|routine|mother|father)|\bevery day\b|\bdaily\b|\bmedication\b|prescription|\bmeds?\b|\bpill|remind|\bmg\b|\d\s?mg|\d:\d|\d\s?(am|pm)\b|\b(?:dinner|breakfast|lunch)\b.*\bat\s+\d|\bbedtime\b|\broutine\b/.test(t);
 }
 
 // Coded safety net: if the user asks about giving/taking something matching a
-// recalled allergy fact, block with a warning citing the source blob — BEFORE the LLM.
-// Returns { substance, fact, blob_id } or null. Deterministic: works with no LLM key.
-const STOP = new Set('what,does,mom,take,give,should,can,she,for,the,has,and,our,her,with,now,today,please,had,having,allergy,allergic,about,this,that,from'.split(','));
-// Brand → generic drug (OTC names judges/real users actually type). Without this,
-// "can she take Advil?" bypasses an ibuprofen-allergy block — a safety hole.
-const BRAND_SYNONYMS = new Map(Object.entries({
-  advil: 'ibuprofen', motrin: 'ibuprofen', nurofen: 'ibuprofen', brufen: 'ibuprofen',
-  tylenol: 'paracetamol', panadol: 'paracetamol', calpol: 'paracetamol', acetaminophen: 'paracetamol',
-  disprin: 'aspirin', ecotrin: 'aspirin',
-}));
-// Singularize so plural variants ('ibuprofens') still match ('ibuprofen').
-const singular = (w) => (w.length > 4 && w.endsWith('s') ? w.slice(0, -1) : w);
-const canonical = (w) => BRAND_SYNONYMS.get(singular(w)) || singular(w);
+// recalled allergy fact, block with a warning citing the source blob — BEFORE the
+// LLM. Substance-aware: same drug OR same drug class (ibuprofen allergy blocks
+// Aleve/naproxen and Excedrin/aspirin; paracetamol/Tylenol is a separate class).
+// Negated allergies never block, and only real drugs are ever returned (never a
+// symptom word like "rash"). Deterministic: works with no LLM key.
+// Returns { substance, class, fact, blob_id } or null.
 export function findConflict(message, recalled) {
   if (!message || !recalled || !Array.isArray(recalled)) return null;
-  const msgWords = new Set(String(message).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w)).map(canonical));
-  if (!msgWords.size) return null;
+  const msgSubs = substancesIn(message);
+  if (!msgSubs.size) return null;
+  // A statement that TEACHES an allergy is not an administration question: never
+  // STOP on "She is allergic to ibuprofen" / "avoid X" / "no ibuprofen". Only
+  // skip non-questions, so "Should I avoid giving her ibuprofen?" still blocks.
+  const isStatement = !/\?\s*$/.test(String(message).trim()) && (
+    /\ballerg|intoleran|\bavoid(?:s|ed|ing)?\b|\bcan(?:no|'?t|not)\s+(?:have|take)\b|\breaction\s+to\b|\bmakes?\s+\w+\s+sick\b/i.test(message)
+    || NO_DRUG_RE.test(message)
+  );
+  if (isStatement) return null;
   for (const r of recalled) {
-    if (!r || !/allerg/i.test(r.text || '')) continue;
-    const factWords = String(r.text).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w)).map(canonical);
-    const hit = factWords.find((w) => msgWords.has(w));
-    if (hit) return { substance: hit, fact: r.text, blob_id: r.blob_id || null };
+    if (!r || typeof r.text !== 'string') continue;
+    if (!/allerg|reaction|intoleran|avoid/i.test(r.text)) continue;
+    if (isNegatedAllergy(r.text)) continue;
+    const factSubs = substancesIn(r.text);
+    const factClasses = classesIn(r.text);
+    if (!factSubs.size && !factClasses.size) continue;
+    for (const s of msgSubs) {
+      if (factSubs.has(s)) {
+        return { substance: s, class: DRUG_CLASS[s] || null, fact: r.text, blob_id: r.blob_id || null };
+      }
+    }
+    for (const s of msgSubs) {
+      const cls = DRUG_CLASS[s];
+      if (cls && factClasses.has(cls)) {
+        return { substance: s, class: cls, fact: r.text, blob_id: r.blob_id || null };
+      }
+    }
   }
   return null;
 }
@@ -119,22 +205,57 @@ export async function safeRecall(client, params, tries = 3) {
   return { results: [] };
 }
 
+// Allergy facts are a hard safety requirement: the normal message query may not
+// rank them (audit H3), so we ALWAYS run a dedicated allergy-oriented recall and
+// merge it in. Normal results keep the <0.7 distance filter; allergy facts from
+// the dedicated query are surfaced even if their distance is higher, and are
+// force-kept inside the final cap so the STOP path can fire.
+const ALLERGY_QUERY = 'allergies drug reactions avoid intolerance';
+const ALLERGY_RE = /allerg|reaction|intoleran|avoid/i;
+
 export async function recallRelevant(client, query, limit = 5) {
   let n = Number(limit);
   if (!Number.isFinite(n)) n = 5;
   n = Math.max(0, Math.floor(n));
+  if (n === 0) return [];
+
   const { results } = await safeRecall(client, { query, limit: n });
-  // Distance filter + client-side dedup by text (MemWal has no server-side dedup;
-  // re-taught facts would otherwise crowd the prompt with copies). Best rank wins.
-  const seen = new Set();
-  const out = [];
-  for (const r of results || []) {
-    if ((r.distance ?? 1) >= MAX_DISTANCE) continue;
-    const key = String(r.text || '').trim().toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(r);
-    if (out.length >= n) break;
+  let safety = [];
+  try {
+    const { results: sr } = await safeRecall(client, { query: ALLERGY_QUERY, limit: Math.max(n, 10) });
+    safety = sr || [];
+  } catch { safety = []; }
+
+  // Merge by normalized text, dedup keeping the best (lowest) distance.
+  const byText = new Map();
+  const consider = (r, fromSafety) => {
+    if (!r || typeof r.text !== 'string' || !r.text.trim()) return;
+    const key = r.text.trim().toLowerCase();
+    const dist = r.distance ?? 1;
+    const safetyFact = fromSafety && ALLERGY_RE.test(r.text);
+    if (!safetyFact && dist >= MAX_DISTANCE) return; // normal filter stays
+    const prev = byText.get(key);
+    if (!prev || dist < (prev.distance ?? 1)) byText.set(key, { ...r, distance: dist });
+  };
+  for (const r of results || []) consider(r, false);
+  for (const r of safety || []) consider(r, true);
+
+  const ordered = [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
+  const out = ordered.slice(0, n);
+  // Force-include allergy facts that fell past the cap by evicting the worst
+  // non-allergy entries.
+  const missing = ordered.filter((r) => ALLERGY_RE.test(r.text) && !out.includes(r));
+  if (missing.length) {
+    const res = out.slice();
+    for (const m of missing) {
+      let idx = -1;
+      for (let i = res.length - 1; i >= 0; i--) {
+        if (!ALLERGY_RE.test(res[i].text)) { idx = i; break; }
+      }
+      if (idx >= 0) res[idx] = m;
+      else if (res.length < n) res.push(m);
+    }
+    return res.sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
   }
   return out;
 }

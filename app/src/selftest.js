@@ -35,6 +35,10 @@ const brandHit = findConflict('Can she take Advil for her headache?', allergyMem
 ok(brandHit && brandHit.substance === 'ibuprofen' && brandHit.blob_id === 'local-abc123', 'conflict maps brand Advil → ibuprofen');
 ok(!(findConflict('Can she take Tylenol?', allergyMem)) || findConflict('Can she take Tylenol?', allergyMem).substance !== 'ibuprofen', 'different brand does not falsely match ibuprofen allergy');
 ok(findConflict('', allergyMem) === null, 'no conflict on empty');
+// Teaching/stating an allergy must NOT trigger the STOP guard (only questions do).
+ok(findConflict('She is allergic to ibuprofen, causes rash', allergyMem) === null, 'regression: teaching an allergy is not a conflict');
+ok(findConflict('avoid ibuprofen', allergyMem) === null, 'regression: "avoid X" statement is not a conflict');
+ok(findConflict('Should I avoid giving her ibuprofen?', allergyMem) !== null, 'regression: question containing "avoid" still blocks');
 
 const lc = createLocalClient({ namespace: 'user-selftest' });
 const bulk = await rememberBulkAndWait(lc, ['Selftest fact one 8pm', 'Selftest fact two allergy test']);
@@ -88,6 +92,90 @@ ok((await recallRelevant(fakeClient, 'q', -1)).length === 0, 'regression: recall
   ok(rd.results.filter((x) => x.text === 'same allergy text').length === 1, 'regression: local dedups same-text-twice');
   ok((await lc.recall({ query: 'meds', limit: -1 })).results.length === 0, 'regression: local negative limit -> []');
   ok((await lc.remember(null)).job_id.startsWith('job-local-'), 'regression: local remember coerces null');
+  try {
+    const store = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json');
+    const db = JSON.parse(fs.readFileSync(store, 'utf8'));
+    delete db.namespaces[tns];
+    fs.writeFileSync(store, JSON.stringify(db, null, 2));
+  } catch { /* best-effort cleanup */ }
+}
+
+// --- Regression: substance-aware conflict safety net (audit H3) ---
+{
+  const ibuAllergy = [{ text: 'User demo: allergic to ibuprofen — rash', blob_id: 'b-ibu', distance: 0.2 }];
+  const cAleve = findConflict('Can she take Aleve?', ibuAllergy);
+  ok(cAleve && (cAleve.substance === 'naproxen' || cAleve.class === 'nsaid') && cAleve.blob_id === 'b-ibu',
+    'regression: ibuprofen allergy blocks Aleve (same NSAID class)');
+  const cExcedrin = findConflict('Can she take Excedrin?', ibuAllergy);
+  ok(cExcedrin && (cExcedrin.substance === 'aspirin' || cExcedrin.class === 'nsaid'),
+    'regression: ibuprofen allergy blocks Excedrin (aspirin-class NSAID)');
+  const cTylenol = findConflict('Can she take Tylenol?', ibuAllergy);
+  ok(cTylenol === null, 'regression: ibuprofen allergy does NOT block Tylenol (separate class)');
+  const negAllergy = [{ text: 'She is NOT allergic to ibuprofen', blob_id: 'b-neg', distance: 0.1 }];
+  ok(findConflict('Can she take ibuprofen?', negAllergy) === null, 'regression: negated allergy does not block');
+  ok(findConflict('Can she take ibuprofen?', [{ text: 'no known allergy', blob_id: 'b-neg2' }]) === null,
+    'regression: "no known allergy" does not block');
+  const descAllergy = [{ text: 'User demo: allergic to ibuprofen, causes a rash and swelling', blob_id: 'b-desc', distance: 0.2 }];
+  const cd = findConflict('Can she take ibuprofen?', descAllergy);
+  ok(cd && cd.substance === 'ibuprofen' && cd.substance !== 'rash' && cd.substance !== 'swelling',
+    'regression: findConflict substance is a drug, never a symptom word');
+  // Advil must still map to ibuprofen and cite the source blob.
+  const cAdvil = findConflict('Can she take Advil?', ibuAllergy);
+  ok(cAdvil && cAdvil.substance === 'ibuprofen' && cAdvil.blob_id === 'b-ibu', 'regression: Advil -> ibuprofen block');
+}
+
+// --- Regression: write gate catches natural allergy phrasing (audit H1) ---
+ok(shouldRemember('no ibuprofen, gives her a rash') === true, 'regression: write gate saves "no ibuprofen, gives her a rash"');
+ok(shouldRemember('avoid ibuprofen') === true, 'regression: write gate saves "avoid ibuprofen"');
+ok(shouldRemember('ibuprofen makes her sick') === true, 'regression: write gate saves "ibuprofen makes her sick"');
+ok(shouldRemember('she cannot have aspirin') === true, 'regression: write gate saves "she cannot have aspirin"');
+ok(shouldRemember('she cannot take aspirin') === true, 'regression: write gate saves "she cannot take aspirin"');
+ok(shouldRemember('intolerant to naproxen') === true, 'regression: write gate saves intolerance');
+ok(shouldRemember('she had a reaction to ibuprofen') === true, 'regression: write gate saves reaction');
+ok(shouldRemember('she stopped taking aspirin') === true, 'regression: write gate saves "stopped taking"');
+ok(shouldRemember('switched from ibuprofen to paracetamol') === true, 'regression: write gate saves "switched from"');
+ok(shouldRemember('I will call you at 5') === false, 'regression: write gate skips "I will call you at 5"');
+ok(shouldRemember('dinner was nice') === false, 'regression: write gate skips "dinner was nice"');
+ok(shouldRemember('what is the weather?') === false, 'regression: write gate skips weather question');
+ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate still saves real routine');
+
+// --- Regression: recallRelevant guarantees allergy facts are considered (audit H3) ---
+{
+  const safetyClient = {
+    recall: async ({ query }) => {
+      if (/allerg/i.test(query)) {
+        return { results: [{ text: 'allergic to ibuprofen', distance: 0.9, blob_id: 'safe-1' }] };
+      }
+      return { results: [
+        { text: 'takes Metformin 8pm', distance: 0.1, blob_id: 'm1' },
+        { text: 'takes Amlodipine 9pm', distance: 0.11, blob_id: 'm2' },
+        { text: 'dinner at 6pm', distance: 0.12, blob_id: 'm3' },
+        { text: 'daughter Priya visits', distance: 0.13, blob_id: 'm4' },
+        { text: 'walks every morning', distance: 0.14, blob_id: 'm5' },
+      ] };
+    },
+  };
+  const rr = await recallRelevant(safetyClient, 'what should I cook for dinner', 5);
+  ok(rr.some((r) => /allergic to ibuprofen/i.test(r.text)),
+    'regression: recallRelevant surfaces allergy fact even when message query omits it');
+  ok(rr.length === 5, 'regression: recallRelevant keeps limit while forcing the safety fact in');
+  // Normal (non-allergy) results still obey the 0.7 distance filter.
+  const farClient = { recall: async () => ({ results: [{ text: 'takes Metformin 8pm', distance: 0.95, blob_id: 'x1' }] }) };
+  ok((await recallRelevant(farClient, 'meds', 5)).length === 0, 'regression: recallRelevant still filters normal results >= 0.7');
+}
+
+// --- Regression: local client atomic + serialized writes (audit M7) ---
+{
+  const tns = 'selftest-atomic-' + Date.now();
+  const lc = createLocalClient({ namespace: tns });
+  await Promise.all(Array.from({ length: 25 }, (_, i) => lc.remember(`atomic fact ${i} takes med at 8pm`)));
+  const all = await lc.recall({ query: 'atomic fact takes med', limit: 50 });
+  ok(all.results.filter((r) => r.text.startsWith('atomic fact')).length === 25,
+    'regression: local concurrent writes all persisted (atomic + serialized)');
+  let valid = true;
+  try { JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json'), 'utf8')); }
+  catch { valid = false; }
+  ok(valid, 'regression: local store is valid JSON after concurrent writes');
   try {
     const store = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json');
     const db = JSON.parse(fs.readFileSync(store, 'utf8'));

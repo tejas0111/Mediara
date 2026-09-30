@@ -8,5 +8,8 @@ app/.local-memory.json
 # --- private working notes (never publish) ---
 private/
 
+# --- browser tooling ---
+.playwright-mcp/
+
 # --- node ---
 node_modules/

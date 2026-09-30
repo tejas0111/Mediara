@@ -1,26 +1,78 @@
 // Wallet identity + session tokens (DoseDaughter).
-// The browser signs a fixed personal message with the visitor's Sui wallet;
-// we verify the signature server-side (@mysten/sui/verify) and issue an HMAC-
-// signed session cookie. No password, no third-party auth — wallet IS identity.
+// The browser signs a short-lived, server-issued nonce message with the
+// visitor's Sui wallet; we verify the signature server-side (@mysten/sui/verify),
+// consume the nonce (single-use), and issue an HMAC-signed session cookie. No
+// password, no third-party auth — wallet IS identity. The nonce makes a captured
+// signature useless (replay-resistant).
 import crypto from 'node:crypto';
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 
-// Users sign EXACTLY this message (bytes are what the signature covers).
+// Kept for backwards compatibility / UI copy. The signed message is no longer
+// this fixed string alone — it is authMessage(nonce), which embeds a fresh,
+// single-use nonce issued per sign-in attempt.
 export const AUTH_MESSAGE = 'DoseDaughter: sign in to your memory wallet.\nThis signature proves you own this address. No transaction, no fee.';
 
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const NONCE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// In-memory nonce store: nonce -> { expiresAt, used }. Single process; a
+// serverless cold start invalidates outstanding nonces, which only forces a
+// fresh sign-in — never a security hole. Entries are removed on use and swept
+// periodically so the Map cannot grow unbounded.
+const nonces = new Map();
+function sweepNonces() {
+  const now = Date.now();
+  for (const [n, e] of nonces) if (e.used || now > e.expiresAt) nonces.delete(n);
+}
+const nonceSweeper = setInterval(sweepNonces, 60_000);
+if (typeof nonceSweeper.unref === 'function') nonceSweeper.unref();
 
 export function isValidSuiAddress(a) {
   return typeof a === 'string' && /^0x[0-9a-fA-F]{64}$/.test(a);
 }
 
+// Deterministic text the wallet signs for a given nonce. The nonce binds the
+// signature to this one sign-in attempt.
+export function authMessage(nonce) {
+  return `${AUTH_MESSAGE}\nNonce: ${String(nonce ?? '')}`;
+}
+
+// Issue a fresh single-use nonce + the exact message to sign. Optional ttlMs is
+// used by tests (tiny TTL) and defaults to 5 minutes (or DD_NONCE_TTL_MS).
+export function issueNonce(ttlMs) {
+  sweepNonces();
+  const nonce = crypto.randomBytes(24).toString('base64url');
+  const ttl = Number.isFinite(ttlMs) && ttlMs >= 0 ? ttlMs : (Number(process.env.DD_NONCE_TTL_MS) || NONCE_TTL_MS);
+  const expiresAt = Date.now() + ttl;
+  nonces.set(nonce, { expiresAt, used: false });
+  return { nonce, message: authMessage(nonce), expiresAt };
+}
+
+// Returns true only for a known, unexpired, unused nonce; consumes it so the
+// same signature can never be replayed.
+export function consumeNonce(nonce) {
+  if (typeof nonce !== 'string' || !nonce) return false;
+  const entry = nonces.get(nonce);
+  if (!entry || entry.used || Date.now() > entry.expiresAt) {
+    if (entry) nonces.delete(nonce);
+    return false;
+  }
+  entry.used = true;
+  nonces.delete(nonce);
+  return true;
+}
+
 // Returns { address } on success, null on any failure. Never trusts the
 // client-supplied address — the address is derived from the verified key.
-export async function verifyWalletSignature({ address, signature }) {
+// Verifies the signature over authMessage(nonce). The caller MUST have already
+// validated + consumed the nonce (consumeNonce) so a captured signature cannot
+// be replayed.
+export async function verifyWalletSignature({ address, signature, nonce }) {
   try {
     if (!isValidSuiAddress(address) || typeof signature !== 'string' || signature.length < 50) return null;
-    const publicKey = await verifyPersonalMessageSignature(new TextEncoder().encode(AUTH_MESSAGE), signature, { address });
+    if (typeof nonce !== 'string' || !nonce) return null;
+    const publicKey = await verifyPersonalMessageSignature(new TextEncoder().encode(authMessage(nonce)), signature, { address });
     if (!publicKey) return null;
     const derived = publicKey.toSuiAddress();
     // Case-insensitive compare: wallets serialize addresses differently.
