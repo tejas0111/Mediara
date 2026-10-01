@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, looksLikeMedicationQuestion, withTimeout, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
@@ -133,12 +133,16 @@ async function callLLM(system, userMessage, history = []) {
   // non-OpenAI/Anthropic, so Beyond-Big-Two eligible). Pruned when models die.
   const models = [model, 'google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'liquid/lfm-2.5-2.6b:free', 'openrouter/free'].filter((m, i, a) => a.indexOf(m) === i);
   let lastErr = '';
+  // Overall budget across the whole chain so one stalled provider can't run for
+  // 6 × 15s; the socket timeout is 120s, so the handler must return well before.
+  const deadline = Date.now() + 25_000;
   for (const m of models) {
+    if (Date.now() > deadline) break;
     try {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(Math.max(2000, Math.min(15_000, deadline - Date.now()))),
         body: JSON.stringify({
           model: m,
           max_tokens: 300,
@@ -207,7 +211,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // FAIL CLOSED: if memory is unreachable we cannot verify allergies or
     // interactions, so refuse medication questions rather than answer unguarded.
-    if (rr.degraded && mentionsDrug(message)) {
+    if (rr.degraded && looksLikeMedicationQuestion(message)) {
       return res.status(503).json({ error: 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.', retryable: true });
     }
     // Coded safety nets FIRST, before any LLM output:
@@ -241,11 +245,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         // The containment check prevents collapsing DIFFERENT facts that happen to
         // score close (e.g. "Metformin at 8pm" vs "Metformin at 9pm").
         const normText = (s) => String(s).toLowerCase().replace(/^user\s+\S+:\s*/i, '').replace(/\s+/g, ' ').trim();
-        const near = await recallRelevant(client, message, 1);
+        const nearMeta = await recallRelevantMeta(client, message, 1);
+        const near = nearMeta.degraded ? [] : nearMeta.facts; // no dedup against a broken relayer
         const a = normText(message), b = near.length ? normText(near[0].text) : '';
         const isDup = near.length && (near[0].distance ?? 1) < 0.15 && (a === b || a.includes(b) || b.includes(a));
         if (isDup) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
-        else { saved = await rememberAndWait(client, `${label}: ${message}`); memoryPersisted = !!saved?.blob_id; }
+        else { saved = await withTimeout(rememberAndWait(client, `${label}: ${message}`), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; }
       } catch { memoryPersisted = false; /* surfaced to the client below */ }
     }
     // Never deny memory we just stored: if the (keyless) reply says we know
@@ -489,7 +494,9 @@ if (process.env.VERCEL !== '1' && import.meta.url === `file://${process.argv[1]}
   const server = app.listen(port, () => console.log(`DoseDaughter on :${port}`));
   // A listen failure (EADDRINUSE) must not crash as an unhandled 'error' event.
   server.on('error', (e) => { console.error('listen error:', String((e && e.message) || e)); process.exit(1); });
-  server.setTimeout(30_000); // bound slow-loris / hung sockets
+  // Generous socket cap: per-upstream timeouts keep the handler bounded; a tight
+  // socket timeout would kill legitimate requests with an empty reply (curl 52).
+  server.setTimeout(120_000);
 }
 // Last-resort visibility: never let a stray rejection/throw take the process
 // down silently in a demo.

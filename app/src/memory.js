@@ -417,6 +417,19 @@ export function mentionsDrug(text) {
   return substancesIn(text).size > 0 || namedClasses(text).size > 0;
 }
 
+// Conservative predicate for "is this a medication question?" — used to FAIL
+// CLOSED when memory is unreachable. Broader than the drug dictionary so an
+// out-of-vocabulary drug (levothyroxine) or a class-free ask ("can I give her
+// the antibiotic") is still refused.
+export function looksLikeMedicationQuestion(text) {
+  const m = String(text || '');
+  return mentionsDrug(m)
+    || ADMIN_VERB_RE.test(m)
+    || /\b\d+\s?(?:mg|mcg|ml|units?|iu)\b/i.test(m)
+    || /\b(?:can|could|should|may|is\s+it\s+safe|is\s+it\s+ok)\b[^?]{0,40}\b(?:give|take|administer|use|mix|increase|decrease|skip)\b/i.test(m)
+    || hasAllergySignal(m);
+}
+
 export async function safeRecall(client, params, tries = 2, timeoutMs = 10_000) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
@@ -426,14 +439,15 @@ export async function safeRecall(client, params, tries = 2, timeoutMs = 10_000) 
     } catch (e) {
       lastErr = e;
       const msg = String(e?.message || e);
-      if (/abort|timeout|503|504|429|unavailable|ECONN/i.test(msg) && i < tries - 1) {
-        await sleep(500 * (i + 1) + Math.floor(Math.random() * 250));
-        continue;
+      const code = String(e?.cause?.code || '');
+      // Match the real undici shapes too ("fetch failed", UND_ERR_*, "timed out").
+      if (/abort|timed? ?out|503|504|429|unavailable|ECONN|fetch failed|UND_ERR/i.test(msg) || /UND_ERR|ECONN/i.test(code)) {
+        if (i < tries - 1) { await sleep(500 * (i + 1) + Math.floor(Math.random() * 250)); continue; }
       }
       break;
     }
   }
-  console.error(`recall failed after ${tries} tries:`, String(lastErr?.message || lastErr).slice(0, 120));
+  console.error(`recall degraded:`, String(lastErr?.message || lastErr).slice(0, 120));
   return { results: [], degraded: true };
 }
 

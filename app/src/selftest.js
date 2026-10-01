@@ -1,6 +1,6 @@
 // Offline self-test: pure functions only, NO MemWal network calls (per user order).
 // Run: node src/selftest.js (needs node >=20)
-import { namespaceFor, truncateFact, buildSystemPrompt, shouldRemember, findConflict, findInteraction, recallRelevant, safeRecall, withTimeout, mentionsDrug, rememberBulkAndWait, classifyFacts, isTeachingStatement, MAX_DISTANCE } from './memory.js';
+import { namespaceFor, truncateFact, buildSystemPrompt, shouldRemember, findConflict, findInteraction, recallRelevant, safeRecall, withTimeout, mentionsDrug, looksLikeMedicationQuestion, rememberBulkAndWait, classifyFacts, isTeachingStatement, MAX_DISTANCE } from './memory.js';
 import { overlap, createLocalClient } from './localClient.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -332,6 +332,9 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok(sr.degraded === true && sr.results.length === 0, 'resilience: safeRecall reports degraded on failure');
   ok(mentionsDrug('Can she take ibuprofen?') === true, 'resilience: mentionsDrug true for a drug question');
   ok(mentionsDrug('what is the weather?') === false, 'resilience: mentionsDrug false for chit-chat');
+  ok(looksLikeMedicationQuestion('Can I give her levothyroxine?') === true, 'fail-closed: out-of-vocabulary drug question is conservative');
+  ok(looksLikeMedicationQuestion('Can I give her the antibiotic with dinner?') === true, 'fail-closed: class-free ask is conservative');
+  ok(looksLikeMedicationQuestion('what is the weather today?') === false, 'fail-closed: smalltalk is not conservative');
   const t0 = Date.now();
   let timedOut = false;
   try { await withTimeout(new Promise(() => {}), 50, 'test'); } catch { timedOut = true; }
