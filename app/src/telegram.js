@@ -19,6 +19,8 @@ import {
   classifyFacts,
   rememberAndWait,
   recallRelevant,
+  recallRelevantMeta,
+  mentionsDrug,
   buildSystemPrompt,
 } from './memory.js';
 import { createLocalClient } from './localClient.js';
@@ -141,7 +143,12 @@ bot.on('message', async (msg) => {
     if (text.startsWith('/')) return void (await bot.sendMessage(chatId, 'Commands: /start /memory /summary /reset'));
 
     const { client } = clientFor(chatId);
-    const recalled = await recallRelevant(client, text, 5);
+    const rr = await recallRelevantMeta(client, text, 5);
+    const recalled = rr.facts;
+    // Fail CLOSED (identical to web): no unguarded drug answers when memory is down.
+    if (rr.degraded && mentionsDrug(text)) {
+      return void (await bot.sendMessage(chatId, 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.'));
+    }
     // Coded safety nets FIRST (identical to web): allergy conflict, then curated
     // drug–drug interaction. Neither must differ between channels.
     const conflict = findConflict(text, recalled);
@@ -170,7 +177,8 @@ bot.on('message', async (msg) => {
     }
     await bot.sendMessage(chatId, `${reply}${savedNote}\n${DISCLAIMER}`);
   } catch (e) {
-    try { await bot.sendMessage(chatId, `Error: ${String(e.message || e).slice(0, 300)}`); } catch { /* polling only */ }
+    try { await bot.sendMessage(chatId, 'Sorry — something went wrong handling that message. Please try again.'); } catch { /* polling only */ }
+    console.error('telegram handler error:', String((e && e.message) || e).slice(0, 200));
   }
 });
 

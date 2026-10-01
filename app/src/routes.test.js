@@ -172,6 +172,13 @@ test('near-but-different facts are not deduped', async () => {
   assert.notEqual(a.savedBlob, b.savedBlob);
 });
 
+test('cross-origin POST is blocked; same-origin is allowed', async () => {
+  const cross = await fetch(base + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: JSON.stringify({ userId: 'x', message: 'hello there' }) });
+  assert.equal(cross.status, 403);
+  const same = await fetch(base + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ userId: 'x', message: 'hello there' }) });
+  assert.notEqual(same.status, 403);
+});
+
 test('rate limiting: repeated chat requests eventually 429', async () => {
   const u = `rt-rl-${Date.now()}`;
   let got429 = false;

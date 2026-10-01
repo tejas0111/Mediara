@@ -9,6 +9,7 @@
 // session cookie); onboarded users get a per-user MemWal delegate client so chat
 // memory lands in THEIR OWN MemWalAccount (they own it; app wallet never touched).
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -51,9 +52,10 @@ function clientFor(userId) {
 function userClientFor(address) {
   const user = getUser(address);
   if (!user?.accountId || !user?.delegatePrivateKey) return null;
-  // Use the full address (namespaceFor bounds it to 48 chars) so two wallets can
-  // never collide into one vault namespace.
-  const ns = namespaceFor(`w-${address}`);
+  // Hash the address into a `vault-` namespace: it is NOT derivable from the
+  // public address, and namespaceFor's 48-char truncation can no longer reunite
+  // two wallets or expose the vault to a guessable `w-<address>` query.
+  const ns = namespaceFor(`vault-${crypto.createHash('sha256').update(String(address).toLowerCase()).digest('hex').slice(0, 32)}`);
   // Respect MEMWAL_MODE: in local dev a wallet user must NOT hit the live relayer.
   const client = MODE === 'mainnet'
     ? createDelegateClient({ delegatePrivateKey: user.delegatePrivateKey, accountId: user.accountId, namespace: ns })
@@ -79,6 +81,18 @@ app.use((req, res, next) => {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   // script-src is 'self' only (no inline scripts) — the UI JS is served from /assets.
   res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'");
+  if (req.secure || (app.get('trust proxy') && req.headers['x-forwarded-proto'] === 'https')) {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+// CSRF: a browser sends Origin on cross-site POSTs; require same-origin. Non-
+// browser clients (no Origin) are unaffected.
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.headers.origin) {
+    try { if (new URL(req.headers.origin).host !== req.headers.host) return res.status(403).json({ error: 'cross-origin request blocked' }); }
+    catch { return res.status(403).json({ error: 'invalid origin' }); }
+  }
   next();
 });
 // Static UI assets (hand-written CSS/JS in app/public).
@@ -176,7 +190,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
     // must never be able to name one. Reserve the prefix for wallet sessions.
-    if (!walletClient && /^w-/i.test(safeUser)) {
+    if (!walletClient && /^(?:w-|vault-)/i.test(safeUser)) {
       return res.status(400).json({ error: 'that userId is reserved' });
     }
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
@@ -334,7 +348,7 @@ async function namespaceView(req, res) {
   const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
   // A wallet vault is credential-scoped: refuse to resolve it anonymously. The
   // namespace id is derivable from a public address, so it is not a secret.
-  if (!mine && /^w-/i.test(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
+  if (!mine && /^(?:w-|vault-)/i.test(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
   const ra = await recallAllMeta(client, ALL_QUERIES, 25);
   return { userId, mode, recalled: ra.facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };

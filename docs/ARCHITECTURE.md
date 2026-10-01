@@ -114,6 +114,12 @@ doctor" disclaimer.
   registers the app's delegate key. The server then acts as that user's delegate,
   so their facts land in *their* account. Delegate keys are encrypted at rest with
   AES-256-GCM (scrypt-derived key).
+- **Namespace authorization**: wallet vaults live in `user-w-<address>` namespaces.
+  Because the address is public, the namespace id is *not* a secret — so an
+  anonymous request that names a `w-` namespace is refused (403), and anonymous
+  chat cannot write to one. Non-vault namespaces (e.g. `user-demo-mom`) are
+  **public demo channels by design** (the `/memory` receipts page is meant to be
+  shareable); they must not be used for private data.
 
 ## Web UI
 

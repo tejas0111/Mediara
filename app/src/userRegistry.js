@@ -18,7 +18,9 @@ function load() {
   try { return JSON.parse(fs.readFileSync(storePath(), 'utf8')); } catch { return { users: {} }; }
 }
 function save(db) {
-  const tmp = storePath() + '.tmp';
+  // Unique temp name + rename (atomic): two concurrent writers can't clobber a
+  // shared `.tmp` path and lose rows.
+  const tmp = `${storePath()}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
   fs.renameSync(tmp, storePath());
 }
@@ -55,7 +57,9 @@ export function upsertUser({ address, accountId, delegatePrivateKey, delegatePub
   if (delegatePrivateKey !== undefined) row.delegatePrivateKey = encryptSecret(delegatePrivateKey);
   db.users[key] = row;
   save(db);
-  getUser(address); // fail fast at write time if decryption can't round-trip
+  // Fail loudly if the row cannot be read back (e.g. wrong/rotated SESSION_SECRET),
+  // instead of silently accepting a write that will break later.
+  if (!getUser(address)) throw new Error('registry write did not round-trip (check SESSION_SECRET)');
   return row;
 }
 
