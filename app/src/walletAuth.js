@@ -41,7 +41,9 @@ export function authMessage(nonce) {
 // Issue a fresh single-use nonce + the exact message to sign. Optional ttlMs is
 // used by tests (tiny TTL) and defaults to 5 minutes (or DD_NONCE_TTL_MS).
 export function issueNonce(ttlMs) {
-  sweepNonces();
+  // Do NOT sweep on every mint (that made minting O(map size)); the interval
+  // sweeper handles expiry, and we only sweep here if the map is unusually large.
+  if (nonces.size > 10_000) sweepNonces();
   const nonce = crypto.randomBytes(24).toString('base64url');
   const ttl = Number.isFinite(ttlMs) && ttlMs >= 0 ? ttlMs : (Number(process.env.DD_NONCE_TTL_MS) || NONCE_TTL_MS);
   const expiresAt = Date.now() + ttl;

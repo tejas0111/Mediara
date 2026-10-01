@@ -428,7 +428,11 @@ const CHITCHAT_ANY = /\b(?:weather|what\s+time\s+is\s+it|what\s+day\s+is\s+it|te
 export function looksLikeMedicationQuestion(text) {
   const m = String(text || '').trim();
   if (!m) return false;
-  if (CHITCHAT_RE.test(m) || CHITCHAT_ANY.test(m)) return false;
+  // A concrete medication signal always wins — appending smalltalk to a drug
+  // question must NOT be treated as chit-chat.
+  if (mentionsDrug(m) || ADMIN_VERB_RE.test(m) || /\b\d+\s?(?:mg|mcg|ml|units?|iu)\b/i.test(m)) return true;
+  // Only a genuinely short, purely-social message is non-medical.
+  if (m.length <= 40 && (CHITCHAT_RE.test(m) || CHITCHAT_ANY.test(m))) return false;
   return true;
 }
 
@@ -457,7 +461,7 @@ export async function safeRecall(client, params, tries = 2, timeoutMs = 10_000) 
       break;
     }
   }
-  if (++BREAKER.fails >= 5) BREAKER.openUntil = Date.now() + 15_000;
+  if (++BREAKER.fails >= 8) BREAKER.openUntil = Date.now() + 10_000;
   console.error(`recall degraded (fails=${BREAKER.fails}):`, String(lastErr?.message || lastErr).slice(0, 120));
   return { results: [], degraded: true };
 }

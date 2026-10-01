@@ -339,6 +339,8 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok(looksLikeMedicationQuestion('list her medications and doses') === true, 'fail-closed: deny-by-default catches "list her medications"');
   ok(looksLikeMedicationQuestion('what are her prescriptions?') === true, 'fail-closed: deny-by-default catches "prescriptions"');
   ok(looksLikeMedicationQuestion('what is the weather today?') === false, 'fail-closed: smalltalk is not conservative');
+  ok(looksLikeMedicationQuestion('hey what is the weather today? can I give her ibuprofen?') === true, 'fail-closed: smalltalk appended to a drug question is still conservative');
+  ok(looksLikeMedicationQuestion('tell me a joke. also, is it safe to give her aspirin?') === true, 'fail-closed: joke + drug question is conservative');
   const t0 = Date.now();
   let timedOut = false;
   try { await withTimeout(new Promise(() => {}), 50, 'test'); } catch { timedOut = true; }

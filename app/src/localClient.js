@@ -14,7 +14,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORE = process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
 
 function load() {
-  try { return JSON.parse(fs.readFileSync(STORE, 'utf8')); } catch { return { namespaces: {} }; }
+  // Distinguish "empty" from "unreadable": a corrupt store must fail LOUD so the
+  // guard fails closed, not silently return no memories.
+  let raw;
+  try { raw = fs.readFileSync(STORE, 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return { namespaces: {} }; throw e; }
+  try { return JSON.parse(raw); }
+  catch (e) { throw new Error(`local store is corrupt (${STORE}): ${e.message}`); }
 }
 // Atomic write: serialize to a unique tmp file, then rename. rename() is atomic
 // on the same filesystem, so a concurrent reader or a crash never observes a

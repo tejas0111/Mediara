@@ -110,13 +110,15 @@ app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
 app.use(express.json({ limit: '16kb' }));
 
 // Rate limits (fixed-window, per IP).
-const authLimiter = limiter({ keyFn: (req) => `auth:${clientIp(req)}`, limit: 10, windowMs: 60_000 });
-const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientIp(req)}`, limit: 12, windowMs: 60_000 });
-const chatLimiter = limiter({ keyFn: (req) => `chat:${clientIp(req)}`, limit: 30, windowMs: 60_000 });
+// Limits are env-overridable so tests can raise them (defaults are production).
+const L = (name, dflt) => Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt;
+const authLimiter = limiter({ keyFn: (req) => `auth:${clientIp(req)}`, limit: L('DD_AUTH_LIMIT', 10), windowMs: 60_000 });
+const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientIp(req)}`, limit: L('DD_ONBOARD_LIMIT', 12), windowMs: 60_000 });
+const chatLimiter = limiter({ keyFn: (req) => `chat:${clientIp(req)}`, limit: L('DD_CHAT_LIMIT', 30), windowMs: 60_000 });
 // Read routes fan out to several recall queries; cap them too (audit M9).
-const readLimiter = limiter({ keyFn: (req) => `read:${clientIp(req)}`, limit: 60, windowMs: 60_000 });
+const readLimiter = limiter({ keyFn: (req) => `read:${clientIp(req)}`, limit: L('DD_READ_LIMIT', 60), windowMs: 60_000 });
 // Nonce minting is cheap but unbounded; cap it (the nonce Map would otherwise grow).
-const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientIp(req)}`, limit: 30, windowMs: 60_000 });
+const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientIp(req)}`, limit: L('DD_NONCE_LIMIT', 30), windowMs: 60_000 });
 
 // Bounded per-namespace conversation transcript so the model sees recent turns,
 // not just recalled facts (facts are durable; this is ephemeral context).
@@ -136,7 +138,8 @@ function rememberTurn(ns, role, content) {
   h.push({ role, content: String(content).slice(0, 500) });
   while (h.length > 6) h.shift();
   transcripts.set(ns, h);
-  if (transcripts.size > 2000) transcripts.clear();
+  // Bounded LRU: evict oldest instead of wiping everyone's context.
+  while (transcripts.size > 5000) transcripts.delete(transcripts.keys().next().value);
 }
 
 async function callLLM(system, userMessage, history = []) {
@@ -185,6 +188,7 @@ function memoryAnswer(recalled) {
 
 app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store');
     const { userId = 'anon', message = '' } = req.body;
     if (typeof message !== 'string' || !message.trim() || message.length > 500) {
       return res.status(400).json({ error: 'message must be 1-500 chars' });
@@ -220,8 +224,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const nsKey = `${identity.ns}:${clientId(req, res)}`;
     const history = historyFor(nsKey);
 
-    const rr = await recallRelevantMeta(client, message, 5);
-    let recalled = rr.facts;
+    // Recall a wide set for the GUARDS (so presentation trimming / poisoning can
+    // never evict the allergy fact a STOP depends on), but show only the top 5.
+    const rr = await recallRelevantMeta(client, message, 25);
+    const guardFacts = rr.facts;
+    let recalled = rr.facts.slice(0, 5);
     // "What do you remember?" must return the WHOLE namespace, not a query subset.
     if (/\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message)) {
       try { const full = await recallAllMeta(client, ALL_QUERIES, 25); if (full.facts.length) recalled = full.facts; } catch { /* keep the query recall */ }
@@ -233,8 +240,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Coded safety nets FIRST, before any LLM output:
     //   1) allergy conflict (hard block)  2) curated drug–drug interaction.
-    const conflict = findConflict(message, recalled);
-    const interaction = conflict ? null : findInteraction(message, recalled);
+    const conflict = findConflict(message, guardFacts);
+    const interaction = conflict ? null : findInteraction(message, guardFacts);
     let reply;
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. Confirm with your doctor — this is not medical advice.`;
@@ -330,6 +337,7 @@ app.get('/memory', readLimiter, async (req, res) => {
 });
 
 app.get('/', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.send(chatPage({ mode: MODE, model: process.env.LLM_MODEL || 'google/gemini-2.5-flash' }));
 });
 
@@ -337,6 +345,7 @@ app.get('/demo', readLimiter, async (req, res) => {
   // LIVE before/after: same question, real recall against two namespaces.
   // demo-day1 is never seeded (empty); demo-day7 fills via POST /api/chat teaches.
   try {
+    res.setHeader('Cache-Control', 'no-store');
     const q = 'What meds does mom take?';
     const d1 = clientFor('demo-day1');
     const d7 = clientFor('demo-day7');
@@ -443,6 +452,7 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.get('/api/wallet/status', readLimiter, async (req, res) => {
   try {
+    res.setHeader('Cache-Control', 'no-store');
     const sess = sessionFromReq(req);
     if (!sess) return res.json({ signedIn: false });
     const status = await walletStatus(sess.address);
