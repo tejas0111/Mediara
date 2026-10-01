@@ -32,6 +32,15 @@ const post = (p, body, headers) => fetch(base + p, { method: 'POST', headers: { 
 const get = (p, headers) => fetch(base + p, { headers: headers || {} });
 const chat = async (userId, message, headers) => (await post('/api/chat', { userId, message }, headers)).json();
 
+test('reserved namespaces are blocked even with junk prefixes (normalised check)', async () => {
+  for (const u of ['!!vault-abc', '..w-0xabc', ' tg-777001', 'VAULT-abc']) {
+    assert.equal((await get('/api/summary?user=' + encodeURIComponent(u))).status, 403, `summary ${u}`);
+    assert.equal((await get('/memory?user=' + encodeURIComponent(u))).status, 403, `memory ${u}`);
+  }
+  const w = await post('/api/chat', { userId: '!!vault-abc', message: 'my mom takes Metformin 500mg at 8pm' });
+  assert.equal(w.status, 400);
+});
+
 test('guard runs before the LLM: trap is a STOP with a cited blob and no LLM marker', async () => {
   const u = `rt-guard-${Date.now()}`;
   await chat(u, 'She is allergic to ibuprofen, causes rash');
@@ -210,6 +219,30 @@ test('keyless teach never denies the fact it just stored', async () => {
   const j = await chat(u, 'She uses her inhaler twice a day');
   assert.ok(j.savedBlob, 'fact should be saved');
   assert.ok(!/I don't have any memories/i.test(j.reply), 'reply must not deny stored memory');
+});
+
+test('degraded memory: emergency card fails closed and drug questions 503', async () => {
+  const { resetBreaker } = await import('./memory.js');
+  const u = `rt-degraded-${Date.now()}`;
+  // Seed a real allergy while memory is healthy.
+  await chat(u, 'She is allergic to ibuprofen, causes rash');
+  process.env.DD_FAULT_RECALL = 'throw';
+  resetBreaker();
+  try {
+    const chat503 = await post('/api/chat', { userId: u, message: 'Can I give her ibuprofen 400mg?' });
+    assert.equal(chat503.status, 503, 'a drug question must fail closed when memory is down');
+    const s = await (await get(`/api/summary?user=${u}`)).json();
+    assert.equal(s.stale, true);
+    assert.equal(s.allergiesKnown, false);
+    const printHtml = await (await get(`/print?user=${u}`)).text();
+    assert.ok(!/None recorded/.test(printHtml), 'the emergency card must not claim "None recorded" while stale');
+    assert.match(printHtml, /UNKNOWN/);
+    const smalltalk = await post('/api/chat', { userId: u, message: 'hello there' });
+    assert.notEqual(smalltalk.status, 503, 'smalltalk should still answer when degraded');
+  } finally {
+    delete process.env.DD_FAULT_RECALL;
+    resetBreaker();
+  }
 });
 
 test('rate limiting: repeated chat requests eventually 429', async () => {

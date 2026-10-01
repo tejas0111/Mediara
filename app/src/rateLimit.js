@@ -10,7 +10,9 @@ export function rateLimit({ key, limit, windowMs }) {
   if (!b || now - b.start > windowMs) {
     b = { start: now, count: 0 };
     buckets.set(key, b);
-    if (buckets.size > 5000) for (const [k, v] of buckets) if (now - v.start > windowMs) buckets.delete(k);
+    // Hard cap: never let the Map grow unbounded (a conditional sweep of expired
+    // keys reclaims nothing when all keys are fresh).
+    if (buckets.size > 5000) buckets.clear();
   }
   b.count += 1;
   return {

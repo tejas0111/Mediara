@@ -106,6 +106,9 @@ export function createLocalClient({ namespace }) {
       return { blob_id: m?.blob_id || null, owner: 'local', namespace: ns };
     },
     async recall({ query, limit = 5 }) {
+      // Test-only fault injection (mirrors DD_LOCAL_STORE / DD_REGISTRY_PATH).
+      if (process.env.DD_FAULT_RECALL === 'throw') throw new Error('relayer 503 Service Unavailable');
+      if (process.env.DD_FAULT_RECALL === 'hang') return new Promise(() => {});
       let n = Number(limit);
       if (!Number.isFinite(n)) n = 5;
       n = Math.max(0, Math.floor(n));

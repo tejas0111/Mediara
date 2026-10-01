@@ -82,6 +82,9 @@
         savedWrap.style.display = '';
         saved.appendChild(document.createTextNode('\uD83E\uDDAD Remembered \u2192 '));
         var link = blobLink(j.savedBlob); if (link) saved.appendChild(link);
+      } else if (j.memoryPersisted === false) {
+        savedWrap.style.display = '';
+        saved.appendChild(document.createTextNode('\u26A0 Not saved \u2014 this will NOT be remembered next time. Please write it down.'));
       } else savedWrap.style.display = 'none';
     }
     var scope = $('scope');

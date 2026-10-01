@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, looksLikeMedicationQuestion, withTimeout, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
@@ -36,8 +36,16 @@ function fail(res, e) {
 // A session cookie that fails to parse means EXPIRED (not anonymous). Used to
 // avoid silently downgrading an expired signed-in user to the shared channel.
 const hasSessionCookie = (req) => /(?:^|;\s*)dd_session=/.test(req.headers.cookie || '');
-// Query-string user id: coerce arrays/objects and clamp length (never echo raw).
-const clampUser = (v) => { const s = Array.isArray(v) ? v[0] : v; return String(s == null ? '' : s).slice(0, 64) || 'demo-mom'; };
+// ONE user-id normaliser shared by the write and read paths: strip control
+// chars, collapse whitespace, bound length. Applied BEFORE the reserved-prefix
+// check so junk prefixes ('!!vault-…', '..w-…') can't slip past the guard.
+const normalizeUser = (v, fallback = 'demo-mom') => {
+  const s = Array.isArray(v) ? v[0] : v;
+  return String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48) || fallback;
+};
+// Namespaces derived from a credential (wallet vault) or a private channel must
+// never be addressable anonymously. Check the NORMALISED namespace.
+const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 function clientFor(userId) {
@@ -113,6 +121,15 @@ const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientIp(req)}`, limit: 
 // Bounded per-namespace conversation transcript so the model sees recent turns,
 // not just recalled facts (facts are durable; this is ephemeral context).
 const transcripts = new Map();
+// A per-browser client id isolates transcripts so two anonymous visitors who
+// happen to share a namespace cannot read each other's un-persisted turns.
+function clientId(req, res) {
+  const m = (req.headers.cookie || '').match(/(?:^|;\s*)dd_cid=([A-Za-z0-9_-]{8,64})/);
+  if (m) return m[1];
+  const id = crypto.randomBytes(12).toString('base64url');
+  res.append('Set-Cookie', `dd_cid=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
+  return id;
+}
 function historyFor(ns) { return transcripts.get(ns) || []; }
 function rememberTurn(ns, role, content) {
   const h = transcripts.get(ns) || [];
@@ -176,7 +193,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (userId.length > 64) return res.status(400).json({ error: 'userId too long' });
     // Strip control chars/newlines before the id is used as a namespace or a
     // stored fact label — otherwise it is a stored-prompt-injection primitive.
-    const safeUser = String(userId).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48) || 'anon';
+    const safeUser = normalizeUser(userId, 'anon');
     // Identity: signed-in onboarded wallet user → their OWN MemWal account
     // (delegate client). Everyone else → the shared anonymous channel
     // (agent account on mainnet / local stand-in in dev). Never mixed.
@@ -194,13 +211,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
     // must never be able to name one. Reserve the prefix for wallet sessions.
-    if (!walletClient && /^(?:w-|vault-)/i.test(safeUser)) {
+    if (!walletClient && isReservedNs(safeUser)) {
       return res.status(400).json({ error: 'that userId is reserved' });
     }
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
     const client = walletClient ? walletClient.client : clientFor(safeUser).client;
     const label = walletClient ? `User ${sess.address.slice(0, 10)}…` : `User ${safeUser}`;
-    const nsKey = identity.ns;
+    const nsKey = `${identity.ns}:${clientId(req, res)}`;
     const history = historyFor(nsKey);
 
     const rr = await recallRelevantMeta(client, message, 5);
@@ -288,6 +305,8 @@ app.get('/api/summary', readLimiter, async (req, res) => {
       ...classifyFacts(facts),
       blobCount: facts.length,
       stale: view.degraded,
+      allergiesKnown: !view.degraded,
+      medicationsKnown: !view.degraded,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     };
     res.json(summary);
@@ -307,7 +326,7 @@ app.get('/memory', readLimiter, async (req, res) => {
       rows: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })),
       agentShort: isVault ? null : String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10),
     }));
-  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
+  } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
 });
 
 app.get('/', (req, res) => {
@@ -340,7 +359,7 @@ app.get('/demo', readLimiter, async (req, res) => {
       afterNs,
       day7Empty: r7.length === 0,
     }));
-  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
+  } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
 });
 
 // Shared multi-angle queries for whole-namespace reads.
@@ -359,10 +378,10 @@ async function namespaceView(req, res) {
   if (!sess && hasSessionCookie(req)) { res.status(401).json({ error: 'Your session expired — sign in again.' }); return null; }
   const mine = sess ? userClientFor(sess.address) : null;
   if (sess && !mine) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
-  const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
+  const userId = mine ? mine.ns.replace(/^user-/, '') : normalizeUser(req.query.user);
   // A wallet vault is credential-scoped: refuse to resolve it anonymously. The
   // namespace id is derivable from a public address, so it is not a secret.
-  if (!mine && /^(?:w-|vault-)/i.test(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
+  if (!mine && isReservedNs(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
   const ra = await recallAllMeta(client, ALL_QUERIES, 25);
   return { userId, mode, recalled: ra.facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };
@@ -381,7 +400,7 @@ app.get('/print', readLimiter, async (req, res) => {
     const groups = {};
     for (const k of Object.keys(g)) groups[k] = g[k].map((t) => byText.get(t) || { text: t });
     res.send(printPage({ user: userId, mode, facts, groups, stale: view.degraded, agentShort: mode === 'mainnet' ? String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10) : null }));
-  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
+  } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
 });
 
 // Day 1 -> Day 90 replay (facts recalled live).
@@ -392,7 +411,7 @@ app.get('/replay', readLimiter, async (req, res) => {
     if (!view) return;
     const { userId, mode, recalled } = view;
     res.send(replayPage({ user: userId, mode, stale: view.degraded, facts: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })) }));
-  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
+  } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
 });
 
 // ---------------- wallet identity + per-user memory ----------------
@@ -472,7 +491,7 @@ app.post('/api/wallet/relink', onboardLimiter, async (req, res) => {
 });
 
 // Health check (registered BEFORE the terminal 404 so it is reachable).
-app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, time: new Date().toISOString() }));
+app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, memory: memoryDegraded() ? 'degraded' : 'ok', time: new Date().toISOString() }));
 
 // Explicit terminal 404 (keeps the security headers the middleware set; the
 // default finalhandler replaces the CSP with `default-src 'none'`).

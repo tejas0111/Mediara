@@ -1,7 +1,7 @@
 // DoseDaughter — server-rendered page shells (hand-written UI, no framework/build).
 // Untrusted text is escaped server-side (esc); the client uses textContent only.
 const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ASSET_V = '7';
+const ASSET_V = '8';
 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -131,10 +131,10 @@ const blobTag = (id, mode) => !id ? '' : (String(id).startsWith('local-') || mod
   ? `<span class="blobid local">\u25CF ${esc(String(id).slice(0, 12))}\u2026</span>`
   : `<a class="blobid" href="https://walruscan.com/mainnet/blob/${encodeURIComponent(id)}" target="_blank" rel="noopener">\u26D3 ${esc(String(id).slice(0, 12))}\u2026 &#8599;</a>`;
 
-const section = (title, rows, mode) => `
+const section = (title, rows, mode, stale) => `
   <section class="psec"><h3>${esc(title)}</h3>${rows.length
     ? `<ul>${rows.map((r) => `<li>${esc(String(r.text || r).replace(/^User\s+\S+:\s*/i, ''))}${blobTag(r.blob_id, mode)}</li>`).join('')}</ul>`
-    : '<p class="muted"><i>None recorded</i></p>'}</section>`;
+    : (stale ? '<p class="stale"><b>UNKNOWN \u2014 memory unreachable.</b></p>' : '<p class="muted"><i>None recorded</i></p>')}</section>`;
 
 // ---------- printable emergency card + doctor summary ----------
 export function printPage({ user, mode, facts, groups, agentShort, stale }) {
@@ -143,6 +143,13 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
   const allergyRows = groups.allergies || [];
   const medRows = groups.medications || [];
   const contactRows = groups.familyAndCare || [];
+  // FAIL CLOSED: while memory is unreachable, "None recorded" is an affirmative
+  // (and potentially lethal) claim. Say UNKNOWN instead.
+  const cell = (rows) => stale
+    ? '<p class="stale"><b>UNKNOWN \u2014 memory unreachable.</b> Do not assume none.</p>'
+    : rows.length
+      ? `<ul>${rows.map((r) => `<li>${esc(String(r.text).replace(/^User\s+\S+:\s*/i, ''))}</li>`).join('')}</ul>`
+      : '<p class="muted">None recorded</p>';
   return TOP('DoseDaughter \u2014 printable summary', mode) + `
 <main class="wrap" id="main">
   <div class="print-actions">
@@ -154,21 +161,21 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
   <div class="sheet">
     <div class="ecard">
       <div class="ecard-head"><span class="logo">&#129461;</span><div><b>Emergency card</b><div class="muted">DoseDaughter \u00b7 <span class="mono">${esc(user)}</span></div></div></div>
-      <div class="ecard-sec allergy"><h4>Allergies</h4>${allergyRows.length ? `<ul>${allergyRows.map((r) => `<li>${esc(String(r.text).replace(/^User\s+\S+:\s*/i, ''))}</li>`).join('')}</ul>` : '<p class="muted">None recorded</p>'}</div>
-      <div class="ecard-sec"><h4>Current medications</h4>${medRows.length ? `<ul>${medRows.map((r) => `<li>${esc(String(r.text).replace(/^User\s+\S+:\s*/i, ''))}</li>`).join('')}</ul>` : '<p class="muted">None recorded</p>'}</div>
-      <div class="ecard-sec"><h4>Emergency contacts</h4>${contactRows.length ? `<ul>${contactRows.map((r) => `<li>${esc(String(r.text).replace(/^User\s+\S+:\s*/i, ''))}</li>`).join('')}</ul>` : '<p class="muted">None recorded</p>'}</div>
+      <div class="ecard-sec allergy"><h4>Allergies</h4>${cell(allergyRows)}</div>
+      <div class="ecard-sec"><h4>Current medications</h4>${cell(medRows)}</div>
+      <div class="ecard-sec"><h4>Emergency contacts</h4>${cell(contactRows)}</div>
       <p class="ecard-foot">Not medical advice \u2014 confirm with the treating doctor.</p>
     </div>
 
     <div class="summary">
       <h2>Doctor-visit summary</h2>
       <p class="muted">Compiled from recalled memory only \u2014 every line is traceable to a Walrus blob. Generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC.</p>
-      ${section('Medications', groups.medications || [], mode)}
-      ${(groups.stopped && groups.stopped.length) ? section('Stopped / discontinued', groups.stopped, mode) : ''}
-      ${section('Allergies', groups.allergies || [], mode)}
-      ${section('Routine', groups.routine || [], mode)}
-      ${section('Family & care', groups.familyAndCare || [], mode)}
-      ${(groups.unclassified && groups.unclassified.length) ? section('Other', groups.unclassified, mode) : ''}
+      ${section('Medications', groups.medications || [], mode, stale)}
+      ${(groups.stopped && groups.stopped.length) ? section('Stopped / discontinued', groups.stopped, mode, stale) : ''}
+      ${section('Allergies', groups.allergies || [], mode, stale)}
+      ${section('Routine', groups.routine || [], mode, stale)}
+      ${section('Family & care', groups.familyAndCare || [], mode, stale)}
+      ${(groups.unclassified && groups.unclassified.length) ? section('Other', groups.unclassified, mode, stale) : ''}
     </div>
   </div>
   ${FOOT(mode)}

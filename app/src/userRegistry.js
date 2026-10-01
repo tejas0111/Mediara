@@ -15,7 +15,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const storePath = () => process.env.DD_REGISTRY_PATH || path.join(__dirname, '..', '.wallet-registry.json');
 
 function load() {
-  try { return JSON.parse(fs.readFileSync(storePath(), 'utf8')); } catch { return { users: {} }; }
+  const p = storePath();
+  let raw;
+  try { raw = fs.readFileSync(p, 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return { users: {} }; throw e; } // missing = fresh; unreadable = fail loud
+  try { return JSON.parse(raw); }
+  catch (e) { throw new Error(`registry file is corrupt (${p}) — refusing to treat it as empty: ${e.message}`); }
 }
 function save(db) {
   // Unique temp name + rename (atomic): two concurrent writers can't clobber a

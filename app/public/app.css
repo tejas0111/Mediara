@@ -146,6 +146,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .blobid.local{color:var(--warning);background:var(--warning-soft)}
 .toast{font-size:12.5px;background:var(--success-soft);border:1px solid color-mix(in srgb,var(--success) 25%,transparent);color:var(--success);border-radius:var(--r-sm);padding:9px 11px;word-break:break-all}
 .safety{background:var(--danger-soft);border:1px solid var(--danger-border);color:var(--danger);border-radius:var(--r-md);padding:12px;font-size:13.5px;font-weight:600;line-height:1.55}
+.stale{background:var(--warning-soft);border:1px solid color-mix(in srgb,var(--warning) 35%,transparent);color:var(--warning);border-radius:var(--r-sm);padding:9px 11px;font-size:13px}
 .scope{font-family:var(--mono);font-size:11.5px;color:var(--text-2);word-break:break-all}
 
 /* chips */

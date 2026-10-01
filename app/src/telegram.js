@@ -21,6 +21,7 @@ import {
   recallRelevant,
   recallRelevantMeta,
   mentionsDrug,
+  looksLikeMedicationQuestion,
   buildSystemPrompt,
 } from './memory.js';
 import { createLocalClient } from './localClient.js';
@@ -62,6 +63,7 @@ async function callLLM(system, userMessage) {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({ model: m, max_tokens: 300, messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }] }),
       });
       const data = await res.json();
@@ -117,17 +119,17 @@ bot.on('message', async (msg) => {
     if (text.startsWith('/start')) return void (await bot.sendMessage(chatId, START_TEXT));
     if (text.startsWith('/memory')) {
       const { client } = clientFor(chatId);
-      const recalled = await recallRelevant(client, 'all medications allergies routine family', 20);
-      return void (await bot.sendMessage(chatId, `${formatMemory(recalled)}\n${DISCLAIMER}`));
+      const { facts: recalled, degraded } = await recallRelevantMeta(client, 'all medications allergies routine family', 20);
+      return void (await bot.sendMessage(chatId, `${degraded ? '\u26A0 Memory temporarily unreachable \u2014 this list may be incomplete.\n' : ''}${formatMemory(recalled)}\n${DISCLAIMER}`));
     }
     if (text.startsWith('/summary')) {
       const { client } = clientFor(chatId);
-      const recalled = await recallRelevant(client, 'medications allergies routine family doctor pharmacy', 20);
+      const { facts: recalled, degraded } = await recallRelevantMeta(client, 'medications allergies routine family doctor pharmacy', 20);
       const s = compileSummary(recalled);
-      const sec = (name, arr) => `${name}: ${arr.length ? arr.join('; ') : '—'}`;
+      const sec = (name, arr) => `${name}: ${arr.length ? arr.join('; ') : (degraded ? 'UNKNOWN' : '\u2014')}`;
       return void (await bot.sendMessage(
         chatId,
-        `${sec('medications', s.medications)}\n${sec('allergies', s.allergies)}\n${sec('routine', s.routine)}\n${sec('familyAndCare', s.familyAndCare)}\n${DISCLAIMER}`,
+        `${degraded ? '\u26A0 Memory temporarily unreachable \u2014 values may be incomplete.\n' : ''}${sec('medications', s.medications)}\n${sec('allergies', s.allergies)}\n${sec('routine', s.routine)}\n${sec('familyAndCare', s.familyAndCare)}\n${DISCLAIMER}`,
       ));
     }
     if (text.startsWith('/reset')) {
@@ -146,7 +148,7 @@ bot.on('message', async (msg) => {
     const rr = await recallRelevantMeta(client, text, 5);
     const recalled = rr.facts;
     // Fail CLOSED (identical to web): no unguarded drug answers when memory is down.
-    if (rr.degraded && mentionsDrug(text)) {
+    if (rr.degraded && looksLikeMedicationQuestion(text)) {
       return void (await bot.sendMessage(chatId, 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.'));
     }
     // Coded safety nets FIRST (identical to web): allergy conflict, then curated
