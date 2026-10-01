@@ -1,11 +1,12 @@
 # RED-TEAM RUN — memory guard eval
 
-Generated: 2026-10-01T07:38:17.057Z  ·  mode: local (no LLM, no network)
+Generated: 2026-10-01T11:21:25.184Z  ·  mode: local (no LLM, no network)
 
-**28/28 checks passed, 0 failed.**
+**30/30 checks passed, 0 failed.**
 
 - **guard**: 24/24
 - **recall**: 4/4
+- **A/B**: 2/2
 
 | group | check | result |
 |---|---|---|
@@ -37,5 +38,7 @@ Generated: 2026-10-01T07:38:17.057Z  ·  mode: local (no LLM, no network)
 | recall | allergy query returns the ibuprofen fact | ✅ |
 | recall | routine query returns the dinner fact | ✅ |
 | recall | unrelated chit-chat returns no med fact | ✅ |
+| A/B | memory changed the outcome on 12/12 adverse probes | ✅ |
+| A/B | no false-positive blocks on 5 safe probes | ✅ |
 
 _Re-run: `npm run eval` (from `app/`)._

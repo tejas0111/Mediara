@@ -40,8 +40,12 @@ export function truncateFact(text) {
     out += ch;
     bytes += b;
   }
-  return out;
+  // Prefer a sentence/clause boundary so a safety clause isn't amputated
+  // mid-word; if none exists, fall back to the hard byte cut.
+  const m = out.match(/^[\s\S]*[.;,]\s?/);
+  return (m ? m[0] : out).trim() || out;
 }
+export function hasAllergySignalExport(text) { return hasAllergySignal(text); }
 
 // ---- Substance knowledge (deterministic; no LLM key needed) ---------------
 // Canonical drug -> drug class. Same-class substances are interchangeable for an
@@ -228,6 +232,9 @@ export function shouldRemember(text) {
   if (typeof text !== 'string' || !text || text.length > 500) return false;
   const t = text.toLowerCase();
   if (/\?\s*$/.test(t)) return false; // questions are never facts
+  // Never persist instruction-shaped text: a stored fact must not be a prompt
+  // injection vector into the system prompt.
+  if (/\b(?:ignore|disregard|forget)\b[^.]{0,30}\b(?:previous|prior|above|all|earlier)\b|\bnew\s+instructions?\b|\bsystem\s*:|\byou\s+must\b|\bas\s+an\s+ai\b|\bjailbreak\b/i.test(t)) return false;
   // Durable safety/care facts — ONE shared definition also used by the guards,
   // so every saved allergy phrasing is readable by the conflict/interaction net.
   if (hasAllergySignal(t)) return true;
@@ -563,6 +570,24 @@ export async function recallAll(client, queries, limit = 20) {
   return (await recallAllMeta(client, queries, limit)).facts;
 }
 
+// Authoritative blob census (NOT a similarity-search result): paginate
+// listNamespaces on has_more. Returns null when the SDK/back-end lacks it.
+export async function namespaceCensus(client) {
+  try {
+    if (!client || typeof client.listNamespaces !== 'function') return null;
+    let cursor, total = 0, count = 0;
+    for (let i = 0; i < 20; i++) {
+      const page = await client.listNamespaces(cursor ? { cursor } : {});
+      const items = page?.namespaces || page?.items || [];
+      for (const n of items) { count++; total += Number(n?.blobCount ?? n?.blob_count ?? n?.count ?? 0); }
+      const more = page?.has_more ?? page?.hasMore;
+      cursor = page?.cursor ?? page?.nextCursor;
+      if (!more || !cursor) break;
+    }
+    return { totalBlobs: total, namespaceCount: count };
+  } catch { return null; }
+}
+
 // Fact classifier for doctor summaries: score-based (not first-regex-hit) so
 // "daughter Priya manages weekend doses" lands in family, not medications.
 // Allergies ALWAYS win — misfiling an allergy is a safety bug.
@@ -571,9 +596,22 @@ const CLASS_RULES = {
   routine: [/dinner/i, /bedtime/i, /breakfast/i, /\blunch\b/i, /reminder/i, /morning/i, /at \d/i, /\d\s?(am|pm)\b/i, /\bwalk/i],
   familyAndCare: [/daughter/i, /\bson\b/i, /\bmom\b/i, /\bdad\b/i, /doctor/i, /pharmacy/i, /emergency/i, /contact/i, /\bcall/i, /visit/i, /priya|arjun|\brao\b/i, /hindi/i, /whatsapp/i],
 };
+// A dose CHANGE ("increased to 1000mg", "now takes", "instead of") supersedes an
+// earlier dose of the same substance — both must not print as current.
+const DOSE_CHANGE_RE = /\b(?:increased|decreased|changed|upped|lowered|reduced|raised|switched\s+to|now\s+takes?|instead\s+of|new\s+dose)\b/i;
+
 export function classifyFacts(facts) {
-  const out = { medications: [], allergies: [], stopped: [], routine: [], familyAndCare: [], unclassified: [] };
+  const out = { medications: [], allergies: [], stopped: [], superseded: [], routine: [], familyAndCare: [], unclassified: [] };
   const arr = (facts || []).map(String);
+  // Newest-wins: for a substance with a later dose-change fact, earlier dose
+  // facts are superseded.
+  const changeIdx = new Map();
+  arr.forEach((raw, idx) => { if (DOSE_CHANGE_RE.test(raw)) for (const s of substancesIn(raw)) changeIdx.set(s, idx); });
+  const superseded = new Set();
+  arr.forEach((raw, idx) => {
+    if (DOSE_CHANGE_RE.test(raw)) return;
+    for (const s of substancesIn(raw)) { const ci = changeIdx.get(s); if (ci != null && ci > idx) superseded.add(raw); }
+  });
   // Supersede pass: substances named in a discontinuation fact are no longer
   // current, so an earlier "takes X" fact must not stay under Current medications.
   const discontinued = new Set();
@@ -591,6 +629,7 @@ export function classifyFacts(facts) {
     // A med fact whose substance was later discontinued is superseded.
     const subs = substancesIn(text);
     if (subs.size && [...subs].every((s) => discontinued.has(s))) { out.stopped.push(raw); continue; }
+    if (superseded.has(raw)) { out.superseded.push(raw); continue; }
     let best = 'unclassified', bestScore = 0;
     for (const [cat, rules] of Object.entries(CLASS_RULES)) {
       const score = rules.reduce((n, re) => n + (re.test(text) ? 1 : 0), 0);

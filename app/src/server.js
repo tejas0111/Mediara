@@ -13,7 +13,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
@@ -300,7 +300,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         const a = normText(message), b = near.length ? normText(near[0].text) : '';
         const isDup = near.length && (near[0].distance ?? 1) < 0.15 && (a === b || a.includes(b) || b.includes(a));
         if (isDup) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
-        else { saved = await withTimeout(rememberAndWait(client, `${label}: ${message}`), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; }
+        else {
+          // Never store a fact that lost its safety signal to truncation — a
+          // truncated allergy is silent amnesia.
+          const stored = truncateFact(`${label}: ${message}`);
+          const lostSignal = (hasAllergySignalExport(message) || mentionsDrug(message)) && !(hasAllergySignalExport(stored) || mentionsDrug(stored));
+          if (lostSignal) { memoryPersisted = false; console.error('write skipped: fact truncated past its safety signal'); }
+          else { saved = await withTimeout(rememberAndWait(client, stored), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; }
+        }
       } catch { memoryPersisted = false; /* surfaced to the client below */ }
     }
     // Never deny memory we just stored: if the (keyless) reply says we know
@@ -496,11 +503,17 @@ app.get('/api/seed-status', readLimiter, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const view = await namespaceView(req, res);
     if (!view) return;
+    // Real census (listNamespaces), not the recall result — the recall count is
+    // filtered/deduped/capped and would under-report the blob count a judge checks.
+    const census = view.mode === 'mainnet' ? await namespaceCensus(clientFor(view.userId).client) : null;
     res.json({
       user: view.userId, mode: view.mode,
       agentId: process.env.MEMWAL_ACCOUNT_ID || null,
-      blobCount: view.recalled.length,
-      meetsMinimum: view.recalled.length >= 10,
+      recalledCount: view.recalled.length,
+      blobCount: census ? census.totalBlobs : null,
+      namespaceCount: census ? census.namespaceCount : null,
+      censusAvailable: !!census,
+      meetsMinimum: census ? census.totalBlobs >= 10 : view.recalled.length >= 10,
       stale: view.degraded,
     });
   } catch (e) { fail(res, e); }

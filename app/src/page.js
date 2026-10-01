@@ -174,6 +174,7 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
       <p class="muted">Compiled from recalled memory only \u2014 every line is traceable to a Walrus blob. Generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC.</p>
       ${section('Medications', groups.medications || [], mode, stale)}
       ${(groups.stopped && groups.stopped.length) ? section('Stopped / discontinued', groups.stopped, mode, stale) : ''}
+      ${(groups.superseded && groups.superseded.length) ? section('Superseded (older dose)', groups.superseded, mode, stale) : ''}
       ${section('Allergies', groups.allergies || [], mode, stale)}
       ${section('Routine', groups.routine || [], mode, stale)}
       ${section('Family & care', groups.familyAndCare || [], mode, stale)}

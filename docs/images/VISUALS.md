@@ -17,7 +17,7 @@ render architecture.png        1600,840 architecture.html
 
 | File | Placed at | Job in the article |
 |---|---|---|
-| `banner-dosedaughter.png` | Top (hero) | 3-second pitch: title, Walrus mainnet proof chips (13 blobs / d=0.54 / STOP guard / 41 tests), a live chat snippet with a real blob id. Makes a scrolling judge stop. |
+| `banner-dosedaughter.png` | Top (hero) | 3-second pitch: title, Walrus mainnet proof chips (13 blobs / d=0.54 / STOP guard / 236 tests), a live chat snippet with a real blob id. Makes a scrolling judge stop. |
 | `before-after.png` | "Side-by-side: before/after" section | The judged criterion #2 in one glance — Day1 (0 blobs, hedges) vs Day7 (13 blobs, STOP + receipt). Bars quantify it; quote cards make it emotional. |
 | `stop-receipt.png` | Allergy-trap section | The money shot as a terminal receipt: `STOP — do not give ibuprofen`, brand-name trap (Advil appears in no stored fact), walruscan verify link. Judges click things — this tells them what to click. |
 | `architecture.png` | "The integration" section | The recall→guard→generate→save loop with the two Walrus nodes highlighted. Shows the pattern is disciplined, not accidental. |
@@ -32,7 +32,7 @@ render architecture.png        1600,840 architecture.html
 
 ## Alt text (paste into Medium/Inkray image descriptions)
 
-- banner: `DoseDaughter — caregiver chatbot that never re-asks a dose. 13 blobs on Walrus Mainnet, allergy STOP-guard citing blob ids, 41/41 tests.`
+- banner: `DoseDaughter — caregiver chatbot that never re-asks a dose. 13 blobs on Walrus Mainnet, allergy STOP-guard citing blob ids, 236/236 tests.`
 - before-after: `Day 1 vs Day 7: same question "can she take ibuprofen", same model — Day 1 hedges with 0 memories, Day 7 blocks with a blob receipt.`
 - stop-receipt: `Terminal receipt: STOP — do not give ibuprofen, recalled allergy with blob _7oVBL39o…, verifiable on walruscan.com. Brand name Advil triggers via generic-name map.`
 - architecture: `DoseDaughter loop: recall from Walrus Memory before generation, coded allergy guard before the LLM, write gate saves only durable facts as new blobs.`

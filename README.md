@@ -30,7 +30,7 @@ git clone https://github.com/tejas0111/dosedaughter.git
 cd dosedaughter/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 143 core + 61 wallet + 32 route tests, no network
+npm test                    # 148 core + 61 wallet + 33 route tests, no network
 npm run dev                 # server on :3001
 ```
 
@@ -90,7 +90,7 @@ Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.
 ## Repository layout
 
 ```
-app/                  Express server, Telegram bot, MemWal wrapper, seeder, 143 core + 61 wallet + 32 route tests
+app/                  Express server, Telegram bot, MemWal wrapper, seeder, 148 core + 61 wallet + 33 route tests
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -105,7 +105,8 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 236/236 offline checks pass (143 core + 61 wallet + 32 route) | `npm test`; `npm run eval` prints the guard score; run it yourself |
+| 242/242 offline checks pass (148 core + 61 wallet + 33 route) | `npm test` — run it yourself |
+| **Memory changes the outcome on 12/12 adverse probes** (0/5 false positives) | [`evidence/AB-RESULTS.md`](evidence/AB-RESULTS.md) — `npm run eval` (memory-off vs memory-on) |
 
 Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc9879f605324bdbbb783`
 

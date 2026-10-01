@@ -284,6 +284,12 @@ test('/api/export returns facts + blob ids', async () => {
   assert.ok(j.blobCount >= 1);
 });
 
+test('/api/seed-status reports a real census field', async () => {
+  const j = await (await get('/api/seed-status?user=demo-mom')).json();
+  assert.equal(typeof j.recalledCount, 'number');
+  assert.ok('censusAvailable' in j && 'meetsMinimum' in j);
+});
+
 test('degraded memory: emergency card fails closed and drug questions 503', async () => {
   const { resetBreaker } = await import('./memory.js');
   const u = `rt-degraded-${Date.now()}`;
