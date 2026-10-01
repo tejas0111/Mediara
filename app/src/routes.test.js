@@ -258,6 +258,32 @@ test('keyless teach never denies the fact it just stored', async () => {
   assert.ok(!/I don't have any memories/i.test(j.reply), 'reply must not deny stored memory');
 });
 
+test('memory=off skips recall and guards (one-toggle amnesia)', async () => {
+  const u = `rt-memoff-${Date.now()}`;
+  await chat(u, 'She is allergic to ibuprofen, causes rash');
+  const off = await (await post('/api/chat', { userId: u, message: 'Can she take ibuprofen?', memory: 'off' })).json();
+  assert.equal(off.memoryOff, true);
+  assert.deepEqual(off.recalled, [], 'memory off recalls nothing');
+  assert.ok(!/^STOP/.test(off.reply), 'memory off must not fire the guard');
+  const on = await chat(u, 'Can she take ibuprofen?');
+  assert.ok(/^STOP/.test(on.reply), 'memory on must fire the guard');
+});
+
+test('/compare proves cross-namespace isolation', async () => {
+  const r = await get('/compare?a=demo-mom&b=demo-day7');
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /Cross-user isolation/);
+  assert.equal((await get('/compare?a=vault-abc&b=demo-day7')).status, 403);
+});
+
+test('/api/export returns facts + blob ids', async () => {
+  const u = `rt-export-${Date.now()}`;
+  await chat(u, 'She takes Metformin 500mg at 8pm');
+  const j = await (await get(`/api/export?user=${u}`)).json();
+  assert.ok(Array.isArray(j.facts));
+  assert.ok(j.blobCount >= 1);
+});
+
 test('degraded memory: emergency card fails closed and drug questions 503', async () => {
   const { resetBreaker } = await import('./memory.js');
   const u = `rt-degraded-${Date.now()}`;

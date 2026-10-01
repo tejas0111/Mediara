@@ -103,7 +103,8 @@
     addRow('user', message);
     setTyping(true);
     var sendBtn = $('send'); if (sendBtn) sendBtn.disabled = true;
-    fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUser(), message: message }) })
+    var memoff = $('memoff');
+    fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUser(), message: message, memory: (memoff && memoff.checked) ? 'off' : 'on' }) })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
       .then(function (res) {
         setTyping(false); if (sendBtn) sendBtn.disabled = false;

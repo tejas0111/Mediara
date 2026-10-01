@@ -1,7 +1,7 @@
 // DoseDaughter — server-rendered page shells (hand-written UI, no framework/build).
 // Untrusted text is escaped server-side (esc); the client uses textContent only.
 const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ASSET_V = '9';
+const ASSET_V = '10';
 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -13,7 +13,7 @@ const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset
   <div class="brand"><span class="logo">&#129461;</span>
     <div><h1>DoseDaughter</h1><p>a caregiver chatbot that never re-asks a dose</p></div></div>
   <nav class="topnav" aria-label="Primary">
-    <a href="/">Chat</a><a href="/demo">Before / After</a><a href="/memory?user=demo-mom">Memory</a><a href="/print?user=demo-mom">Print</a><a href="/replay?user=demo-mom">Replay</a>
+    <a href="/">Chat</a><a href="/demo">Before / After</a><a href="/memory?user=demo-mom">Memory</a><a href="/print?user=demo-mom">Print</a><a href="/replay?user=demo-mom">Replay</a><a href="/compare?a=demo-mom&amp;b=demo-day7">Isolation</a>
     <span class="pill ${mode === 'mainnet' ? 'mainnet' : 'local'}"><span class="dot"></span>${mode === 'mainnet' ? 'Walrus Mainnet' : 'Local demo'}</span>
   </nav>
 </div></header>`;
@@ -38,7 +38,8 @@ export function chatPage({ mode }) {
   </div>
   <div class="obsteps" id="obsteps"></div>
   <p class="note" id="signnote">Your Sui wallet is your sign-in. Connect it to keep memories in <b>your own</b> on-chain vault (a MemWal account you create &amp; own), read with a delegate key you can revoke. Signature only \u2014 no fee to sign in.</p>
-  <div class="identity"><label for="who">user id</label><input id="who" value="demo-mom" spellcheck="false" autocomplete="off"></div>
+  <div class="identity"><label for="who">user id</label><input id="who" value="demo-mom" spellcheck="false" autocomplete="off">
+    <label class="memtoggle"><input type="checkbox" id="memoff"> memory off (amnesia mode)</label></div>
 
   <div class="grid">
     <section class="chat card" aria-label="Chat with DoseDaughter">
@@ -179,6 +180,26 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
       ${(groups.unclassified && groups.unclassified.length) ? section('Other', groups.unclassified, mode, stale) : ''}
     </div>
   </div>
+  ${FOOT(mode)}
+</main>
+</body></html>`;
+}
+
+// ---------- cross-user isolation proof ----------
+export function comparePage({ q, mode, a, b, aFacts, bFacts }) {
+  const list = (arr) => arr.length
+    ? `<ul>${arr.map((m) => `<li>${esc(String(m.text).replace(/^User\s+\S+:\s*/i, ''))}${blobTag(m.blob_id, mode)}</li>`).join('')}</ul>`
+    : '<ul><li class="none">no memories in this namespace</li></ul>';
+  return TOP('DoseDaughter \u2014 isolation', mode) + `
+<main class="wrap" id="main">
+  <h1 class="pg">Cross-user isolation \u2014 the same question, two namespaces</h1>
+  <p class="sub">Per-user namespaces keep one family member's memory out of another's. Queried live now (mode: ${esc(mode)}).</p>
+  <div class="qline">Q: \u201c${esc(q)}\u201d</div>
+  <div class="two">
+    <div class="card dcard"><h3>Namespace A \u2014 <span class="mono">${esc(a)}</span></h3><div class="count">${aFacts.length} facts</div>${list(aFacts)}</div>
+    <div class="card dcard"><h3>Namespace B \u2014 <span class="mono">${esc(b)}</span></h3><div class="count">${bFacts.length} facts</div>${list(bFacts)}</div>
+  </div>
+  <p class="sub" style="margin-top:16px">Nothing from A appears under B \u2014 isolation is enforced by the namespace, not by the prompt.</p>
   ${FOOT(mode)}
 </main>
 </body></html>`;

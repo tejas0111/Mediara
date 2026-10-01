@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
-import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js';
+import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
@@ -197,6 +197,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     const { userId = 'anon', message = '' } = req.body;
+    // One-toggle amnesia: memory=off skips recall AND the guards, so the same bot
+    // can be shown with and without memory — the rubric's before/after.
+    const memoryOff = req.body.memory === false || req.body.memory === 'off' || req.query.memory === 'off';
     if (typeof message !== 'string' || !message.trim() || message.length > 500) {
       return res.status(400).json({ error: 'message must be 1-500 chars' });
     }
@@ -233,7 +236,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 
     // Recall a wide set for the GUARDS (so presentation trimming / poisoning can
     // never evict the allergy fact a STOP depends on), but show only the top 5.
-    const rr = await recallRelevantMeta(client, message, 25);
+    const rr = memoryOff ? { facts: [], degraded: false } : await recallRelevantMeta(client, message, 25);
     const guardFacts = rr.facts;
     let recalled = rr.facts.slice(0, 5);
     // "What do you remember?" must return the WHOLE namespace, not a query subset.
@@ -247,8 +250,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Coded safety nets FIRST, before any LLM output:
     //   1) allergy conflict (hard block)  2) curated drug–drug interaction.
-    const conflict = findConflict(message, guardFacts);
-    const interaction = conflict ? null : findInteraction(message, guardFacts);
+    const conflict = memoryOff ? null : findConflict(message, guardFacts);
+    const interaction = (memoryOff || conflict) ? null : findInteraction(message, guardFacts);
     let reply;
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. Confirm with your doctor — this is not medical advice.`;
@@ -269,7 +272,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Auto-save AFTER generation only, and NEVER when a safety guard fired: a
     // blocked administration order must not be persisted as a durable fact.
     let saved = null, memoryPersisted = null;
-    if (!conflict && !interaction && shouldRemember(message)) {
+    if (!memoryOff && !conflict && !interaction && shouldRemember(message)) {
       memoryPersisted = false;
       try {
         // Dedup: skip a write only when it is near-identical to an existing fact.
@@ -297,6 +300,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       identity: identity.kind,
       savedBlob: saved?.blob_id || null,
       memoryPersisted,
+      memoryOff,
       mode: MODE,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     });
@@ -428,6 +432,51 @@ app.get('/replay', readLimiter, async (req, res) => {
     const { userId, mode, recalled } = view;
     res.send(replayPage({ user: userId, mode, stale: view.degraded, facts: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })) }));
   } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
+});
+
+// Cross-user isolation proof: one question, two namespaces, side by side.
+app.get('/compare', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const a = normalizeUser(req.query.a, 'demo-mom');
+    const b = normalizeUser(req.query.b, 'demo-day7');
+    if (isReservedNs(a) || isReservedNs(b)) return res.status(403).send('Reserved namespace.');
+    const q = 'What medications and allergies does this person have?';
+    const ra = await recallAllMeta(clientFor(a).client, ALL_QUERIES, 15);
+    const rb = await recallAllMeta(clientFor(b).client, ALL_QUERIES, 15);
+    res.send(comparePage({ q, mode: MODE, a, b, aFacts: ra.facts, bFacts: rb.facts }));
+  } catch (e) { console.error('compare error:', String((e && e.message) || e).slice(0, 160)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
+});
+
+// Machine-readable export (feeds the article / submission evidence).
+app.get('/api/export', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    res.json({
+      user: view.userId, mode: view.mode,
+      agentId: process.env.MEMWAL_ACCOUNT_ID || null,
+      blobCount: view.recalled.length,
+      facts: view.recalled.map((r) => ({ text: r.text, blob_id: r.blob_id || null })),
+    });
+  } catch (e) { fail(res, e); }
+});
+
+// Seed-status: blob count + agent id + whether the >=10 Mainnet bar is met.
+app.get('/api/seed-status', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    res.json({
+      user: view.userId, mode: view.mode,
+      agentId: process.env.MEMWAL_ACCOUNT_ID || null,
+      blobCount: view.recalled.length,
+      meetsMinimum: view.recalled.length >= 10,
+      stale: view.degraded,
+    });
+  } catch (e) { fail(res, e); }
 });
 
 // ---------------- wallet identity + per-user memory ----------------
