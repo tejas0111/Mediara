@@ -11,7 +11,7 @@
 ## Checks
 
 - `node --check` on all `app/src/*.js` (memory, localClient, server, selftest, seed10, verify): OK
-- `npm test` (`node src/selftest.js`): **36 passed, 0 failed** (13 at v1 capture — see TEST-LOG rows 11–15 for the dated ledger). Historical run; **current suite = 125 passed (69 core + 56 wallet/crypto)** — `npm test` runs both suites.
+- `npm test` (`node src/selftest.js`): **36 passed, 0 failed** (13 at v1 capture — see TEST-LOG rows 11–15 for the dated ledger). Historical run; **current suite = 134 passed (78 core + 56 wallet/crypto)** — `npm test` runs both suites.
 
 ## 1. Teach fact 1 — `POST /api/chat {"userId":"e2e-mom","message":"My mom takes Metformin 500mg at 8pm after food"}`
 
@@ -129,7 +129,7 @@ on `demo-day1` (empty) vs `demo-day7` instead of static HTML. Verified against f
   `"STOP — do not give ibuprofen. Recalled allergy: "User demo-day7: She is allergic to ibuprofen, causes rash" (blob local-7dca6520a17d). Confirm with your doctor — this is not medical advice."`
   Coded block fired with NO LLM key set — deterministic safety from memory alone.
 - `GET /demo?persona=day7` → renders `LIVE recall` with real per-namespace counts.
-- `npm test` → **17 passed, 0 failed at v2 capture** (added 4 findConflict cases; 37 at the row 22 checkpoint — current suite 125: 69 core + 56 wallet).
+- `npm test` → **17 passed, 0 failed at v2 capture** (added 4 findConflict cases; 37 at the row 22 checkpoint — current suite 134: 78 core + 56 wallet).
 
 ## 9. v3 — REAL LLM reply from recall (captured 04:31 IST Sept 21, user `llm-mom`)
 

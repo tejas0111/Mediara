@@ -68,6 +68,12 @@ write gate (shouldRemember) ──► Walrus Memory ──► Seal-encrypted blo
 - Statements that *teach* an allergy ("She is allergic to ibuprofen", "avoid X")
   are not administration questions and do not trigger the guard; questions do.
 
+In addition to allergies, a small **curated drug–drug interaction table**
+(`findInteraction`) blocks the same way: warfarin + NSAID, nitrate + PDE5,
+statin + macrolide, SSRI + NSAID, and similar, matched by drug class. High-severity
+pairs reply `STOP`, moderate ones `CAUTION`. It is deliberately small and
+defensible, not a complete interaction database.
+
 **Honest limitation**: the guard is deterministic *given the recalled facts*, and
 recall is best-effort. A dedicated allergy query plus force-inclusion makes the
 allergy reliably present, but if the allergy blob was never written or the
@@ -106,6 +112,8 @@ Policy allows scripts only from `'self'` (no inline scripts).
 | `GET` | `/api/summary?user=` | doctor-visit summary compiled from recall only |
 | `GET` | `/memory?user=` | public receipts: facts + walruscan blob links |
 | `GET` | `/demo` | live before/after: empty vs seeded namespace |
+| `GET` | `/print?user=` | printable emergency card + doctor-visit summary |
+| `GET` | `/replay?user=` | Day 1 → Day 90 animated memory replay |
 | `GET` | `/healthz` | health + mode |
 | `GET` | `/api/auth/message` | issue single-use sign-in nonce |
 | `POST` | `/api/auth/verify` | verify signature, set session cookie |

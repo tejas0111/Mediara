@@ -58,6 +58,21 @@ export const DRUG_CLASS = {
   ketoprofen: 'nsaid',
   etoricoxib: 'nsaid',
   paracetamol: 'paracetamol',
+  // Anticoagulants / antiplatelets
+  warfarin: 'anticoagulant', apixaban: 'anticoagulant', rivaroxaban: 'anticoagulant', dabigatran: 'anticoagulant', heparin: 'anticoagulant',
+  clopidogrel: 'antiplatelet', prasugrel: 'antiplatelet', ticagrelor: 'antiplatelet',
+  // Serotonergic (SSRI/SNRI) — GI-bleeding risk with NSAIDs
+  sertraline: 'serotonergic', fluoxetine: 'serotonergic', escitalopram: 'serotonergic', citalopram: 'serotonergic', paroxetine: 'serotonergic', venlafaxine: 'serotonergic', duloxetine: 'serotonergic',
+  // Cardiovascular
+  nitroglycerin: 'nitrate', isosorbide: 'nitrate',
+  sildenafil: 'pde5', tadalafil: 'pde5', vardenafil: 'pde5',
+  simvastatin: 'statin', atorvastatin: 'statin', rosuvastatin: 'statin', pravastatin: 'statin',
+  clarithromycin: 'macrolide', erythromycin: 'macrolide',
+  lisinopril: 'ace', enalapril: 'ace', ramipril: 'ace', perindopril: 'ace', captopril: 'ace',
+  spironolactone: 'potassium-sparing', amiloride: 'potassium-sparing', triamterene: 'potassium-sparing',
+  omeprazole: 'ppi', esomeprazole: 'ppi', pantoprazole: 'ppi',
+  methotrexate: 'methotrexate', lithium: 'lithium',
+  metformin: 'biguanide', amlodipine: 'calcium-channel',
 };
 // Brand/OTC name -> canonical drug.
 export const BRAND_SYNONYMS = new Map(Object.entries({
@@ -67,6 +82,13 @@ export const BRAND_SYNONYMS = new Map(Object.entries({
   disprin: 'aspirin', ecotrin: 'aspirin', bayer: 'aspirin',
   voltaren: 'diclofenac', cataflam: 'diclofenac',
   tylenol: 'paracetamol', panadol: 'paracetamol', calpol: 'paracetamol', acetaminophen: 'paracetamol',
+  coumadin: 'warfarin', eliquis: 'apixaban', xarelto: 'rivaroxaban', plavix: 'clopidogrel',
+  zoloft: 'sertraline', prozac: 'fluoxetine', lexapro: 'escitalopram', cipralex: 'escitalopram',
+  cymbalta: 'duloxetine', effexor: 'venlafaxine',
+  lipitor: 'atorvastatin', crestor: 'rosuvastatin', zocor: 'simvastatin',
+  viagra: 'sildenafil', cialis: 'tadalafil',
+  prilosec: 'omeprazole', losec: 'omeprazole', nexium: 'esomeprazole',
+  glucophage: 'metformin', norvasc: 'amlodipine',
 }));
 const KNOWN_DRUG_WORDS = [...new Set([...Object.keys(DRUG_CLASS), ...BRAND_SYNONYMS.keys()])];
 const DRUG_ALT = KNOWN_DRUG_WORDS.join('|');
@@ -133,18 +155,20 @@ export function shouldRemember(text) {
 // Negated allergies never block, and only real drugs are ever returned (never a
 // symptom word like "rash"). Deterministic: works with no LLM key.
 // Returns { substance, class, fact, blob_id } or null.
+// A message that TEACHES a fact (allergy / avoidance) is not an administration
+// question, so it must not trigger a safety block. Only non-questions skip, so
+// "Should I avoid giving her ibuprofen?" still blocks. Shared by both guards.
+export function isTeachingStatement(message) {
+  if (/\?\s*$/.test(String(message).trim())) return false;
+  return /\ballerg|intoleran|\bavoid(?:s|ed|ing)?\b|\bcan(?:no|'?t|not)\s+(?:have|take)\b|\breaction\s+to\b|\bmakes?\s+\w+\s+sick\b/i.test(message)
+    || NO_DRUG_RE.test(message);
+}
+
 export function findConflict(message, recalled) {
   if (!message || !recalled || !Array.isArray(recalled)) return null;
   const msgSubs = substancesIn(message);
   if (!msgSubs.size) return null;
-  // A statement that TEACHES an allergy is not an administration question: never
-  // STOP on "She is allergic to ibuprofen" / "avoid X" / "no ibuprofen". Only
-  // skip non-questions, so "Should I avoid giving her ibuprofen?" still blocks.
-  const isStatement = !/\?\s*$/.test(String(message).trim()) && (
-    /\ballerg|intoleran|\bavoid(?:s|ed|ing)?\b|\bcan(?:no|'?t|not)\s+(?:have|take)\b|\breaction\s+to\b|\bmakes?\s+\w+\s+sick\b/i.test(message)
-    || NO_DRUG_RE.test(message)
-  );
-  if (isStatement) return null;
+  if (isTeachingStatement(message)) return null;
   for (const r of recalled) {
     if (!r || typeof r.text !== 'string') continue;
     if (!/allerg|reaction|intoleran|avoid/i.test(r.text)) continue;
@@ -161,6 +185,57 @@ export function findConflict(message, recalled) {
       const cls = DRUG_CLASS[s];
       if (cls && factClasses.has(cls)) {
         return { substance: s, class: cls, fact: r.text, blob_id: r.blob_id || null };
+      }
+    }
+  }
+  return null;
+}
+
+// ---- Curated drug–drug interaction table (deterministic; no LLM key) --------
+// Deliberately small and defensible. Pairs match by canonical drug OR drug class,
+// so a warfarin fact + an ibuprofen question still fires. This is a safety
+// guardrail, NOT a complete interaction database — always confirm with a doctor.
+export const INTERACTIONS = [
+  { a: 'anticoagulant', b: 'nsaid', severity: 'high', reason: 'increased bleeding risk (anticoagulant + NSAID)' },
+  { a: 'anticoagulant', b: 'antiplatelet', severity: 'high', reason: 'increased bleeding risk (anticoagulant + antiplatelet)' },
+  { a: 'anticoagulant', b: 'serotonergic', severity: 'high', reason: 'increased bleeding risk (anticoagulant + SSRI/SNRI)' },
+  { a: 'serotonergic', b: 'nsaid', severity: 'moderate', reason: 'raised GI-bleeding risk (SSRI/SNRI + NSAID)' },
+  { a: 'nitrate', b: 'pde5', severity: 'high', reason: 'severe hypotension (nitrate + PDE5 inhibitor)' },
+  { a: 'statin', b: 'macrolide', severity: 'high', reason: 'rhabdomyolysis risk (statin + macrolide)' },
+  { a: 'ace', b: 'potassium-sparing', severity: 'moderate', reason: 'hyperkalemia (ACE inhibitor + potassium-sparing diuretic)' },
+  { a: 'antiplatelet', b: 'ppi', severity: 'moderate', reason: 'omeprazole can reduce clopidogrel effectiveness' },
+  { a: 'methotrexate', b: 'nsaid', severity: 'high', reason: 'methotrexate toxicity (methotrexate + NSAID)' },
+  { a: 'lithium', b: 'nsaid', severity: 'moderate', reason: 'raised lithium levels (lithium + NSAID)' },
+  { a: 'lithium', b: 'ace', severity: 'moderate', reason: 'raised lithium levels (lithium + ACE inhibitor)' },
+];
+
+function interactionFor(x, y) {
+  const cx = DRUG_CLASS[x], cy = DRUG_CLASS[y];
+  for (const it of INTERACTIONS) {
+    const ab = (it.a === x || it.a === cx) && (it.b === y || it.b === cy);
+    const ba = (it.a === y || it.a === cy) && (it.b === x || it.b === cx);
+    if (ab || ba) return it;
+  }
+  return null;
+}
+
+// Coded drug–drug interaction guard: if the message asks about a substance that
+// interacts with a medication the user already told us about, warn BEFORE the
+// LLM. Returns { substance, withSubstance, severity, reason, fact, blob_id }.
+export function findInteraction(message, recalled) {
+  if (!message || !recalled || !Array.isArray(recalled)) return null;
+  const msgSubs = substancesIn(message);
+  if (!msgSubs.size) return null;
+  if (isTeachingStatement(message)) return null;
+  for (const r of recalled) {
+    if (!r || typeof r.text !== 'string') continue;
+    const factSubs = substancesIn(r.text);
+    if (!factSubs.size) continue;
+    for (const s of msgSubs) {
+      for (const f of factSubs) {
+        if (s === f) continue;
+        const it = interactionFor(s, f);
+        if (it) return { substance: s, withSubstance: f, severity: it.severity, reason: it.reason, fact: r.text, blob_id: r.blob_id || null };
       }
     }
   }

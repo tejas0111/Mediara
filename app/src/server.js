@@ -12,9 +12,9 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallAll, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallAll, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
-import { chatPage, memoryPage, demoPage } from './page.js';
+import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
@@ -131,11 +131,16 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const label = walletClient ? `User ${sess.address.slice(0, 10)}…` : `User ${userId}`;
 
     const recalled = await recallRelevant(client, message, 5);
-    // Coded safety net FIRST: allergy conflict blocks before any LLM output.
+    // Coded safety nets FIRST, before any LLM output:
+    //   1) allergy conflict (hard block)  2) curated drug–drug interaction.
     const conflict = findConflict(message, recalled);
+    const interaction = conflict ? null : findInteraction(message, recalled);
     let reply;
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. Confirm with your doctor — this is not medical advice.`;
+    } else if (interaction) {
+      const lead = interaction.severity === 'high' ? 'STOP' : 'CAUTION';
+      reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. Confirm with your doctor — this is not medical advice.`;
     } else {
       const system = buildSystemPrompt(recalled);
       reply = await callLLM(system, message);
@@ -244,6 +249,49 @@ app.get('/demo', async (req, res) => {
       afterNs,
       day7Empty: r7.length === 0,
     }));
+  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
+});
+
+// Shared multi-angle queries for whole-namespace reads.
+const ALL_QUERIES = [
+  'medications allergies routine family',
+  'Metformin Amlodipine insulin dose mg',
+  'allergic rash ibuprofen avoid',
+  'dinner bedtime morning reminder routine',
+  'daughter son doctor pharmacy emergency contact',
+  'blood sugar log target fasting',
+  'warfarin sertraline statin nitrate blood thinner',
+];
+
+async function namespaceView(req) {
+  const sess = sessionFromReq(req);
+  const mine = sess ? userClientFor(sess.address) : null;
+  const userId = mine ? mine.ns.replace(/^user-/, '') : (req.query.user || 'demo-mom');
+  const { client, mode } = mine ? { client: mine.client, mode: 'mainnet' } : clientFor(userId);
+  const recalled = await recallAll(client, ALL_QUERIES, 25);
+  return { userId, mode, recalled };
+}
+
+// Printable emergency card + doctor-visit summary (recall only).
+app.get('/print', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const { userId, mode, recalled } = await namespaceView(req);
+    const facts = recalled.map((r) => ({ text: r.text, blob_id: r.blob_id }));
+    const byText = new Map(facts.map((r) => [r.text, r]));
+    const g = classifyFacts(facts.map((r) => r.text));
+    const groups = {};
+    for (const k of Object.keys(g)) groups[k] = g[k].map((t) => byText.get(t) || { text: t });
+    res.send(printPage({ user: userId, mode, facts, groups, agentShort: mode === 'mainnet' ? String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10) : null }));
+  } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
+});
+
+// Day 1 -> Day 90 replay (facts recalled live).
+app.get('/replay', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const { userId, mode, recalled } = await namespaceView(req);
+    res.send(replayPage({ user: userId, mode, facts: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })) }));
   } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
 

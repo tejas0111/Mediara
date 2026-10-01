@@ -1,6 +1,6 @@
 // Offline self-test: pure functions only, NO MemWal network calls (per user order).
 // Run: node src/selftest.js (needs node >=20)
-import { namespaceFor, truncateFact, buildSystemPrompt, shouldRemember, findConflict, recallRelevant, rememberBulkAndWait, MAX_DISTANCE } from './memory.js';
+import { namespaceFor, truncateFact, buildSystemPrompt, shouldRemember, findConflict, findInteraction, recallRelevant, rememberBulkAndWait, MAX_DISTANCE } from './memory.js';
 import { overlap, createLocalClient } from './localClient.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,6 +39,22 @@ ok(findConflict('', allergyMem) === null, 'no conflict on empty');
 ok(findConflict('She is allergic to ibuprofen, causes rash', allergyMem) === null, 'regression: teaching an allergy is not a conflict');
 ok(findConflict('avoid ibuprofen', allergyMem) === null, 'regression: "avoid X" statement is not a conflict');
 ok(findConflict('Should I avoid giving her ibuprofen?', allergyMem) !== null, 'regression: question containing "avoid" still blocks');
+
+// --- drug–drug interaction guard (curated, deterministic) ---
+const warfarinMem = [{ text: 'User demo: takes warfarin 5mg daily for AFib', blob_id: 'local-war', distance: 0.2 }];
+const i1 = findInteraction('Can she take ibuprofen for her back?', warfarinMem);
+ok(i1 && i1.substance === 'ibuprofen' && i1.withSubstance === 'warfarin' && i1.severity === 'high', 'interaction: warfarin + ibuprofen (high)');
+ok(findInteraction('Can she take Advil?', warfarinMem) !== null, 'interaction: brand Advil matches warfarin+NSAID');
+ok(findInteraction('Can she take paracetamol?', warfarinMem) === null, 'interaction: paracetamol is NOT in the NSAID pair');
+ok(findInteraction('avoid ibuprofen', warfarinMem) === null, 'interaction: teaching statement does not fire');
+ok(findInteraction('Should I give her ibuprofen?', warfarinMem) !== null, 'interaction: question still fires');
+const sertMem = [{ text: 'takes sertraline 50mg every morning', blob_id: 'b1', distance: 0.2 }];
+ok(findInteraction('Can she take naproxen?', sertMem) !== null, 'interaction: SSRI + NSAID');
+const nitroMem = [{ text: 'takes nitroglycerin for angina', blob_id: 'b2', distance: 0.2 }];
+ok(findInteraction('Is sildenafil safe?', nitroMem) !== null, 'interaction: nitrate + PDE5');
+const statinMem = [{ text: 'takes atorvastatin 20mg at night', blob_id: 'b3', distance: 0.2 }];
+ok(findInteraction('Can she take clarithromycin?', statinMem) !== null, 'interaction: statin + macrolide');
+ok(findInteraction('What meds does she take?', warfarinMem) === null, 'interaction: no false positive on a meds question');
 
 const lc = createLocalClient({ namespace: 'user-selftest' });
 const bulk = await rememberBulkAndWait(lc, ['Selftest fact one 8pm', 'Selftest fact two allergy test']);

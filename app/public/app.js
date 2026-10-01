@@ -1,56 +1,79 @@
-/* DoseDaughter client. Chat UI: Deep Chat (MIT, OvidijusParsiunas) — see /THIRD-PARTY-NOTICES.md */
+/* DoseDaughter client. Hand-written chat UI (no framework). */
 (function () {
   'use strict';
-  var root = document.getElementById('dd-app');
-  if (!root) return;
-  var MODE = root.dataset.mode || 'local';
-  var MODEL = root.dataset.model || 'google/gemini-2.5-flash';
-  var DEFAULT_USER = root.dataset.defaultUser || 'demo-mom';
-
   function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function short(s) { return s ? String(s).slice(0, 6) + '\u2026' + String(s).slice(-4) : ''; }
   function b64ToBytes(b64) { var bin = atob(b64); var u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
   function utf8(s) { return new TextEncoder().encode(s); }
   function post(url, body) { return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(function (r) { return r.json(); }); }
+  function clock() { var d = new Date(); return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+
+  var root = $('dd-app');
+  var MODE = root ? (root.dataset.mode || 'local') : 'local';
+  var DEFAULT_USER = root ? (root.dataset.defaultUser || 'demo-mom') : 'demo-mom';
+
   function blobLink(id) {
     if (!id) return null;
-    if (String(id).indexOf('local-') === 0 || MODE !== 'mainnet') {
-      var span = document.createElement('span'); span.className = 'blobid local';
-      span.textContent = 'LOCAL DEMO ' + String(id).slice(0, 14) + '\u2026'; return span;
-    }
-    var a = document.createElement('a'); a.className = 'blobid';
-    a.href = 'https://walruscan.com/mainnet/blob/' + encodeURIComponent(id);
-    a.target = '_blank'; a.rel = 'noopener'; a.textContent = String(id).slice(0, 12) + '\u2026 \u2197'; return a;
+    var isLocal = String(id).indexOf('local-') === 0 || MODE !== 'mainnet';
+    var node = isLocal ? el('span', 'blobid local') : el('a', 'blobid');
+    node.textContent = (isLocal ? '\u25CF ' : '\u26D3 ') + String(id).slice(0, 14) + '\u2026';
+    if (!isLocal) { node.href = 'https://walruscan.com/mainnet/blob/' + encodeURIComponent(id); node.target = '_blank'; node.rel = 'noopener'; node.title = 'Verify this memory on walruscan'; }
+    else { node.title = 'Local demo id — not a Mainnet blob'; }
+    return node;
   }
 
-  var AVATAR_AI = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#0f5d5a"/><text x="32" y="42" font-size="30" font-family="Arial" text-anchor="middle" fill="#fff">D</text></svg>');
-  var AVATAR_USER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#cfe8e6"/><text x="32" y="42" font-size="30" font-family="Arial" text-anchor="middle" fill="#0b4341">U</text></svg>');
-  var AVATAR_STOP = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="#b91c1c"/><text x="32" y="44" font-size="34" font-family="Arial" font-weight="bold" text-anchor="middle" fill="#fff">!</text></svg>');
+  /* ---------------- chat ---------------- */
+  var thread, typing;
+  function scrollThread() { if (thread) thread.scrollTop = thread.scrollHeight; }
+  function setTyping(on) { if (typing) typing.className = 'typing' + (on ? ' on' : ''); }
+
+  function addRow(role, text, opts) {
+    opts = opts || {};
+    var row = el('div', 'row ' + (role === 'user' ? 'user' : role === 'stop' ? 'stop' : role === 'warn' ? 'warn' : 'ai'));
+    var ava = el('div', 'ava', role === 'user' ? 'U' : role === 'stop' ? '!' : role === 'warn' ? '!' : 'DD');
+    ava.setAttribute('aria-hidden', 'true');
+    var body = el('div');
+    var bubble = el('div', 'bubble', text);
+    body.appendChild(bubble);
+    if (opts.memories && opts.memories.length) {
+      var chips = el('div', 'memchips');
+      opts.memories.forEach(function (m) {
+        var t = (m && m.text) || m;
+        var chip = el('span', 'memchip', t);
+        chip.title = t; chips.appendChild(chip);
+      });
+      body.appendChild(chips);
+    }
+    if (role !== 'user') {
+      var meta = el('div', 'meta');
+      meta.appendChild(el('span', null, role === 'stop' ? 'Safety stop' : 'DoseDaughter'));
+      meta.appendChild(el('span', null, '\u00B7'));
+      meta.appendChild(el('span', null, clock()));
+      body.appendChild(meta);
+      body.appendChild(el('div', 'disclaim', 'Confirm with your doctor \u2014 this is not medical advice.'));
+    }
+    row.appendChild(ava); row.appendChild(body);
+    thread.appendChild(row); scrollThread();
+    return row;
+  }
 
   function currentUser() {
     var who = $('who');
     return (who && !who.disabled && who.value.trim()) || DEFAULT_USER;
   }
 
-  function renderReceipts(j) {
+  function renderRail(j) {
     var list = $('memlist');
     if (list) {
       list.innerHTML = '';
       var metas = j.recalledMeta || (j.recalled || []).map(function (t) { return { text: t }; });
-      if (!metas.length) {
-        var none = document.createElement('li'); none.className = 'none';
-        none.textContent = 'No memories for this user yet \u2014 teach me a fact.'; list.appendChild(none);
-      } else {
-        metas.forEach(function (m) {
-          var li = document.createElement('li');
-          li.appendChild(document.createTextNode(m.text));
-          if (m.blob_id) li.appendChild(blobLink(m.blob_id));
-          list.appendChild(li);
-        });
-      }
+      if (!metas.length) { list.appendChild(el('li', 'none', 'No memories for this user yet \u2014 teach me a fact.')); }
+      else metas.forEach(function (m) {
+        var li = el('li', null, m.text || String(m));
+        if (m.blob_id) li.appendChild(blobLink(m.blob_id));
+        list.appendChild(li);
+      });
     }
     var savedWrap = $('savedwrap'), saved = $('saved');
     if (savedWrap && saved) {
@@ -58,112 +81,80 @@
       if (j.savedBlob) {
         savedWrap.style.display = '';
         saved.appendChild(document.createTextNode('\uD83E\uDDAD Remembered \u2192 '));
-        var link = blobLink(j.savedBlob);
-        if (link) saved.appendChild(link);
-      } else { savedWrap.style.display = 'none'; }
+        var link = blobLink(j.savedBlob); if (link) saved.appendChild(link);
+      } else savedWrap.style.display = 'none';
     }
     var scope = $('scope');
-    if (scope) {
-      scope.textContent = (j.identity === 'wallet-owner' ? '\uD83D\uDD12 your vault \u00b7 ' : '\uD83D\uDC65 shared demo channel \u00b7 ')
-        + (j.memoryScope || '') + ' \u00b7 mode: ' + (j.mode || MODE);
-    }
+    if (scope) scope.textContent = (j.identity === 'wallet-owner' ? 'your vault \u00B7 ' : 'shared demo channel \u00B7 ') + (j.memoryScope || '') + ' \u00B7 mode: ' + (j.mode || MODE);
     var stop = $('stopbanner'), stopWrap = $('stopwrap');
     if (stop) {
-      if (/^STOP\b/.test(j.reply || '')) {
-        stop.textContent = j.reply;
-        if (stopWrap) stopWrap.style.display = ''; stop.style.display = '';
-      } else {
-        stop.textContent = ''; stop.style.display = 'none';
-        if (stopWrap) stopWrap.style.display = 'none';
-      }
+      var safety = /^(STOP|CAUTION)\b/.test(j.reply || '');
+      if (safety) { stop.textContent = j.reply; if (stopWrap) stopWrap.style.display = ''; stop.style.display = ''; }
+      else { stop.textContent = ''; stop.style.display = 'none'; if (stopWrap) stopWrap.style.display = 'none'; }
     }
   }
 
-  var chat = document.querySelector('deep-chat');
-  function initChat() {
-    if (!chat) return;
-    chat.avatars = { ai: { src: AVATAR_AI }, user: { src: AVATAR_USER }, stop: { src: AVATAR_STOP } };
-    chat.names = { ai: { text: 'DoseDaughter' }, user: { text: 'You' }, stop: { text: 'DoseDaughter \u26a0' } };
-    chat.introMessage = { text: 'Hi \u2014 I\u2019m DoseDaughter. Teach me about the person you care for (meds, allergies, routines). I\u2019ll remember across sessions on Walrus' + (MODE === 'mainnet' ? ' Mainnet' : '') + ' \u2014 and show you every receipt.' };
-    chat.browserStorage = false;
-    chat.requestBodyLimits = { maxMessages: 1 };
-    chat.displayLoadingBubble = true;
-    chat.errorMessages = { displayServiceErrorMessages: true, overrides: { default: 'Something went wrong \u2014 please try again.' } };
-    chat.textInput = { placeholder: { text: 'Say something\u2026 (e.g. \u201cMom takes Metformin 500mg at 8pm\u201d)' }, styles: { container: { borderRadius: '10px', border: '1.5px solid #dbe7e6' } } };
-    chat.submitButtonStyles = { submit: { container: { backgroundColor: '#0f5d5a', borderRadius: '10px' } } };
-    chat.messageStyles = {
-      default: {
-        ai: { bubble: { backgroundColor: '#ffffff', border: '1px solid #dbe7e6', color: '#1c2b2a' } },
-        user: { bubble: { backgroundColor: '#0f5d5a', color: '#ffffff' } },
-        stop: { bubble: { backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontWeight: '700' } }
-      }
-    };
-    chat.connect = {
-      handler: function (body, signals) {
-        var msgs = (body && body.messages) || [];
-        var last = msgs[msgs.length - 1] || {};
-        var message = last.text || '';
-        if (!message) { signals.onResponse({ error: 'Empty message' }); return; }
-        fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUser(), message: message }) })
-          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
-          .then(function (res) {
-            if (!res.ok || res.j.error) { signals.onResponse({ error: (res.j && res.j.error) || 'Request failed' }); return; }
-            renderReceipts(res.j);
-            var isStop = /^STOP\b/.test(res.j.reply || '');
-            signals.onResponse({ text: res.j.reply, role: isStop ? 'stop' : 'ai' });
-          })
-          .catch(function (e) { signals.onResponse({ error: String((e && e.message) || e) }); });
-      }
-    };
+  function send(message) {
+    message = (message || '').trim();
+    if (!message) return;
+    addRow('user', message);
+    setTyping(true);
+    var sendBtn = $('send'); if (sendBtn) sendBtn.disabled = true;
+    fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUser(), message: message }) })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        setTyping(false); if (sendBtn) sendBtn.disabled = false;
+        if (!res.ok || res.j.error) { addRow('stop', 'Couldn\u2019t reach memory \u2014 ' + ((res.j && res.j.error) || 'unknown error')); return; }
+        var j = res.j;
+        var isStop = /^STOP\b/.test(j.reply || '');
+        var isWarn = /^CAUTION\b/.test(j.reply || '');
+        addRow(isStop ? 'stop' : isWarn ? 'warn' : 'ai', j.reply, { memories: j.recalledMeta || j.recalled });
+        renderRail(j);
+      })
+      .catch(function (e) { setTyping(false); if (sendBtn) sendBtn.disabled = false; addRow('stop', 'Network error \u2014 ' + String((e && e.message) || e)); });
   }
 
-  function wireQuick() {
-    Array.prototype.forEach.call(document.querySelectorAll('.quick button[data-msg]'), function (b) {
-      b.addEventListener('click', function () {
-        if (chat && chat.submitUserMessage) chat.submitUserMessage({ text: b.getAttribute('data-msg') });
-      });
+  function initChat() {
+    if (!root) return;
+    thread = $('thread'); typing = $('typing');
+    var modeEl = $('chatmode'); if (modeEl) modeEl.textContent = MODE === 'mainnet' ? 'Walrus Mainnet' : 'local demo';
+    addRow('ai', 'Hi \u2014 I\u2019m DoseDaughter. Teach me about the person you care for (meds, allergies, routines). I\u2019ll remember across sessions on Walrus' + (MODE === 'mainnet' ? ' Mainnet' : '') + ' and show you every receipt.');
+    var composer = $('composer'), text = $('text');
+    if (composer && text) {
+      composer.addEventListener('submit', function (e) { e.preventDefault(); var v = text.value; text.value = ''; autoGrow(text); send(v); });
+      text.addEventListener('input', function () { autoGrow(text); });
+      text.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); composer.requestSubmit ? composer.requestSubmit() : composer.dispatchEvent(new Event('submit', { cancelable: true })); } });
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('.chip[data-msg]'), function (b) {
+      b.addEventListener('click', function () { send(b.getAttribute('data-msg')); });
     });
     var memlink = $('memlink'), who = $('who');
-    if (memlink && who) {
-      var sync = function () { memlink.href = '/memory?user=' + encodeURIComponent((who.value.trim() || DEFAULT_USER)); };
-      who.addEventListener('change', sync); sync();
-    }
+    if (memlink && who) { var sync = function () { memlink.href = '/memory?user=' + encodeURIComponent(who.value.trim() || DEFAULT_USER); }; who.addEventListener('change', sync); sync(); }
   }
+  function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 140) + 'px'; }
 
-  /* ---- wallet identity (nonce-based sign-in) ---- */
+  /* ---------------- wallet identity (nonce sign-in) ---------------- */
   function wireWallet() {
     var who2 = $('who2'), btn = $('connect'), vault = $('vaultlink'), ob = $('obsteps'), signnote = $('signnote'), whoInput = $('who');
     if (!btn) return;
     var account = null;
-
-    function stepList(names) { ob.className = 'obsteps on'; ob.innerHTML = ''; names.forEach(function (n) { var d = document.createElement('div'); d.className = 'step'; d.textContent = n; ob.appendChild(d); }); }
+    function stepList(names) { ob.className = 'obsteps on'; ob.innerHTML = ''; names.forEach(function (n) { ob.appendChild(el('div', 'step', n)); }); }
     function stepMark(i, cls, text) { var d = ob.children[i]; if (!d) return; d.className = 'step ' + cls; if (text) d.textContent = text; }
     function stepErr(i, e) { stepMark(i, 'err', 'Failed: ' + ((e && e.error) ? e.error : (e && e.message) ? e.message : String(e))); }
     function setSignedOut() { who2.textContent = 'Not signed in \u2014 using the shared demo channel'; btn.textContent = 'Connect Sui Wallet'; btn.style.display = ''; vault.style.display = 'none'; }
     function setSignedIn(st) {
-      who2.innerHTML = '';
-      who2.appendChild(document.createTextNode('Signed in as '));
-      var b = document.createElement('b'); b.textContent = short(st.address); who2.appendChild(b);
+      who2.innerHTML = ''; who2.appendChild(document.createTextNode('Signed in as '));
+      var b = el('b', null, short(st.address)); who2.appendChild(b);
       if (st.onboarded) {
-        btn.style.display = 'none'; signnote.style.display = 'none';
-        vault.href = 'https://suiscan.xyz/mainnet/account/' + st.accountId;
-        vault.textContent = 'vault ' + short(st.accountId) + ' \u2197'; vault.style.display = '';
-        whoInput.disabled = true; whoInput.value = 'my vault (wallet)';
+        btn.style.display = 'none'; if (signnote) signnote.style.display = 'none';
+        vault.href = 'https://suiscan.xyz/mainnet/account/' + st.accountId; vault.textContent = 'vault ' + short(st.accountId) + ' \u2197'; vault.style.display = '';
+        if (whoInput) { whoInput.disabled = true; whoInput.value = 'my vault (wallet)'; }
       } else { btn.style.display = ''; btn.textContent = st.needsRelink ? 'Re-link my vault' : 'Create my memory vault'; }
     }
     function getWallets() { try { return (window.getWallets ? window.getWallets() : []) || []; } catch (e) { return []; } }
-    function pickWallet() {
-      var ws = getWallets();
-      for (var i = 0; i < ws.length; i++) { var f = ws[i].features || {}; if (f['standard:connect'] && (f['sui:signPersonalMessage'] || f['sui:signTransactionBlock'] || f['standard:signTransaction'])) return ws[i]; }
-      return ws[0] || null;
-    }
-    async function ensureConnected(w) { if (account) return account; var conn = await w.features['standard:connect'].connect(); account = (conn.accounts || [])[0] || null; if (!account) throw { message: 'wallet returned no account' }; return account; }
-    async function signTx(w, acct, bytes) {
-      var f = w.features || {};
-      if (f['standard:signTransaction']) { var r1 = await f['standard:signTransaction'].signTransaction({ transaction: { bytes: bytes, chain: 'sui:mainnet' }, account: acct, chain: 'sui:mainnet' }); return r1.signature; }
-      if (f['sui:signTransactionBlock']) { var r2 = await f['sui:signTransactionBlock'].signTransactionBlock({ transactionBlockBytes: bytes, account: acct, chain: 'sui:mainnet' }); return r2.signature; }
-      throw { message: 'wallet cannot sign transactions' };
-    }
+    function pickWallet() { var ws = getWallets(); for (var i = 0; i < ws.length; i++) { var f = ws[i].features || {}; if (f['standard:connect'] && (f['sui:signPersonalMessage'] || f['sui:signTransactionBlock'] || f['standard:signTransaction'])) return ws[i]; } return ws[0] || null; }
+    async function ensureConnected(w) { if (account) return account; var c = await w.features['standard:connect'].connect(); account = (c.accounts || [])[0] || null; if (!account) throw { message: 'wallet returned no account' }; return account; }
+    async function signTx(w, acct, bytes) { var f = w.features || {}; if (f['standard:signTransaction']) { var r1 = await f['standard:signTransaction'].signTransaction({ transaction: { bytes: bytes, chain: 'sui:mainnet' }, account: acct, chain: 'sui:mainnet' }); return r1.signature; } if (f['sui:signTransactionBlock']) { var r2 = await f['sui:signTransactionBlock'].signTransactionBlock({ transactionBlockBytes: bytes, account: acct, chain: 'sui:mainnet' }); return r2.signature; } throw { message: 'wallet cannot sign transactions' }; }
     async function signMsg(w, acct, msgBytes) { var f = w.features || {}; if (f['sui:signPersonalMessage']) { var r = await f['sui:signPersonalMessage'].signPersonalMessage({ message: msgBytes, account: acct }); return r.signature; } throw { message: 'wallet cannot sign personal messages' }; }
 
     btn.addEventListener('click', async function () {
@@ -183,39 +174,61 @@
         await runOnboarding(w, acct, !status.needsRelink);
       } catch (e) { alert('Wallet error: ' + ((e && e.message) ? e.message : String(e))); }
     });
-
     async function runOnboarding(w, acct, needsCreate) {
       var names = needsCreate ? ['Create your vault (sign in wallet \u2014 you pay gas)', 'Link DoseDaughter (second signature)', 'Done \u2014 your memories, your account'] : ['Link DoseDaughter (sign in wallet)', 'Done \u2014 your memories, your account'];
       stepList(names);
+      var i = 0;
       try {
-        var i = 0;
         if (needsCreate) {
           stepMark(0, 'active', 'Preparing transaction\u2026');
-          var p = await post('/api/wallet/onboard/create');
-          if (p.error) throw p;
+          var p = await post('/api/wallet/onboard/create'); if (p.error) throw p;
           stepMark(0, 'active', 'Waiting for your signature\u2026');
           var s1 = await signTx(w, acct, b64ToBytes(p.txBytesBase64));
-          var c1 = await post('/api/wallet/onboard/complete', { signature: s1 });
-          if (c1.error) throw c1;
+          var c1 = await post('/api/wallet/onboard/complete', { signature: s1 }); if (c1.error) throw c1;
           stepMark(0, 'done', 'Vault created \u2713 ' + short(c1.accountId)); i = 1;
         }
         stepMark(i, 'active', 'Preparing link transaction\u2026');
-        var pl = await post('/api/wallet/onboard/link');
-        if (pl.error) throw pl;
+        var pl = await post('/api/wallet/onboard/link'); if (pl.error) throw pl;
         stepMark(i, 'active', 'Waiting for your signature\u2026');
         var s2 = await signTx(w, acct, b64ToBytes(pl.txBytesBase64));
-        var c2 = await post('/api/wallet/onboard/complete', { signature: s2 });
-        if (c2.error) throw c2;
+        var c2 = await post('/api/wallet/onboard/complete', { signature: s2 }); if (c2.error) throw c2;
         stepMark(i, 'done', 'DoseDaughter linked \u2713');
         stepMark(i + 1, 'done', 'Your memories now live in your own on-chain vault');
         var st = await fetch('/api/wallet/status').then(function (r) { return r.json(); });
-        setTimeout(function () { setSignedIn(st); ob.className = 'obsteps'; }, 2500);
-      } catch (e) { stepErr(typeof i === 'number' ? i : 0, e); }
+        setTimeout(function () { setSignedIn(st); ob.className = 'obsteps'; }, 2200);
+      } catch (e) { stepErr(i, e); }
     }
-
     fetch('/api/wallet/status').then(function (r) { return r.json(); }).then(function (j) { if (j && j.signedIn) setSignedIn(j); else setSignedOut(); }).catch(setSignedOut);
   }
 
-  function init() { initChat(); wireQuick(); wireWallet(); }
+  function wireExtras() {
+    var pb = $('printbtn'); if (pb) pb.addEventListener('click', function () { window.print(); });
+    var play = $('rpPlay'); if (!play) return;
+    var facts = document.querySelectorAll('#rpFacts li');
+    var day = $('rpDay'), prog = $('rpProgress'), stop = $('rpStop'), cap = $('rpCaption');
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var days = [1, 7, 14, 30, 45, 60, 75, 87, 90];
+    var playing = false;
+    play.addEventListener('click', function () {
+      if (playing) return; playing = true;
+      Array.prototype.forEach.call(facts, function (li) { li.classList.remove('show'); });
+      if (stop) stop.hidden = true; if (prog) prog.style.width = '0%'; if (day) day.textContent = 'Day 1';
+      if (reduce) {
+        Array.prototype.forEach.call(facts, function (li) { li.classList.add('show'); });
+        if (prog) prog.style.width = '100%'; if (day) day.textContent = 'Day 90';
+        if (stop) stop.hidden = false; if (cap) cap.textContent = 'Memory complete.'; playing = false; return;
+      }
+      var i = 0, n = facts.length;
+      (function step() {
+        if (i >= n) { if (stop) stop.hidden = false; if (day) day.textContent = 'Day 90'; if (cap) cap.textContent = '\u2026and the day it stops a dangerous dose.'; playing = false; return; }
+        facts[i].classList.add('show');
+        if (prog) prog.style.width = Math.round(((i + 1) / n) * 100) + '%';
+        if (day) day.textContent = 'Day ' + days[Math.min(i, days.length - 1)];
+        i++; setTimeout(step, 420);
+      })();
+    });
+  }
+
+  function init() { initChat(); wireWallet(); wireExtras(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

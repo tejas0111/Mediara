@@ -16,7 +16,9 @@ DoseDaughter stores every fact the family teaches it as an **encrypted blob on W
 
 - **Teach once, remember forever.** *"Mom takes Metformin 500mg at 8pm after food"* → stored as a Walrus blob, recalled in every future session.
 - **Allergy STOP guard.** Ask *"Can she take ibuprofen for her headache?"* and a coded, rule-based guard runs **before the LLM** — blocking by drug class (Advil, Aleve and Excedrin all match an ibuprofen allergy), ignoring negated facts, and citing the exact blob that recorded it. It works with no LLM key, so safety doesn't hinge on the model behaving — though it does depend on recall returning the allergy fact (a dedicated allergy recall keeps it in context).
-- **Doctor-visit summary from recall only.** `GET /api/summary` compiles medications, allergies, routine, and care contacts — no hallucination, every line traceable to a blob.
+- **Drug–drug interaction guard.** The same coded guard blocks curated interactions — warfarin + ibuprofen, nitrate + sildenafil, statin + clarithromycin, SSRI + NSAID — matched by drug class, with no LLM key.
+- **Doctor-visit summary from recall only.** `GET /api/summary` (and the printable `/print` card) compiles medications, allergies, routine, and care contacts — no hallucination, every line traceable to a blob.
+- **Day 1 → Day 90 replay.** `/replay` animates a caregiver's memory accumulating — and the day the guard stops a dangerous dose.
 - **Public receipts.** A `/memory` page shows every stored fact with a live [walruscan.com](https://walruscan.com) link. Nothing to hide, everything to verify.
 
 **All memory lives on Walrus Mainnet** — 13 memory facts for the demo persona (12 seeded + 1 taught live), all live on Mainnet; the [blob ledger](evidence/blob-ledger.md) records every blob ID (15 unique, including probes). No Postgres, no vector DB, no server-side memory store.
@@ -28,7 +30,7 @@ git clone https://github.com/tejas0111/dosedaughter.git
 cd dosedaughter/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 69 core + 56 wallet offline tests, no network
+npm test                    # 78 core + 56 wallet offline tests, no network
 npm run dev                 # server on :3001
 ```
 
@@ -53,6 +55,12 @@ open 'localhost:3001/memory?user=demo-mom'
 
 # Live before/after demo: empty memory (day 1) vs taught memory (day 7)
 open 'localhost:3001/demo?persona=day7'
+
+# Printable emergency card + doctor-visit summary
+open 'localhost:3001/print?user=demo-mom'
+
+# Day 1 -> Day 90 animated replay
+open 'localhost:3001/replay?user=demo-mom'
 ```
 
 Without an LLM key the bot still works (echo replies that prove the memory flow). Add `OPENROUTER_API_KEY` to `.env` for real Gemini-powered replies. See `app/README.md` for the full endpoint table, Telegram setup, and troubleshooting.
@@ -82,7 +90,7 @@ Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.
 ## Repository layout
 
 ```
-app/                  Express server, Telegram bot, MemWal wrapper, seeder, 69 core + 56 wallet self-tests
+app/                  Express server, Telegram bot, MemWal wrapper, seeder, 78 core + 56 wallet self-tests
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -97,7 +105,7 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 125/125 offline self-tests pass (69 core + 56 wallet/crypto) | `npm test` — runs both suites; run it yourself |
+| 134/134 offline self-tests pass (78 core + 56 wallet/crypto) | `npm test` — runs both suites; run it yourself |
 
 Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc9879f605324bdbbb783`
 
@@ -113,9 +121,9 @@ Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df
 
 **Deployment caveat:** per-user wallet memory stores delegate keys in a local JSON registry (`app/src/userRegistry.js`). Vercel's serverless disk is ephemeral, so a redeploy loses those keys and users must relink their wallet; the memory blobs themselves remain on Mainnet.
 
-## Credits
+## UI
 
-The chat interface uses **[Deep Chat](https://github.com/OvidijusParsiunas/deep-chat)** by Ovidijus Parsiunas (MIT), vendored locally at `app/public/deep-chat.bundle.js` (no CDN at runtime; its default Google Fonts request is redirected to a same-origin empty stylesheet for privacy). Full license and attribution: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+The chat interface is **hand-written** (HTML/CSS/JS, no framework, no build step) and served from `app/public/` — no UI library is vendored, and the Content-Security-Policy allows scripts only from `'self'`. Third-party runtime dependencies are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Medical disclaimer
 
