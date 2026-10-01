@@ -53,20 +53,20 @@ function clientFor(chatId) {
 async function callLLM(system, userMessage) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   const model = process.env.LLM_MODEL || 'google/gemini-2.5-flash';
-  if (!apiKey) return `[no LLM key] system would inject ${system.length} chars of memory. You said: ${userMessage}`;
-  const models = [model, 'inclusionai/ling-3.0-flash-vl:free', 'liquid/lfm-2.5-2.6b:free', 'nex-agi/nex-n2.5-mini:free'].filter((m, i, a) => a.indexOf(m) === i);
+  if (!apiKey) return '__NO_LLM__';
+  const models = [model, 'google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'liquid/lfm-2.5-2.6b:free', 'openrouter/free'].filter((m, i, a) => a.indexOf(m) === i);
   for (const m of models) {
     try {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: m, max_tokens: 400, messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }] }),
+        body: JSON.stringify({ model: m, max_tokens: 300, messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }] }),
       });
       const data = await res.json();
       if (data.choices?.[0]?.message?.content) return data.choices[0].message.content;
     } catch { /* try next model */ }
   }
-  return `[LLM unavailable — memory still works] You said: ${userMessage}`;
+  return '__NO_LLM__';
 }
 
 const START_TEXT =
@@ -154,6 +154,11 @@ bot.on('message', async (msg) => {
       reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. ${DISCLAIMER}`;
     } else {
       reply = await callLLM(buildSystemPrompt(recalled), text);
+      if (reply === '__NO_LLM__') {
+        reply = recalled.length
+          ? `Here's what I remember:\n- ${recalled.slice(0, 4).map((r) => String(r.text).replace(/^User\s+\S+:\s*/i, '')).join('\n- ')}`
+          : 'I have no memories for this chat yet — send your 3 facts.';
+      }
     }
     let savedNote = '';
     // Never persist a message a guard just blocked.

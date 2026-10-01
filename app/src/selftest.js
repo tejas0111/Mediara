@@ -1,6 +1,6 @@
 // Offline self-test: pure functions only, NO MemWal network calls (per user order).
 // Run: node src/selftest.js (needs node >=20)
-import { namespaceFor, truncateFact, buildSystemPrompt, shouldRemember, findConflict, findInteraction, recallRelevant, rememberBulkAndWait, classifyFacts, isTeachingStatement, MAX_DISTANCE } from './memory.js';
+import { namespaceFor, truncateFact, buildSystemPrompt, shouldRemember, findConflict, findInteraction, recallRelevant, safeRecall, withTimeout, mentionsDrug, rememberBulkAndWait, classifyFacts, isTeachingStatement, MAX_DISTANCE } from './memory.js';
 import { overlap, createLocalClient } from './localClient.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -323,6 +323,19 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok((g.stopped || []).some((t) => /stopped taking/.test(t)), 'classify: discontinuation in the stopped bucket');
   ok(g.allergies.length === 0, 'classify: a stopped med is NOT an allergy');
   ok(g.medications.some((t) => /levothyroxine 50mcg/.test(t)), 'classify: mcg drug is a medication, not routine');
+}
+
+// --- Resilience (cycle 3): timeouts, degraded recall, fail-closed trigger ---
+{
+  const throwing = { recall: async () => { throw new Error('503 relayer unavailable'); } };
+  const sr = await safeRecall(throwing, { query: 'x', limit: 1 });
+  ok(sr.degraded === true && sr.results.length === 0, 'resilience: safeRecall reports degraded on failure');
+  ok(mentionsDrug('Can she take ibuprofen?') === true, 'resilience: mentionsDrug true for a drug question');
+  ok(mentionsDrug('what is the weather?') === false, 'resilience: mentionsDrug false for chit-chat');
+  const t0 = Date.now();
+  let timedOut = false;
+  try { await withTimeout(new Promise(() => {}), 50, 'test'); } catch { timedOut = true; }
+  ok(timedOut && Date.now() - t0 < 2000, 'resilience: withTimeout rejects a hung promise');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

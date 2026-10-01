@@ -32,6 +32,7 @@ async function gql(query, variables) {
   const r = await fetch(GRAPHQL_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    signal: AbortSignal.timeout(10_000),
     body: JSON.stringify({ query, variables }),
   });
   if (!r.ok) throw new Error(`graphql ${r.status}`);

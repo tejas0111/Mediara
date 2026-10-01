@@ -79,7 +79,7 @@ export function chatPage({ mode }) {
 }
 
 // ---------- memory receipts ----------
-export function memoryPage({ user, mode, rows, agentShort }) {
+export function memoryPage({ user, mode, rows, agentShort, stale }) {
   const items = rows.length
     ? rows.map((r) => {
         const bid = r.blob_id
@@ -97,6 +97,7 @@ export function memoryPage({ user, mode, rows, agentShort }) {
 <main class="wrap" id="main">
   <h1 class="pg">What DoseDaughter remembers \u2014 <span class="mono">${esc(user)}</span></h1>
   <p class="sub">${rows.length} fact${rows.length === 1 ? '' : 's'} &middot; recalled live from memory &middot; <a href="/">back to chat</a></p>
+  ${stale ? '<div class="notice local"><b>Memory temporarily unreachable</b> \u2014 this list may be incomplete. Retry shortly.</div>' : ''}
   ${notice}
   <ul class="receipts">${items}</ul>
   ${FOOT(mode)}
@@ -136,7 +137,7 @@ const section = (title, rows, mode) => `
     : '<p class="muted"><i>None recorded</i></p>'}</section>`;
 
 // ---------- printable emergency card + doctor summary ----------
-export function printPage({ user, mode, facts, groups, agentShort }) {
+export function printPage({ user, mode, facts, groups, agentShort, stale }) {
   // Use the classifier's buckets (negation-aware) so "no known allergy" /
   // "not allergic to X" never print under Allergies on the emergency card.
   const allergyRows = groups.allergies || [];
@@ -149,6 +150,7 @@ export function printPage({ user, mode, facts, groups, agentShort }) {
     <a class="btn ghost" href="/">Back to chat</a>
     <a class="btn ghost" href="/memory?user=${encodeURIComponent(user)}">Memory receipts</a>
   </div>
+  ${stale ? '<div class="notice local"><b>Memory temporarily unreachable</b> \u2014 this card may be incomplete. Do not rely on it for medication decisions until it reloads.</div>' : ''}
   <div class="sheet">
     <div class="ecard">
       <div class="ecard-head"><span class="logo">&#129461;</span><div><b>Emergency card</b><div class="muted">DoseDaughter \u00b7 <span class="mono">${esc(user)}</span></div></div></div>
@@ -174,12 +176,13 @@ export function printPage({ user, mode, facts, groups, agentShort }) {
 }
 
 // ---------- Day 1 -> Day 90 replay ----------
-export function replayPage({ user, mode, facts }) {
+export function replayPage({ user, mode, facts, stale }) {
   const items = facts.map((f, i) => `<li data-i="${i}"><span class="rpf">${esc(String(f.text).replace(/^User\s+\S+:\s*/i, ''))}</span>${blobTag(f.blob_id, mode)}</li>`).join('');
   return TOP('DoseDaughter \u2014 90-day replay', mode) + `
 <main class="wrap" id="main">
   <h1 class="pg">Day 1 \u2192 Day 90</h1>
   <p class="sub">Watch a caregiver's memory accumulate \u2014 and the day it stops a dangerous dose. Facts are recalled live from <span class="mono">${esc(user)}</span>.</p>
+  ${stale ? '<div class="notice local"><b>Memory temporarily unreachable</b> \u2014 this replay may be incomplete.</div>' : ''}
   <div class="replay card">
     <div class="replay-top">
       <div class="replay-day" id="rpDay">Day 1</div>

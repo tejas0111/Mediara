@@ -12,7 +12,7 @@ import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallAll, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
@@ -110,17 +110,20 @@ async function callLLM(system, userMessage, history = []) {
   // fallback chain on 402/429 so the demo NEVER dies mid-judge-test. Errors stay graceful.
   const apiKey = process.env.OPENROUTER_API_KEY;
   const model = process.env.LLM_MODEL || 'google/gemini-2.5-flash';
-  if (!apiKey) return `[no LLM key] system would inject ${system.length} chars of memory. You said: ${userMessage}`;
-  const models = [model, 'inclusionai/ling-3.0-flash-vl:free', 'liquid/lfm-2.5-2.6b:free', 'nex-agi/nex-n2.5-mini:free'].filter((m, i, a) => a.indexOf(m) === i);
+  if (!apiKey) return '__NO_LLM__';
+  // Free-model fallback chain (verified against the OpenRouter free list; all
+  // non-OpenAI/Anthropic, so Beyond-Big-Two eligible). Pruned when models die.
+  const models = [model, 'google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'liquid/lfm-2.5-2.6b:free', 'openrouter/free'].filter((m, i, a) => a.indexOf(m) === i);
   let lastErr = '';
   for (const m of models) {
     try {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(15_000),
         body: JSON.stringify({
           model: m,
-          max_tokens: 400,
+          max_tokens: 300,
           messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: userMessage }],
         }),
       });
@@ -131,7 +134,14 @@ async function callLLM(system, userMessage, history = []) {
       console.error(`LLM ${m} failed: ${lastErr.slice(0, 120)}`);
     } catch (e) { lastErr = String(e.message || e); }
   }
-  return `[LLM unavailable — memory still works] recalled ${system.length} chars of context. You said: ${userMessage}`;
+  return '__NO_LLM__'; // route falls back to a memory-grounded answer
+}
+
+// Deterministic, keyless, LLM-free answer built from recalled facts — used when
+// there is no key or every model failed, so the demo ALWAYS shows memory working.
+function memoryAnswer(recalled) {
+  if (!recalled || !recalled.length) return `I don't have any memories for this user yet. Teach me 3 facts: daily meds with times, allergies, and routine.`;
+  return `Here's what I remember about this person:\n- ${recalled.slice(0, 4).map((r) => String(r.text).replace(/^User\s+\S+:\s*/i, '')).join('\n- ')}\n\nConfirm with your doctor — this is not medical advice.`;
 }
 
 app.post('/api/chat', chatLimiter, async (req, res) => {
@@ -166,7 +176,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const nsKey = identity.ns;
     const history = historyFor(nsKey);
 
-    const recalled = await recallRelevant(client, message, 5);
+    const rr = await recallRelevantMeta(client, message, 5);
+    const recalled = rr.facts;
+    // FAIL CLOSED: if memory is unreachable we cannot verify allergies or
+    // interactions, so refuse medication questions rather than answer unguarded.
+    if (rr.degraded && mentionsDrug(message)) {
+      return res.status(503).json({ error: 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.', retryable: true });
+    }
     // Coded safety nets FIRST, before any LLM output:
     //   1) allergy conflict (hard block)  2) curated drug–drug interaction.
     const conflict = findConflict(message, recalled);
@@ -177,27 +193,28 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     } else if (interaction) {
       const lead = interaction.severity === 'high' ? 'STOP' : 'CAUTION';
       reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. Confirm with your doctor — this is not medical advice.`;
-    } else if (!process.env.OPENROUTER_API_KEY) {
-      // Keyless: answer FROM MEMORY deterministically — never a debug stub.
-      reply = recalled.length
-        ? `Here's what I remember about this person:\n- ${recalled.slice(0, 4).map((r) => String(r.text).replace(/^User\s+\S+:\s*/i, '')).join('\n- ')}\n\n(Add OPENROUTER_API_KEY for a conversational reply.) Confirm with your doctor — this is not medical advice.`
-        : `I don't have any memories for this user yet. Teach me 3 facts: daily meds with times, allergies, and routine.`;
     } else {
       const system = buildSystemPrompt(recalled);
       reply = await callLLM(system, message, history);
+      // No key, or every model failed (dead free model, out of credits, stall):
+      // answer FROM MEMORY instead of leaking a debug stub.
+      if (reply === '__NO_LLM__' || reply.startsWith('[LLM unavailable') || reply.startsWith('[no LLM key')) {
+        reply = memoryAnswer(recalled);
+      }
     }
     rememberTurn(nsKey, 'user', message);
     rememberTurn(nsKey, 'assistant', reply);
     // Auto-save AFTER generation only, and NEVER when a safety guard fired: a
     // blocked administration order must not be persisted as a durable fact.
-    let saved = null;
+    let saved = null, memoryPersisted = null;
     if (!conflict && !interaction && shouldRemember(message)) {
+      memoryPersisted = false;
       try {
         // Dedup: skip a write that is near-identical to an existing fact.
         const near = await recallRelevant(client, message, 1);
-        if (near.length && (near[0].distance ?? 1) < 0.15) saved = { blob_id: near[0].blob_id, deduped: true };
-        else saved = await rememberAndWait(client, `${label}: ${message}`);
-      } catch { /* best-effort: a failed write is not fatal to the reply */ }
+        if (near.length && (near[0].distance ?? 1) < 0.15) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
+        else { saved = await rememberAndWait(client, `${label}: ${message}`); memoryPersisted = !!saved?.blob_id; }
+      } catch { memoryPersisted = false; /* surfaced to the client below */ }
     }
     res.json({
       reply,
@@ -206,6 +223,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       memoryScope: identity.ns,
       identity: identity.kind,
       savedBlob: saved?.blob_id || null,
+      memoryPersisted,
       mode: MODE,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     });
@@ -227,6 +245,7 @@ app.get('/api/summary', readLimiter, async (req, res) => {
       generatedAt: new Date().toISOString(),
       ...classifyFacts(facts),
       blobCount: facts.length,
+      stale: view.degraded,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     };
     res.json(summary);
@@ -242,6 +261,7 @@ app.get('/memory', readLimiter, async (req, res) => {
     res.send(memoryPage({
       user: isVault ? `${String(address).slice(0, 10)}… (your vault)` : userId,
       mode,
+      stale: view.degraded,
       rows: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })),
       agentShort: isVault ? null : String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10),
     }));
@@ -299,8 +319,8 @@ async function namespaceView(req, res) {
   if (sess && !mine) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
   const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
-  const recalled = await recallAll(client, ALL_QUERIES, 25);
-  return { userId, mode, recalled, isVault: !!mine, address: sess?.address || null };
+  const ra = await recallAllMeta(client, ALL_QUERIES, 25);
+  return { userId, mode, recalled: ra.facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };
 }
 
 // Printable emergency card + doctor-visit summary (recall only).
@@ -315,7 +335,7 @@ app.get('/print', readLimiter, async (req, res) => {
     const g = classifyFacts(facts.map((r) => r.text));
     const groups = {};
     for (const k of Object.keys(g)) groups[k] = g[k].map((t) => byText.get(t) || { text: t });
-    res.send(printPage({ user: userId, mode, facts, groups, agentShort: mode === 'mainnet' ? String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10) : null }));
+    res.send(printPage({ user: userId, mode, facts, groups, stale: view.degraded, agentShort: mode === 'mainnet' ? String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10) : null }));
   } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
 
@@ -326,7 +346,7 @@ app.get('/replay', readLimiter, async (req, res) => {
     const view = await namespaceView(req, res);
     if (!view) return;
     const { userId, mode, recalled } = view;
-    res.send(replayPage({ user: userId, mode, facts: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })) }));
+    res.send(replayPage({ user: userId, mode, stale: view.degraded, facts: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })) }));
   } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
 
@@ -420,6 +440,13 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 const port = process.env.PORT || 3001;
 app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, time: new Date().toISOString() }));
 if (process.env.VERCEL !== '1' && import.meta.url === `file://${process.argv[1]}`) {
-  app.listen(port, () => console.log(`DoseDaughter on :${port}`));
+  const server = app.listen(port, () => console.log(`DoseDaughter on :${port}`));
+  // A listen failure (EADDRINUSE) must not crash as an unhandled 'error' event.
+  server.on('error', (e) => { console.error('listen error:', String((e && e.message) || e)); process.exit(1); });
+  server.setTimeout(30_000); // bound slow-loris / hung sockets
 }
+// Last-resort visibility: never let a stray rejection/throw take the process
+// down silently in a demo.
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', String((e && e.message) || e).slice(0, 200)));
+process.on('uncaughtException', (e) => console.error('uncaughtException:', String((e && e.message) || e).slice(0, 200)));
 export default app;

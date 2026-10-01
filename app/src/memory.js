@@ -392,23 +392,39 @@ export async function rememberBulkAndWait(client, texts) {
 // (just-seeded namespaces, congestion). Retry once, then degrade to empty — the bot
 // must NEVER 500 on a flaky relayer moment (judges hit the demo at arbitrary times).
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export async function safeRecall(client, params, tries = 3) {
+
+// Race a promise against a hard timeout: a stalled upstream must never hang a
+// request forever (there were previously NO timeouts on any outbound call).
+export function withTimeout(promise, ms, label = 'op') {
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms); });
+  return Promise.race([Promise.resolve(promise).finally(() => clearTimeout(t)), timeout]);
+}
+
+// True when a message names a drug or drug class — used to FAIL CLOSED on
+// medication questions when memory is unreachable.
+export function mentionsDrug(text) {
+  return substancesIn(text).size > 0 || namedClasses(text).size > 0;
+}
+
+export async function safeRecall(client, params, tries = 2, timeoutMs = 10_000) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
     try {
-      return await client.recall(params);
+      const r = await withTimeout(client.recall(params), timeoutMs, 'recall');
+      return { results: (r && r.results) || [], degraded: false };
     } catch (e) {
       lastErr = e;
       const msg = String(e?.message || e);
       if (/abort|timeout|503|504|429|unavailable|ECONN/i.test(msg) && i < tries - 1) {
-        await sleep(3000 * (i + 1));
+        await sleep(500 * (i + 1) + Math.floor(Math.random() * 250));
         continue;
       }
       break;
     }
   }
   console.error(`recall failed after ${tries} tries:`, String(lastErr?.message || lastErr).slice(0, 120));
-  return { results: [] };
+  return { results: [], degraded: true };
 }
 
 // Allergy facts are a hard safety requirement: the normal message query may not
@@ -418,18 +434,19 @@ export async function safeRecall(client, params, tries = 3) {
 // force-kept inside the final cap so the STOP path can fire.
 const ALLERGY_QUERY = 'allergies drug reactions avoid intolerance';
 
-export async function recallRelevant(client, query, limit = 5) {
+export async function recallRelevantMeta(client, query, limit = 5) {
   let n = Number(limit);
   if (!Number.isFinite(n)) n = 5;
   n = Math.max(0, Math.floor(n));
-  if (n === 0) return [];
+  if (n === 0) return { facts: [], degraded: false };
 
-  const { results } = await safeRecall(client, { query, limit: n });
-  let safety = [];
+  const main = await safeRecall(client, { query, limit: n });
+  let safety = { results: [], degraded: false };
   try {
-    const { results: sr } = await safeRecall(client, { query: ALLERGY_QUERY, limit: Math.max(n, 10) });
-    safety = sr || [];
-  } catch { safety = []; }
+    safety = await safeRecall(client, { query: ALLERGY_QUERY, limit: Math.max(n, 10) });
+  } catch { /* keep empty */ }
+  const results = main.results;
+  const safetyResults = safety.results;
 
   // Merge by normalized text, dedup keeping the best (lowest) distance.
   const byText = new Map();
@@ -443,10 +460,11 @@ export async function recallRelevant(client, query, limit = 5) {
     if (!prev || dist < (prev.distance ?? 1)) byText.set(key, { ...r, distance: dist });
   };
   for (const r of results || []) consider(r, false);
-  for (const r of safety || []) consider(r, true);
+  for (const r of safetyResults || []) consider(r, true);
 
   const ordered = [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
   const out = ordered.slice(0, n);
+  const degraded = main.degraded || safety.degraded;
   // Force-include allergy facts that fell past the cap. Prefer evicting the
   // worst entry that is NEITHER an allergy NOR a medication fact, so the
   // interaction guard still sees the med fact it needs. Only evict a med fact
@@ -467,29 +485,39 @@ export async function recallRelevant(client, query, limit = 5) {
       if (idx >= 0) res[idx] = m;
       else if (res.length < n) res.push(m);
     }
-    return res.sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
+    return { facts: res.sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1)), degraded };
   }
-  return out;
+  return { facts: out, degraded };
+}
+
+export async function recallRelevant(client, query, limit = 5) {
+  return (await recallRelevantMeta(client, query, limit)).facts;
 }
 
 // Multi-angle union recall: several query phrasings merged by text (lowest distance
 // wins). A receipts page / summary must see the whole namespace — one phrasing can
 // score every fact above the 0.7 cutoff and wrongly show an empty memory.
-export async function recallAll(client, queries, limit = 20) {
+export async function recallAllMeta(client, queries, limit = 20) {
+  // Run the angles concurrently (was sequential → ~63s worst case on a dead
+  // relayer) and record whether any angle degraded.
+  const settled = await Promise.allSettled((queries || []).map((q) => safeRecall(client, { query: q, limit: 25 })));
   const byText = new Map();
-  for (const q of queries) {
-    try {
-      const { results } = await safeRecall(client, { query: q, limit: 25 });
-      for (const r of results || []) {
-        if ((r.distance ?? 1) >= MAX_DISTANCE) continue;
-        const key = String(r.text || '').trim().toLowerCase();
-        if (!key) continue;
-        const prev = byText.get(key);
-        if (!prev || (r.distance ?? 1) < (prev.distance ?? 1)) byText.set(key, r);
-      }
-    } catch { /* one angle failing must not empty the page */ }
+  let degraded = false;
+  for (const s of settled) {
+    if (s.status !== 'fulfilled') { degraded = true; continue; }
+    if (s.value.degraded) degraded = true;
+    for (const r of s.value.results || []) {
+      if ((r.distance ?? 1) >= MAX_DISTANCE) continue;
+      const key = String(r.text || '').trim().toLowerCase();
+      if (!key) continue;
+      const prev = byText.get(key);
+      if (!prev || (r.distance ?? 1) < (prev.distance ?? 1)) byText.set(key, r);
+    }
   }
-  return [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1)).slice(0, limit);
+  return { facts: [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1)).slice(0, limit), degraded };
+}
+export async function recallAll(client, queries, limit = 20) {
+  return (await recallAllMeta(client, queries, limit)).facts;
 }
 
 // Fact classifier for doctor summaries: score-based (not first-regex-hit) so
