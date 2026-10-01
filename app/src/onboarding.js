@@ -15,7 +15,7 @@ import {
   verifyAccount,
   executeSigned,
 } from './onchain.js';
-import { upsertUser, markAccountLinked, getUser } from './userRegistry.js';
+import { upsertUser, markAccountLinked, getUser, getRawUser } from './userRegistry.js';
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 
@@ -26,7 +26,7 @@ function buildClient() {
 
 // Client-state errors (user skipped a step / wrong order) carry a status so the
 // route returns 4xx, not a misleading 500.
-function clientError(message, status = 409) { const e = new Error(message); e.status = status; return e; }
+function clientError(message, status = 409) { const e = new Error(message); e.status = status; e.expose = true; return e; }
 
 function keypairFromHexPrivateKey(hex) {
   return Ed25519Keypair.fromSecretKey(Uint8Array.from(Buffer.from(String(hex).replace(/^0x/, ''), 'hex')));
@@ -56,10 +56,14 @@ export async function walletStatus(address) {
 // --- Step 1a (fresh user): build create_account tx for the wallet to sign.
 export async function prepareCreateAccount(address) {
   if (MODE !== 'mainnet') throw clientError('Wallet onboarding requires MEMWAL_MODE=mainnet (Sui Mainnet). Local mode is a keyless demo only.', 501);
-  // NEVER clobber a working vault: a second "create" click must not wipe the
-  // accountId + delegate key of an already-onboarded user (which bricks them to 409).
-  const existing = getUser(address);
-  if (existing?.accountId && existing?.delegatePrivateKey) {
+  // NEVER clobber a working vault. Use the RAW row: getUser() returns null when a
+  // row exists but its key can't be decrypted (e.g. rotated SESSION_SECRET), and
+  // trusting that null would overwrite accountId with null and brick the user.
+  const raw = getRawUser(address);
+  if (raw?.accountId && !getUser(address)) {
+    throw clientError('Registry key cannot be decrypted (SESSION_SECRET changed) — re-link required; refusing to overwrite the existing vault.', 409);
+  }
+  if (raw?.accountId && raw?.delegatePrivateKey && !raw.pendingPhase) {
     throw clientError('This wallet already has a linked memory vault — use the link step (or re-link) instead of create.', 409);
   }
   const delegate = await generateDelegateKey();
@@ -72,7 +76,7 @@ export async function prepareCreateAccount(address) {
   // a fresh pair (last one wins) and any stale signed tx fails onchain.
   upsertUser({
     address,
-    accountId: existing?.accountId ?? null, // never downgrade a set accountId
+    accountId: raw?.accountId ?? null, // never downgrade a stored accountId
     delegatePrivateKey: delegate.privateKey,
     delegatePublicKey: delegatePublicKeyHex,
     delegateAddress: delegate.suiAddress,

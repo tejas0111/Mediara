@@ -159,9 +159,9 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
   ok(rl.clientIp({ headers: { 'x-real-ip': '5.5.5.5' }, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp ignores client-supplied X-Real-IP');
   ok(rl.clientIp({ headers: {} }) === 'unknown', 'clientIp defaults to unknown');
   const a = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'UA' } });
-  const b = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'UA' } });
-  const c = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'OTHER' } });
-  ok(a === b && a !== c, 'clientKey is stable per ip+UA and varies with UA');
+  const b = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'OTHER' } });
+  const c = rl.clientKey({ ip: '5.6.7.8', headers: { 'user-agent': 'UA' } });
+  ok(a === b && a !== c, 'clientKey is ip-only (rotating User-Agent does NOT change it)');
 }
 
 // --- cookie clearing mirrors the Secure flag ---
@@ -172,5 +172,23 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
 }
 
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+// --- corrupt registry: quarantined, marked compromised, writes refused (run LAST) ---
+{
+  const tmp = path.join(os.tmpdir(), `dd-reg-corrupt-${Date.now()}.json`);
+  process.env.DD_REGISTRY_PATH = tmp;
+  fs.writeFileSync(tmp, '{corrupt!!!');
+  const reg = await import('./userRegistry.js');
+  const addr = '0x' + '11'.repeat(32);
+  ok(reg.getUser(addr) === null, 'corrupt registry: getUser returns null (no throw)');
+  ok(reg.registryStatus() === 'corrupt', 'corrupt registry: marked compromised after a bad read');
+  let threw = false;
+  try { reg.upsertUser({ address: addr, accountId: '0xabc' }); } catch { threw = true; }
+  ok(threw, 'corrupt registry: writes are refused while compromised');
+  delete process.env.DD_REGISTRY_PATH;
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

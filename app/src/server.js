@@ -19,7 +19,7 @@ import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
-import { getUser } from './userRegistry.js';
+import { getUser, registryStatus } from './userRegistry.js';
 import { limiter, clientKey } from './rateLimit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -31,7 +31,10 @@ const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', 
 function fail(res, e) {
   const code = (e && Number.isInteger(e.status) && e.status >= 400 && e.status < 600) ? e.status : 500;
   if (code >= 500) console.error('request error:', String((e && e.message) || e).slice(0, 200));
-  res.status(code).json({ error: code >= 500 ? 'Internal error' : String((e && e.message) || e) });
+  // Pass through messages we authored (e.expose), even for 501; mask only
+  // genuinely internal 5xx.
+  const msg = (e && e.expose) ? String(e.message) : (code >= 500 ? 'Internal error' : String((e && e.message) || e));
+  res.status(code).json({ error: msg });
 }
 // A session cookie that fails to parse means EXPIRED (not anonymous). Used to
 // avoid silently downgrading an expired signed-in user to the shared channel.
@@ -457,7 +460,7 @@ app.get('/api/wallet/status', readLimiter, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     const sess = sessionFromReq(req);
-    if (!sess) return res.json({ signedIn: false });
+    if (!sess) return res.json({ signedIn: false, staleSession: hasSessionCookie(req) });
     const status = await walletStatus(sess.address);
     res.json({ signedIn: true, ...status });
   } catch (e) { fail(res, e); }
@@ -504,7 +507,7 @@ app.post('/api/wallet/relink', onboardLimiter, async (req, res) => {
 });
 
 // Health check (registered BEFORE the terminal 404 so it is reachable).
-app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, memory: memoryDegraded() ? 'degraded' : 'ok', time: new Date().toISOString() }));
+app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, memory: memoryDegraded() ? 'degraded' : 'ok', registry: registryStatus(), time: new Date().toISOString() }));
 
 // Explicit terminal 404 (keeps the security headers the middleware set; the
 // default finalhandler replaces the CSP with `default-src 'none'`).

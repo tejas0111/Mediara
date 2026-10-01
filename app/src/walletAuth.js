@@ -113,7 +113,7 @@ export function readSession(token) {
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
     const data = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!isValidSuiAddress(data.a) || typeof data.exp !== 'number' || Date.now() > data.exp) return null;
-    if (typeof data.jti === 'string' && revoked.has(data.jti)) return null;
+    if (typeof data.jti !== 'string' || revoked.has(data.jti)) return null;
     return { address: data.a, jti: data.jti };
   } catch {
     return null;

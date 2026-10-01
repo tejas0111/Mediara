@@ -60,6 +60,13 @@ test('local-mode onboarding fails loud (501), not a 409->404 loop', async () => 
   const token = issueSession('0x' + 'cd'.repeat(32));
   const r = await post('/api/wallet/onboard/create', {}, { Cookie: `dd_session=${token}` });
   assert.equal(r.status, 501);
+  assert.match((await r.json()).error, /mainnet/i, 'the actionable 501 message must reach the client');
+});
+
+test('a garbage session cookie reports staleSession (not a fake signed-out)', async () => {
+  const j = await (await get('/api/wallet/status', { Cookie: 'dd_session=garbage.token' })).json();
+  assert.equal(j.signedIn, false);
+  assert.equal(j.staleSession, true);
 });
 
 test('guard runs before the LLM: trap is a STOP with a cited blob and no LLM marker', async () => {

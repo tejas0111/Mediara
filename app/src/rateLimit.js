@@ -2,17 +2,14 @@
 // Right-sized for a hackathon deploy: protects the auth/onboarding/chat
 // surfaces from scripts without adding a dependency. On serverless each
 // instance keeps its own window — still caps abuse spikes per instance.
-import crypto from 'node:crypto';
-
 const buckets = new Map();
 
-// Stable-ish rate-limit key: req.ip (trust-proxy aware) PLUS a hash of the
-// User-Agent. Rotating X-Forwarded-For alone no longer resets the bucket, so a
-// spoofable edge header cannot defeat the limiters.
+// Rate-limit key = req.ip ONLY (trust-proxy aware). Do NOT include spoofable
+// headers like User-Agent: rotating a client-controlled header would reset the
+// bucket and defeat the limiter entirely. For authenticated abuse we add a
+// separate, non-spoofable per-address limiter.
 export function clientKey(req) {
-  const ip = (typeof req.ip === 'string' && req.ip) ? req.ip : (req.socket?.remoteAddress || 'unknown');
-  const ua = String(req.headers['user-agent'] || '').slice(0, 160);
-  return `${ip}|${crypto.createHash('sha256').update(ua).digest('base64url').slice(0, 10)}`;
+  return (typeof req.ip === 'string' && req.ip) ? req.ip : (req.socket?.remoteAddress || 'unknown');
 }
 
 export function rateLimit({ key, limit, windowMs }) {
@@ -21,9 +18,12 @@ export function rateLimit({ key, limit, windowMs }) {
   if (!b || now - b.start > windowMs) {
     b = { start: now, count: 0 };
     buckets.set(key, b);
-    // Hard cap: never let the Map grow unbounded (a conditional sweep of expired
-    // keys reclaims nothing when all keys are fresh).
-    if (buckets.size > 5000) buckets.clear();
+    // Bounded eviction of the OLDEST entries — never a global clear() (which
+    // would reset everyone's window and let an attacker unlock their own bucket).
+    if (buckets.size > 5000) {
+      const it = buckets.keys();
+      for (let i = 0; i < 1000; i++) { const k = it.next().value; if (k === undefined) break; buckets.delete(k); }
+    }
   }
   b.count += 1;
   return {

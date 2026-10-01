@@ -14,6 +14,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Overridable per-call (tests): set DD_REGISTRY_PATH to a temp file.
 const storePath = () => process.env.DD_REGISTRY_PATH || path.join(__dirname, '..', '.wallet-registry.json');
 
+let REGISTRY_COMPROMISED = false;
 function load() {
   const p = storePath();
   let raw;
@@ -21,19 +22,31 @@ function load() {
   catch (e) { if (e.code === 'ENOENT') return { users: {} }; throw e; } // missing = fresh; unreadable = fail loud
   try { return JSON.parse(raw); }
   catch (e) {
-    // Quarantine the corrupt file (preserve it for recovery) and continue with an
-    // empty db, rather than 500-ing every authenticated route.
+    // Quarantine the corrupt file (preserve it) AND mark the registry compromised
+    // so save() refuses to overwrite it — otherwise the next write silently
+    // destroys every other user's row.
     try { fs.renameSync(p, `${p}.corrupt-${Date.now()}`); } catch { /* best-effort */ }
-    console.error('registry corrupt — quarantined:', String(e.message).slice(0, 120));
+    REGISTRY_COMPROMISED = true;
+    console.error('registry corrupt — quarantined; writes disabled until restart:', String(e.message).slice(0, 120));
     return { users: {} };
   }
 }
+export function registryStatus() { return REGISTRY_COMPROMISED ? 'corrupt' : 'ok'; }
 function save(db) {
+  if (REGISTRY_COMPROMISED) throw new Error('registry is compromised (corrupt file quarantined) — refusing to overwrite; restart after restoring the file');
   // Unique temp name + rename (atomic): two concurrent writers can't clobber a
   // shared `.tmp` path and lose rows.
   const tmp = `${storePath()}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  const fd = fs.openSync(tmp, 'w');
+  try { fs.writeFileSync(fd, JSON.stringify(db, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, storePath());
+}
+
+// Raw row WITHOUT decryption — callers can distinguish "no row" from "row whose
+// key cannot be decrypted" (e.g. rotated SESSION_SECRET) instead of seeing null.
+export function getRawUser(address) {
+  const db = load();
+  return db.users[String(address).toLowerCase()] || null;
 }
 
 export function getUser(address) {
