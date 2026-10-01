@@ -46,6 +46,22 @@ test('reserved namespaces are blocked even with junk prefixes (normalised check)
   assert.equal(w.status, 400);
 });
 
+test('logout revokes the session server-side (not just the cookie)', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const token = issueSession('0x' + 'ab'.repeat(32));
+  const h = { Cookie: `dd_session=${token}` };
+  assert.equal((await (await get('/api/wallet/status', h)).json()).signedIn, true);
+  await post('/api/auth/logout', {}, h);
+  assert.equal((await (await get('/api/wallet/status', h)).json()).signedIn, false, 'token must be rejected after logout');
+});
+
+test('local-mode onboarding fails loud (501), not a 409->404 loop', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const token = issueSession('0x' + 'cd'.repeat(32));
+  const r = await post('/api/wallet/onboard/create', {}, { Cookie: `dd_session=${token}` });
+  assert.equal(r.status, 501);
+});
+
 test('guard runs before the LLM: trap is a STOP with a cited blob and no LLM marker', async () => {
   const u = `rt-guard-${Date.now()}`;
   await chat(u, 'She is allergic to ibuprofen, causes rash');

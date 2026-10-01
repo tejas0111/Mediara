@@ -88,9 +88,18 @@ function hmac(payload) {
   return crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
 }
 
-// Token format: base64url({address, exp}).hmac — stateless, no server store.
+// Session revocation denylist (logout). Tokens carry a jti; revoking a jti makes
+// the token invalid server-side even though the cookie is stateless.
+const revoked = new Map(); // jti -> exp
+function sweepRevoked() { const now = Date.now(); for (const [k, exp] of revoked) if (now > exp) revoked.delete(k); }
+const revokedSweeper = setInterval(sweepRevoked, 60_000);
+if (typeof revokedSweeper.unref === 'function') revokedSweeper.unref();
+export function revokeSession(jti) { if (typeof jti === 'string' && jti) revoked.set(jti, Date.now() + SESSION_TTL_MS); }
+
+// Token format: base64url({address, exp, jti}).hmac.
 export function issueSession(address) {
-  const body = Buffer.from(JSON.stringify({ a: address, exp: Date.now() + SESSION_TTL_MS })).toString('base64url');
+  const jti = crypto.randomBytes(12).toString('base64url');
+  const body = Buffer.from(JSON.stringify({ a: address, exp: Date.now() + SESSION_TTL_MS, jti })).toString('base64url');
   return `${body}.${hmac(body)}`;
 }
 
@@ -104,7 +113,8 @@ export function readSession(token) {
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
     const data = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (!isValidSuiAddress(data.a) || typeof data.exp !== 'number' || Date.now() > data.exp) return null;
-    return { address: data.a };
+    if (typeof data.jti === 'string' && revoked.has(data.jti)) return null;
+    return { address: data.a, jti: data.jti };
   } catch {
     return null;
   }
@@ -115,8 +125,9 @@ export function readSession(token) {
 export function sessionCookie(token, { secure = false } = {}) {
   return `dd_session=${token}; Path=/; HttpOnly; SameSite=Lax;${secure ? ' Secure;' : ''} Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
 }
-export function clearCookie() {
-  return 'dd_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';
+export function clearCookie({ secure = false } = {}) {
+  // Mirror the set path: a Secure cookie can only be deleted by a Secure Set-Cookie.
+  return `dd_session=; Path=/; HttpOnly; SameSite=Lax;${secure ? ' Secure;' : ''} Max-Age=0`;
 }
 export function sessionFromReq(req) {
   // Never throw on a malformed cookie (a client can set `dd_session=%`): a bad

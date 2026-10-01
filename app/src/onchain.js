@@ -77,7 +77,7 @@ export async function accountForOwner(ownerAddress) {
   const owner = String(ownerAddress).toLowerCase();
   for (const pkg of PACKAGE_IDS) {
     const data = await gql(
-      `query($a: SuiAddress!) { events(last: 3, filter: { sender: $a, module: "${pkg}::account" }) { nodes { contents { json } } } }`,
+      `query($a: SuiAddress!) { events(last: 50, filter: { sender: $a, module: "${pkg}::account" }) { nodes { contents { json } } } }`,
       { a: owner },
     );
     for (const node of data?.events?.nodes || []) {

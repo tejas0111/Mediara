@@ -2,7 +2,18 @@
 // Right-sized for a hackathon deploy: protects the auth/onboarding/chat
 // surfaces from scripts without adding a dependency. On serverless each
 // instance keeps its own window — still caps abuse spikes per instance.
+import crypto from 'node:crypto';
+
 const buckets = new Map();
+
+// Stable-ish rate-limit key: req.ip (trust-proxy aware) PLUS a hash of the
+// User-Agent. Rotating X-Forwarded-For alone no longer resets the bucket, so a
+// spoofable edge header cannot defeat the limiters.
+export function clientKey(req) {
+  const ip = (typeof req.ip === 'string' && req.ip) ? req.ip : (req.socket?.remoteAddress || 'unknown');
+  const ua = String(req.headers['user-agent'] || '').slice(0, 160);
+  return `${ip}|${crypto.createHash('sha256').update(ua).digest('base64url').slice(0, 10)}`;
+}
 
 export function rateLimit({ key, limit, windowMs }) {
   const now = Date.now();

@@ -16,11 +16,11 @@ import express from 'express';
 import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage } from './page.js';
-import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie } from './walletAuth.js';
+import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser } from './userRegistry.js';
-import { limiter, clientIp } from './rateLimit.js';
+import { limiter, clientKey } from './rateLimit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -112,13 +112,13 @@ app.use(express.json({ limit: '16kb' }));
 // Rate limits (fixed-window, per IP).
 // Limits are env-overridable so tests can raise them (defaults are production).
 const L = (name, dflt) => Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt;
-const authLimiter = limiter({ keyFn: (req) => `auth:${clientIp(req)}`, limit: L('DD_AUTH_LIMIT', 10), windowMs: 60_000 });
-const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientIp(req)}`, limit: L('DD_ONBOARD_LIMIT', 12), windowMs: 60_000 });
-const chatLimiter = limiter({ keyFn: (req) => `chat:${clientIp(req)}`, limit: L('DD_CHAT_LIMIT', 30), windowMs: 60_000 });
+const authLimiter = limiter({ keyFn: (req) => `auth:${clientKey(req)}`, limit: L('DD_AUTH_LIMIT', 10), windowMs: 60_000 });
+const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientKey(req)}`, limit: L('DD_ONBOARD_LIMIT', 12), windowMs: 60_000 });
+const chatLimiter = limiter({ keyFn: (req) => `chat:${clientKey(req)}`, limit: L('DD_CHAT_LIMIT', 30), windowMs: 60_000 });
 // Read routes fan out to several recall queries; cap them too (audit M9).
-const readLimiter = limiter({ keyFn: (req) => `read:${clientIp(req)}`, limit: L('DD_READ_LIMIT', 60), windowMs: 60_000 });
+const readLimiter = limiter({ keyFn: (req) => `read:${clientKey(req)}`, limit: L('DD_READ_LIMIT', 60), windowMs: 60_000 });
 // Nonce minting is cheap but unbounded; cap it (the nonce Map would otherwise grow).
-const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientIp(req)}`, limit: L('DD_NONCE_LIMIT', 30), windowMs: 60_000 });
+const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientKey(req)}`, limit: L('DD_NONCE_LIMIT', 30), windowMs: 60_000 });
 
 // Bounded per-namespace conversation transcript so the model sees recent turns,
 // not just recalled facts (facts are durable; this is ephemeral context).
@@ -446,7 +446,10 @@ app.post('/api/auth/verify', authLimiter, async (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  res.setHeader('Set-Cookie', clearCookie());
+  const secure = req.secure || (app.get('trust proxy') && req.headers['x-forwarded-proto'] === 'https');
+  const sess = sessionFromReq(req);
+  if (sess?.jti) revokeSession(sess.jti); // server-side revocation, not just cookie clear
+  res.setHeader('Set-Cookie', clearCookie({ secure }));
   res.json({ ok: true });
 });
 

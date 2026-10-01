@@ -82,7 +82,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js` | 224 offline checks (core 143 + wallet/auth/crypto/rate-limit 55 + route 26), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js` | 229 offline checks (core 143 + wallet/auth/crypto/rate-limit 55 + route 28), no network |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
 | `npm run seed` / `npm run seed:10` | `node src/seed10.js [userId]` | Writes 12 facts, needs mainnet keys; appends to `evidence/blob-ledger.md` |
@@ -111,7 +111,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
 - `src/verify.js` — Mainnet health + write/recall probe.
-- `src/selftest.js` — 120 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/fuzz/bulk/concurrency regressions); `src/wallet.test.js` adds 55 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 11 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, escaping, classification) — `npm test` runs all three = 186.
+- `src/selftest.js` — 120 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/fuzz/bulk/concurrency regressions); `src/wallet.test.js` adds 58 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 11 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, escaping, classification) — `npm test` runs all three = 186.
 - `api/index.js` + `vercel.json` + `DEPLOY.md` — Vercel deploy wiring (serverless entry, rewrites, 5-min guide; prod MUST be mainnet — serverless disk is ephemeral).
 
 ## Local vs Mainnet — honesty box

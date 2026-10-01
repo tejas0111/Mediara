@@ -158,6 +158,17 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
   ok(rl.clientIp({ headers: { 'x-forwarded-for': '6.6.6.6' }, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp ignores client-supplied XFF when req.ip is absent');
   ok(rl.clientIp({ headers: { 'x-real-ip': '5.5.5.5' }, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp ignores client-supplied X-Real-IP');
   ok(rl.clientIp({ headers: {} }) === 'unknown', 'clientIp defaults to unknown');
+  const a = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'UA' } });
+  const b = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'UA' } });
+  const c = rl.clientKey({ ip: '1.2.3.4', headers: { 'user-agent': 'OTHER' } });
+  ok(a === b && a !== c, 'clientKey is stable per ip+UA and varies with UA');
+}
+
+// --- cookie clearing mirrors the Secure flag ---
+{
+  const wa = await import('./walletAuth.js');
+  ok(wa.clearCookie({ secure: true }).includes('Secure'), 'clearCookie sets Secure when secure');
+  ok(!wa.clearCookie().includes('Secure'), 'clearCookie omits Secure by default');
 }
 
 import fs from 'node:fs';

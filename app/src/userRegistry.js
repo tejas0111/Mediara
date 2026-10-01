@@ -20,7 +20,13 @@ function load() {
   try { raw = fs.readFileSync(p, 'utf8'); }
   catch (e) { if (e.code === 'ENOENT') return { users: {} }; throw e; } // missing = fresh; unreadable = fail loud
   try { return JSON.parse(raw); }
-  catch (e) { throw new Error(`registry file is corrupt (${p}) — refusing to treat it as empty: ${e.message}`); }
+  catch (e) {
+    // Quarantine the corrupt file (preserve it for recovery) and continue with an
+    // empty db, rather than 500-ing every authenticated route.
+    try { fs.renameSync(p, `${p}.corrupt-${Date.now()}`); } catch { /* best-effort */ }
+    console.error('registry corrupt — quarantined:', String(e.message).slice(0, 120));
+    return { users: {} };
+  }
 }
 function save(db) {
   // Unique temp name + rename (atomic): two concurrent writers can't clobber a

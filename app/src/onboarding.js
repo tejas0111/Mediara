@@ -55,6 +55,13 @@ export async function walletStatus(address) {
 
 // --- Step 1a (fresh user): build create_account tx for the wallet to sign.
 export async function prepareCreateAccount(address) {
+  if (MODE !== 'mainnet') throw clientError('Wallet onboarding requires MEMWAL_MODE=mainnet (Sui Mainnet). Local mode is a keyless demo only.', 501);
+  // NEVER clobber a working vault: a second "create" click must not wipe the
+  // accountId + delegate key of an already-onboarded user (which bricks them to 409).
+  const existing = getUser(address);
+  if (existing?.accountId && existing?.delegatePrivateKey) {
+    throw clientError('This wallet already has a linked memory vault — use the link step (or re-link) instead of create.', 409);
+  }
   const delegate = await generateDelegateKey();
   const delegatePublicKeyHex = Buffer.from(delegate.publicKey).toString('hex');
   const tx = buildCreateAccountTx(address);
@@ -65,7 +72,7 @@ export async function prepareCreateAccount(address) {
   // a fresh pair (last one wins) and any stale signed tx fails onchain.
   upsertUser({
     address,
-    accountId: null,
+    accountId: existing?.accountId ?? null, // never downgrade a set accountId
     delegatePrivateKey: delegate.privateKey,
     delegatePublicKey: delegatePublicKeyHex,
     delegateAddress: delegate.suiAddress,
@@ -77,6 +84,7 @@ export async function prepareCreateAccount(address) {
 
 // --- Step 1b (existing account, or fresh user after tx 1 landed): link tx.
 export async function prepareLinkDelegate(address) {
+  if (MODE !== 'mainnet') throw clientError('Wallet onboarding requires MEMWAL_MODE=mainnet (Sui Mainnet). Local mode is a keyless demo only.', 501);
   const user = getUser(address);
   let accountId = user?.accountId || (await accountForOwner(address))?.accountId || null;
   if (!accountId) throw clientError('No MemWalAccount found for this address — create one first', 409);
