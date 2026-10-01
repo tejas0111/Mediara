@@ -127,5 +127,14 @@ export async function executeSigned(txBytes, signatureBase64) {
     transaction: txBytes,
     signatures: [signatureBase64],
   });
+  // A transaction that FAILED onchain must not be reported as "landed, retry the
+  // indexer" — surface the real failure immediately (4xx, not a retry loop).
+  const status = res?.effects?.status;
+  const kind = (status && typeof status === 'object') ? status.status : status;
+  if (kind && kind !== 'success') {
+    const err = new Error(`transaction failed onchain: ${(status && status.error) || kind}`);
+    err.status = 422; err.expose = true; err.digest = res?.digest || null;
+    throw err;
+  }
   return res; // { digest, ... }
 }

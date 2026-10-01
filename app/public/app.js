@@ -144,15 +144,21 @@
     function stepList(names) { ob.className = 'obsteps on'; ob.innerHTML = ''; names.forEach(function (n) { ob.appendChild(el('div', 'step', n)); }); }
     function stepMark(i, cls, text) { var d = ob.children[i]; if (!d) return; d.className = 'step ' + cls; if (text) d.textContent = text; }
     function stepErr(i, e) { stepMark(i, 'err', 'Failed: ' + ((e && e.error) ? e.error : (e && e.message) ? e.message : String(e))); }
-    function setSignedOut() { who2.textContent = 'Not signed in \u2014 using the shared demo channel'; btn.textContent = 'Connect Sui Wallet'; btn.style.display = ''; vault.style.display = 'none'; }
+    var logout = $('logout');
+    if (logout) logout.addEventListener('click', function () { post('/api/auth/logout').then(function () { location.reload(); }); });
+    function setSignedOut() { who2.textContent = 'Not signed in \u2014 using the shared demo channel'; btn.textContent = 'Connect Sui Wallet'; btn.style.display = ''; vault.style.display = 'none'; if (logout) logout.style.display = 'none'; }
     function setSignedIn(st) {
       who2.innerHTML = ''; who2.appendChild(document.createTextNode('Signed in as '));
       var b = el('b', null, short(st.address)); who2.appendChild(b);
+      if (logout) logout.style.display = '';
       if (st.onboarded) {
         btn.style.display = 'none'; if (signnote) signnote.style.display = 'none';
         vault.href = 'https://suiscan.xyz/mainnet/account/' + st.accountId; vault.textContent = 'vault ' + short(st.accountId) + ' \u2197'; vault.style.display = '';
         if (whoInput) { whoInput.disabled = true; whoInput.value = 'my vault (wallet)'; }
-      } else { btn.style.display = ''; btn.textContent = st.needsRelink ? 'Re-link my vault' : 'Create my memory vault'; }
+      } else {
+        btn.style.display = '';
+        btn.textContent = st.pendingPhase ? 'Resume setup' : (st.needsRelink ? 'Re-link my vault' : 'Create my memory vault');
+      }
     }
     // Wallet Standard discovery without a bundler: wallets register via the
     // `wallet-standard:register-wallet` event and respond to `wallet-standard:app-ready`.

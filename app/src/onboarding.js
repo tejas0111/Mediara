@@ -43,9 +43,14 @@ export async function walletStatus(address) {
   // AND a delegate key on file. An account that exists onchain without a stored
   // delegate key is NOT usable — the user must (re)link, not just view.
   const hasDelegate = Boolean(user?.accountId && user?.delegatePrivateKey);
+  // "onboarded" means usable: account + delegate AND no onboarding step still
+  // pending. A half-written row (failed link) must NOT report onboarded:true, or
+  // the UI hides the only action and the vault is silently broken.
+  const pending = Boolean(user?.pendingPhase);
   return {
     address,
-    onboarded: hasDelegate,
+    onboarded: hasDelegate && !pending,
+    pendingPhase: user?.pendingPhase || null,
     // true => account exists onchain but this server has no usable delegate row
     // (e.g. redeploy lost the registry): user needs the LINK step, not create.
     needsRelink: Boolean(!hasDelegate && accountId),

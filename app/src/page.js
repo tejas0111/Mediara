@@ -1,7 +1,7 @@
 // DoseDaughter — server-rendered page shells (hand-written UI, no framework/build).
 // Untrusted text is escaped server-side (esc); the client uses textContent only.
 const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ASSET_V = '8';
+const ASSET_V = '9';
 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -33,6 +33,7 @@ export function chatPage({ mode }) {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <a class="vault" id="vaultlink" style="display:none" target="_blank" rel="noopener"></a>
       <button class="btn dark" id="connect" style="display:none" type="button">Connect Sui Wallet</button>
+      <button class="iconbtn" id="logout" style="display:none" type="button">Sign out</button>
     </div>
   </div>
   <div class="obsteps" id="obsteps"></div>

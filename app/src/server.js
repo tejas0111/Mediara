@@ -78,11 +78,15 @@ const app = express();
 app.disable('x-powered-by');
 // Trust exactly one proxy hop (the platform edge) so req.ip is the real client.
 // With no proxy (local dev) leave it off — never trust client-supplied XFF.
-// Parse TRUST_PROXY explicitly: '0'/'false' MUST disable it (Number('0')||1 was 1).
+// Parse TRUST_PROXY explicitly and FAIL CLOSED on anything unrecognised: a typo
+// must never widen proxy trust (which would make every limiter spoofable).
 const tp = process.env.TRUST_PROXY;
-app.set('trust proxy', tp === undefined || tp === ''
-  ? (process.env.VERCEL === '1' ? 1 : false)
-  : (/^(?:0|false)$/i.test(tp) ? false : (Number(tp) || 1)));
+let trustProxy;
+if (tp === undefined || tp === '') trustProxy = process.env.VERCEL === '1' ? 1 : false;
+else if (/^(?:0|false|off|no)$/i.test(tp)) trustProxy = false;
+else if (/^\d+$/.test(tp)) trustProxy = Number(tp);
+else { console.warn(`TRUST_PROXY="${tp}" not understood — defaulting to false (client headers NOT trusted)`); trustProxy = false; }
+app.set('trust proxy', trustProxy);
 // Security headers on every response. CSP allows inline scripts (the UI is
 // server-rendered, no build step) but blocks every external origin.
 app.use((req, res, next) => {
