@@ -319,10 +319,10 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
 // --- Regression: classifyFacts handles discontinuation + dose units (cycle 2) ---
 {
   const g = classifyFacts(['takes Metformin 500mg every morning', 'stopped taking Metformin', 'She takes levothyroxine 50mcg at 7am']);
-  ok(g.medications.some((t) => /Metformin 500mg/.test(t)), 'classify: current med in medications');
-  ok((g.stopped || []).some((t) => /stopped taking/.test(t)), 'classify: discontinuation in the stopped bucket');
-  ok(g.allergies.length === 0, 'classify: a stopped med is NOT an allergy');
   ok(g.medications.some((t) => /levothyroxine 50mcg/.test(t)), 'classify: mcg drug is a medication, not routine');
+  ok(!g.medications.some((t) => /Metformin/i.test(t)), 'classify: superseded Metformin is not current');
+  ok((g.stopped || []).some((t) => /Metformin 500mg/.test(t)), 'classify: superseded Metformin moves to the stopped bucket');
+  ok(g.allergies.length === 0, 'classify: a stopped med is NOT an allergy');
 }
 
 // --- Resilience (cycle 3): timeouts, degraded recall, fail-closed trigger ---
@@ -336,6 +336,19 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   let timedOut = false;
   try { await withTimeout(new Promise(() => {}), 50, 'test'); } catch { timedOut = true; }
   ok(timedOut && Date.now() - t0 < 2000, 'resilience: withTimeout rejects a hung promise');
+}
+
+// --- Cycle 2 P0s: write-gate breadth, supersede, listing completeness ---
+{
+  ok(shouldRemember('She uses her inhaler twice a day') === true, 'write gate: inhaler is a durable fact');
+  ok(shouldRemember('She is on dialysis Mon Wed Fri') === true, 'write gate: dialysis schedule is durable');
+  ok(shouldRemember('She speaks only Gujarati at home') === true, 'write gate: non-Hindi language is durable');
+  ok(shouldRemember('She uses a nebuliser at night') === true, 'write gate: nebuliser is durable');
+  const rec = [{ text: 'takes warfarin 5mg daily for AFib', blob_id: 'a' }, { text: 'she stopped taking warfarin last month', blob_id: 'b' }];
+  ok(findInteraction('Can she take ibuprofen?', rec) === null, 'supersede: stopped warfarin no longer seeds an interaction');
+  const g = classifyFacts(['takes warfarin 5mg daily', 'she stopped taking warfarin']);
+  ok(!g.medications.some((t) => /warfarin/i.test(t)), 'supersede: discontinued med removed from Current medications');
+  ok(g.stopped.filter((t) => /warfarin/i.test(t)).length === 2, 'supersede: both facts land in the stopped bucket');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -200,7 +200,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const history = historyFor(nsKey);
 
     const rr = await recallRelevantMeta(client, message, 5);
-    const recalled = rr.facts;
+    let recalled = rr.facts;
+    // "What do you remember?" must return the WHOLE namespace, not a query subset.
+    if (/\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message)) {
+      try { const full = await recallAllMeta(client, ALL_QUERIES, 25); if (full.facts.length) recalled = full.facts; } catch { /* keep the query recall */ }
+    }
     // FAIL CLOSED: if memory is unreachable we cannot verify allergies or
     // interactions, so refuse medication questions rather than answer unguarded.
     if (rr.degraded && mentionsDrug(message)) {
@@ -243,6 +247,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         if (isDup) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
         else { saved = await rememberAndWait(client, `${label}: ${message}`); memoryPersisted = !!saved?.blob_id; }
       } catch { memoryPersisted = false; /* surfaced to the client below */ }
+    }
+    // Never deny memory we just stored: if the (keyless) reply says we know
+    // nothing but a fact was saved this turn, acknowledge it.
+    if (saved?.blob_id && /^I don't have any memories/i.test(reply)) {
+      reply = `Noted \u2014 I'll remember: \u201c${message}\u201d. Confirm with your doctor \u2014 this is not medical advice.`;
     }
     res.json({
       reply,
@@ -457,6 +466,9 @@ app.post('/api/wallet/relink', onboardLimiter, async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// Health check (registered BEFORE the terminal 404 so it is reachable).
+app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, time: new Date().toISOString() }));
+
 // Explicit terminal 404 (keeps the security headers the middleware set; the
 // default finalhandler replaces the CSP with `default-src 'none'`).
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
@@ -473,7 +485,6 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 const port = process.env.PORT || 3001;
-app.get('/healthz', (req, res) => res.json({ ok: true, mode: MODE, time: new Date().toISOString() }));
 if (process.env.VERCEL !== '1' && import.meta.url === `file://${process.argv[1]}`) {
   const server = app.listen(port, () => console.log(`DoseDaughter on :${port}`));
   // A listen failure (EADDRINUSE) must not crash as an unhandled 'error' event.

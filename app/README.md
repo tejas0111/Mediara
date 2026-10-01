@@ -82,7 +82,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js` | 203 offline checks (core 128 + wallet/auth/crypto/rate-limit 55 + route 20), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js` | 214 offline checks (core 135 + wallet/auth/crypto/rate-limit 55 + route 24), no network |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
 | `npm run seed` / `npm run seed:10` | `node src/seed10.js [userId]` | Writes 12 facts, needs mainnet keys; appends to `evidence/blob-ledger.md` |

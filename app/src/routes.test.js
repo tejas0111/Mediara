@@ -126,9 +126,9 @@ test('discontinued medication is neither a current med nor an allergy', async ()
   await chat(u, 'she takes Metformin 500mg every morning');
   await chat(u, 'she stopped taking Metformin');
   const s = await (await get(`/api/summary?user=${u}`)).json();
-  assert.ok(s.medications.some((m) => /Metformin/i.test(m)));
+  assert.ok(!s.medications.some((m) => /Metformin/i.test(m)), 'superseded med must not be current');
   assert.deepEqual(s.allergies, [], 'a stopped med must not be classified as an allergy');
-  assert.ok((s.stopped || []).some((m) => /stopped taking/i.test(m)));
+  assert.ok((s.stopped || []).some((m) => /Metformin/i.test(m)), 'superseded med should be in stopped');
 });
 
 test('write dedup: teaching the same fact twice reuses the blob', async () => {
@@ -177,6 +177,39 @@ test('cross-origin POST is blocked; same-origin is allowed', async () => {
   assert.equal(cross.status, 403);
   const same = await fetch(base + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ userId: 'x', message: 'hello there' }) });
   assert.notEqual(same.status, 403);
+});
+
+test('healthz returns 200 (regression: was shadowed by the 404 handler)', async () => {
+  const res = await get('/healthz');
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).ok, true);
+});
+
+test('a naturally-phrased allergy reaches the emergency card and all reads', async () => {
+  const u = `rt-hives-${Date.now()}`;
+  await chat(u, 'She gets hives from penicillin');
+  const s = await (await get(`/api/summary?user=${u}`)).json();
+  assert.ok(s.allergies.some((m) => /penicillin/i.test(m)), 'hives allergy should be classified');
+  assert.ok((await (await get(`/print?user=${u}`)).text()).includes('penicillin'));
+  assert.ok((await (await get(`/memory?user=${u}`)).text()).includes('penicillin'));
+  assert.ok((await (await get(`/replay?user=${u}`)).text()).includes('penicillin'));
+});
+
+test('discontinuation supersedes: no false interaction STOP, med leaves Current', async () => {
+  const u = `rt-sup-${Date.now()}`;
+  await chat(u, 'She takes warfarin 5mg daily for AFib');
+  await chat(u, 'she stopped taking warfarin last month');
+  const trap = await chat(u, 'Can she take ibuprofen for her knee?');
+  assert.ok(!/^STOP/.test(trap.reply), 'stopped warfarin must not fire an interaction STOP');
+  const s = await (await get(`/api/summary?user=${u}`)).json();
+  assert.ok(!s.medications.some((m) => /warfarin/i.test(m)), 'warfarin should not be a current med');
+});
+
+test('keyless teach never denies the fact it just stored', async () => {
+  const u = `rt-noted-${Date.now()}`;
+  const j = await chat(u, 'She uses her inhaler twice a day');
+  assert.ok(j.savedBlob, 'fact should be saved');
+  assert.ok(!/I don't have any memories/i.test(j.reply), 'reply must not deny stored memory');
 });
 
 test('rate limiting: repeated chat requests eventually 429', async () => {

@@ -234,7 +234,7 @@ export function shouldRemember(text) {
   if (DISCONTINUE_RE.test(t)) return true;
   // Care facts the emergency card / doctor summary exist to hold (contacts,
   // pharmacy, doctor, language, blood-sugar targets) — previously dropped.
-  if (/\b(?:emergency|contact|pharmacy|refill|daughter|\bson\b|father|mother|whatsapp|hindi|blood\s+sugar|fasting|clinic|doctor|appointment|nurse|caregiver)\b/i.test(t)) return true;
+  if (/\b(?:emergency|contact|pharmacy|refill|daughter|\bson\b|father|mother|whatsapp|hindi|gujarati|bengali|tamil|telugu|punjabi|marathi|urdu|malayalam|kannada|speaks?|language|blood\s+sugar|fasting|clinic|doctor|appointment|nurse|caregiver|inhaler|nebulis\w*|nebuliz\w*|dialysis|surgery|hearing\s+aid|wheelchair|walker|\bcane\b|catheter|oxygen|pacemaker|prosthetic|implant|thyroid|levels?|twice\s+a\s+day|three\s+times)\b/i.test(t)) return true;
   // Meds / caregiver facts / routines. Bare meal words are deliberately NOT
   // enough ("dinner was nice" is chit-chat); a time/context is required.
   return /i take|\btakes?\b|\btaking\b|my (mom|dad|dose|routine|mother|father)|\bevery day\b|\bdaily\b|\bmedication\b|prescription|\bmeds?\b|\bpill|remind|\bmg\b|\d\s?mg|\d:\d|\d\s?(am|pm)\b|\b(?:dinner|breakfast|lunch)\b.*\bat\s+\d|\bbedtime\b|\broutine\b/.test(t);
@@ -351,9 +351,19 @@ export function findInteraction(message, recalled) {
   const msgNamed = namedClasses(message);
   if (!msgSubs.size && !msgNamed.size) return null;
   if (isTeachingStatement(message)) return null;
+  // Supersede: a substance named in a discontinuation fact is no longer current,
+  // so an earlier "takes X" fact must not seed an interaction (no false STOP).
+  const discontinued = new Set();
+  for (const r of recalled) {
+    if (!r || typeof r.text !== 'string') continue;
+    for (const c of splitClauses(r.text)) {
+      if (isNegatedOrDiscontinuedClause(c)) for (const s of substancesIn(c)) discontinued.add(s);
+    }
+  }
   for (const r of recalled) {
     if (!r || typeof r.text !== 'string') continue;
     const factSubs = currentMedSubstances(r.text);
+    for (const s of discontinued) factSubs.delete(s);
     if (!factSubs.size) continue;
     for (const s of msgSubs) {
       for (const f of factSubs) {
@@ -507,14 +517,18 @@ export async function recallAllMeta(client, queries, limit = 20) {
     if (s.status !== 'fulfilled') { degraded = true; continue; }
     if (s.value.degraded) degraded = true;
     for (const r of s.value.results || []) {
-      if ((r.distance ?? 1) >= MAX_DISTANCE) continue;
+      // A LISTING is not a relevance query: keep EVERY fact (no distance cutoff),
+      // or the emergency card can print "None recorded" for a stored allergy.
       const key = String(r.text || '').trim().toLowerCase();
       if (!key) continue;
       const prev = byText.get(key);
       if (!prev || (r.distance ?? 1) < (prev.distance ?? 1)) byText.set(key, r);
     }
   }
-  return { facts: [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1)).slice(0, limit), degraded };
+  const list = [...byText.values()];
+  // Allergies first (safety), then by relevance.
+  list.sort((a, b) => ((isActiveAllergyFact(b.text) ? 1 : 0) - (isActiveAllergyFact(a.text) ? 1 : 0)) || ((a.distance ?? 1) - (b.distance ?? 1)));
+  return { facts: list.slice(0, limit), degraded };
 }
 export async function recallAll(client, queries, limit = 20) {
   return (await recallAllMeta(client, queries, limit)).facts;
@@ -530,13 +544,24 @@ const CLASS_RULES = {
 };
 export function classifyFacts(facts) {
   const out = { medications: [], allergies: [], stopped: [], routine: [], familyAndCare: [], unclassified: [] };
-  for (const raw of facts || []) {
+  const arr = (facts || []).map(String);
+  // Supersede pass: substances named in a discontinuation fact are no longer
+  // current, so an earlier "takes X" fact must not stay under Current medications.
+  const discontinued = new Set();
+  for (const raw of arr) {
+    const t = raw.replace(/^User\s+\S+:\s*/i, '');
+    if (DISCONTINUE_RE.test(t)) for (const s of substancesIn(t)) discontinued.add(s);
+  }
+  for (const raw of arr) {
     const text = String(raw).replace(/^User\s+\S+:\s*/i, '');
     // Only ACTIVE (non-negated) allergy clauses count — "no known allergy" and
     // "not allergic to ibuprofen" must not be printed on the emergency card.
     if (isActiveAllergyFact(text)) { out.allergies.push(raw); continue; }
     // A discontinued medication is neither a current med nor an allergy.
     if (DISCONTINUE_RE.test(text)) { out.stopped.push(raw); continue; }
+    // A med fact whose substance was later discontinued is superseded.
+    const subs = substancesIn(text);
+    if (subs.size && [...subs].every((s) => discontinued.has(s))) { out.stopped.push(raw); continue; }
     let best = 'unclassified', bestScore = 0;
     for (const [cat, rules] of Object.entries(CLASS_RULES)) {
       const score = rules.reduce((n, re) => n + (re.test(text) ? 1 : 0), 0);
