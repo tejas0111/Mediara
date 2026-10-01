@@ -2,6 +2,8 @@
 
 **A caregiver chatbot that never re-asks a dose.** It remembers your mother's medications, allergies, and routines across conversations — permanently, on Walrus — and flags unsafe answers before the model replies.
 
+> **A chatbot that forgets is annoying. A chatbot that remembers the wrong dose is dangerous.** DoseDaughter is the one that proves it tells the difference — a measured before/after (`npm run eval`): memory **changes the outcome on 12/12** adverse probes, with **0 false positives** ([evidence/AB-RESULTS.md](evidence/AB-RESULTS.md)).
+
 Built for **Walrus Session 8: Chatbots That Remember** (Sept 18 – Oct 9, 2026).
 
 ![DoseDaughter](docs/images/banner-dosedaughter.png)
