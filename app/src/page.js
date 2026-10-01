@@ -1,7 +1,7 @@
 // DoseDaughter — server-rendered page shells (hand-written UI, no framework/build).
 // Untrusted text is escaped server-side (esc); the client uses textContent only.
 const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ASSET_V = '6';
+const ASSET_V = '7';
 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

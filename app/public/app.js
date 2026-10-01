@@ -151,10 +151,27 @@
         if (whoInput) { whoInput.disabled = true; whoInput.value = 'my vault (wallet)'; }
       } else { btn.style.display = ''; btn.textContent = st.needsRelink ? 'Re-link my vault' : 'Create my memory vault'; }
     }
-    function getWallets() { try { return (window.getWallets ? window.getWallets() : []) || []; } catch (e) { return []; } }
-    function pickWallet() { var ws = getWallets(); for (var i = 0; i < ws.length; i++) { var f = ws[i].features || {}; if (f['standard:connect'] && (f['sui:signPersonalMessage'] || f['sui:signTransactionBlock'] || f['standard:signTransaction'])) return ws[i]; } return ws[0] || null; }
+    // Wallet Standard discovery without a bundler: wallets register via the
+    // `wallet-standard:register-wallet` event and respond to `wallet-standard:app-ready`.
+    var discovered = [];
+    function addWallets(list) { for (var i = 0; i < list.length; i++) if (list[i] && discovered.indexOf(list[i]) === -1) discovered.push(list[i]); }
+    var registerApi = { register: function () { addWallets([].slice.call(arguments)); } };
+    window.addEventListener('wallet-standard:register-wallet', function (e) { try { if (e && e.detail) e.detail(registerApi); } catch (_) {} });
+    function announce() { try { window.dispatchEvent(new CustomEvent('wallet-standard:app-ready', { detail: registerApi })); } catch (_) {} }
+    announce();
+    function getWallets() { if (typeof window.getWallets === 'function') { try { return window.getWallets() || []; } catch (_) {} } return discovered; }
+    function pickWallet() {
+      var ws = getWallets();
+      for (var i = 0; i < ws.length; i++) { var f = ws[i].features || {}; if (f['standard:connect'] && (f['sui:signPersonalMessage'] || f['sui:signTransaction'] || f['sui:signTransactionBlock'])) return ws[i]; }
+      return ws[0] || null;
+    }
     async function ensureConnected(w) { if (account) return account; var c = await w.features['standard:connect'].connect(); account = (c.accounts || [])[0] || null; if (!account) throw { message: 'wallet returned no account' }; return account; }
-    async function signTx(w, acct, bytes) { var f = w.features || {}; if (f['standard:signTransaction']) { var r1 = await f['standard:signTransaction'].signTransaction({ transaction: { bytes: bytes, chain: 'sui:mainnet' }, account: acct, chain: 'sui:mainnet' }); return r1.signature; } if (f['sui:signTransactionBlock']) { var r2 = await f['sui:signTransactionBlock'].signTransactionBlock({ transactionBlockBytes: bytes, account: acct, chain: 'sui:mainnet' }); return r2.signature; } throw { message: 'wallet cannot sign transactions' }; }
+    async function signTx(w, acct, bytes) {
+      var f = w.features || {};
+      if (f['sui:signTransaction']) { var r1 = await f['sui:signTransaction'].signTransaction({ transaction: { toJSON: function () { return bytes; }, bytes: bytes }, account: acct, chain: 'sui:mainnet' }); return r1.signature; }
+      if (f['sui:signTransactionBlock']) { var r2 = await f['sui:signTransactionBlock'].signTransactionBlock({ transactionBlockBytes: bytes, account: acct, chain: 'sui:mainnet' }); return r2.signature; }
+      throw { message: 'wallet cannot sign transactions' };
+    }
     async function signMsg(w, acct, msgBytes) { var f = w.features || {}; if (f['sui:signPersonalMessage']) { var r = await f['sui:signPersonalMessage'].signPersonalMessage({ message: msgBytes, account: acct }); return r.signature; } throw { message: 'wallet cannot sign personal messages' }; }
 
     btn.addEventListener('click', async function () {
