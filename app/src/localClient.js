@@ -10,7 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STORE = path.join(__dirname, '..', '.local-memory.json');
+// Overridable for tests (DD_LOCAL_STORE) so route tests never mutate the demo store.
+const STORE = process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
 
 function load() {
   try { return JSON.parse(fs.readFileSync(STORE, 'utf8')); } catch { return { namespaces: {} }; }

@@ -1,5 +1,5 @@
 {"dependencies": {"@mysten-incubation/memwal": "^0.1.2", "dotenv": "^16.4.5", "express": "^4.19.2"}, "description": "DoseDaughter — caregiver chatbot that never re-asks a dose (Walrus Sessions 8: Chatbots That Remember)", "license": "MIT", "name": "dosedughter",   "scripts": {
-    "test": "node src/selftest.js && node src/wallet.test.js",
+    "test": "node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js",
     "eval": "node src/eval.js",
     "start": "node src/server.js",
     "seed": "node src/seed10.js",
