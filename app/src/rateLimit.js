@@ -20,19 +20,14 @@ export function rateLimit({ key, limit, windowMs }) {
   };
 }
 
-// Determine the caller IP for rate-limit keys. The LEFTMOST X-Forwarded-For
-// value is attacker-controlled (a client can prepend anything), so it must not
-// be trusted. We prefer x-real-ip when the edge sets it, otherwise the
-// RIGHTMOST XFF hop — the value appended by the closest trusted proxy — and
-// fall back to the socket address.
+// Determine the caller IP for rate-limit keys. X-Forwarded-For / X-Real-IP are
+// CLIENT-CONTROLLED unless a trusted proxy sets them, so we never read them
+// directly. Express computes `req.ip` from the socket + the `trust proxy`
+// setting (configured in server.js): behind one edge proxy it is the real
+// client, and with no proxy it is the socket address. Falling back to the raw
+// headers here would let a client rotate them to get a fresh bucket per request.
 export function clientIp(req) {
-  const real = req.headers['x-real-ip'];
-  if (typeof real === 'string' && real.trim()) return real.trim();
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length) {
-    const hops = fwd.split(',').map((h) => h.trim()).filter(Boolean);
-    if (hops.length) return hops[hops.length - 1];
-  }
+  if (typeof req.ip === 'string' && req.ip) return req.ip;
   return req.socket?.remoteAddress || 'unknown';
 }
 

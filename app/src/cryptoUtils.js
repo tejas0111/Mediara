@@ -12,8 +12,18 @@ import crypto from 'node:crypto';
 // Interactive scrypt params: 128*N*r = 16 MiB < Node's 32 MiB default maxmem.
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
+// scrypt is intentionally expensive (~130 ms), and it runs on every authed
+// request via getUser→decryptSecret. Cache the derived key per (secret, salt)
+// so repeated decrypts of the same registry row don't block the event loop.
+const keyCache = new Map();
 function deriveKeyScrypt(secret, salt) {
-  return crypto.scryptSync(String(secret), salt, 32, SCRYPT);
+  const tag = crypto.createHash('sha256').update(String(secret)).digest('base64url').slice(0, 22) + '|' + salt.toString('base64');
+  const hit = keyCache.get(tag);
+  if (hit) return hit;
+  const key = crypto.scryptSync(String(secret), salt, 32, SCRYPT);
+  if (keyCache.size > 500) keyCache.clear();
+  keyCache.set(tag, key);
+  return key;
 }
 
 // Legacy pre-salt derivation, kept ONLY so existing rows keep decrypting.

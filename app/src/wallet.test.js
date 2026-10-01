@@ -151,16 +151,12 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
   ok(rl.rateLimit({ key, limit: 2, windowMs: 1000 }).allowed === false, 'rate limit 3rd blocked');
 }
 
-// --- clientIp trusts the proxy hop, not client-supplied XFF ---
+// --- clientIp uses Express req.ip (trust-proxy aware), never raw headers ---
 {
   const rl = await import('./rateLimit.js');
-  const xff = { headers: { 'x-forwarded-for': '1.1.1.1, 2.2.2.2, 3.3.3.3' }, socket: { remoteAddress: '9.9.9.9' } };
-  ok(rl.clientIp(xff) === '3.3.3.3', 'clientIp uses the rightmost (trusted) XFF hop, not the leftmost');
-  const spoofed = { headers: { 'x-forwarded-for': '6.6.6.6, 7.7.7.7' }, socket: { remoteAddress: '9.9.9.9' } };
-  ok(rl.clientIp(spoofed) === '7.7.7.7', 'clientIp cannot be rotated via a prepended XFF value');
-  const real = { headers: { 'x-real-ip': '5.5.5.5', 'x-forwarded-for': '1.1.1.1' }, socket: { remoteAddress: '9.9.9.9' } };
-  ok(rl.clientIp(real) === '5.5.5.5', 'clientIp prefers x-real-ip when present');
-  ok(rl.clientIp({ headers: {}, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp falls back to socket address');
+  ok(rl.clientIp({ ip: '3.3.3.3', headers: { 'x-forwarded-for': '1.1.1.1' }, socket: { remoteAddress: '9.9.9.9' } }) === '3.3.3.3', 'clientIp uses req.ip (trust-proxy computed)');
+  ok(rl.clientIp({ headers: { 'x-forwarded-for': '6.6.6.6' }, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp ignores client-supplied XFF when req.ip is absent');
+  ok(rl.clientIp({ headers: { 'x-real-ip': '5.5.5.5' }, socket: { remoteAddress: '9.9.9.9' } }) === '9.9.9.9', 'clientIp ignores client-supplied X-Real-IP');
   ok(rl.clientIp({ headers: {} }) === 'unknown', 'clientIp defaults to unknown');
 }
 

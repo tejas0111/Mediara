@@ -137,9 +137,11 @@ const section = (title, rows, mode) => `
 
 // ---------- printable emergency card + doctor summary ----------
 export function printPage({ user, mode, facts, groups, agentShort }) {
-  const allergyRows = facts.filter((f) => /allerg/i.test(f.text || ''));
-  const medRows = facts.filter((f) => /\bmg\b|takes|tablet|pill|dose|medicati/i.test(f.text || '') && !/allerg/i.test(f.text || ''));
-  const contactRows = facts.filter((f) => /contact|call|emergency|doctor|pharmacy|daughter|son/i.test(f.text || ''));
+  // Use the classifier's buckets (negation-aware) so "no known allergy" /
+  // "not allergic to X" never print under Allergies on the emergency card.
+  const allergyRows = groups.allergies || [];
+  const medRows = groups.medications || [];
+  const contactRows = groups.familyAndCare || [];
   return TOP('DoseDaughter \u2014 printable summary', mode) + `
 <main class="wrap" id="main">
   <div class="print-actions">

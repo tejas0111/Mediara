@@ -48,6 +48,9 @@ function userClientFor(address) {
 
 const app = express();
 app.disable('x-powered-by');
+// Trust exactly one proxy hop (the platform edge) so req.ip is the real client.
+// With no proxy (local dev) leave it off — never trust client-supplied XFF.
+app.set('trust proxy', process.env.TRUST_PROXY ? (Number(process.env.TRUST_PROXY) || 1) : (process.env.VERCEL === '1' ? 1 : false));
 // Security headers on every response. CSP allows inline scripts (the UI is
 // server-rendered, no build step) but blocks every external origin.
 app.use((req, res, next) => {
@@ -59,7 +62,7 @@ app.use((req, res, next) => {
   res.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'");
   next();
 });
-// Static UI assets (vendored Deep Chat bundle + our CSS/JS).
+// Static UI assets (hand-written CSS/JS in app/public).
 app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
 // 16 KB JSON bodies — chat messages and tx signatures are tiny; anything
 // larger is abuse. (Express's json parser rejects oversize with 413.)
@@ -111,6 +114,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (typeof userId !== 'string' || userId.length > 64) {
       return res.status(400).json({ error: 'userId too long' });
     }
+    // Strip control chars/newlines before the id is used as a namespace or a
+    // stored fact label — otherwise it is a stored-prompt-injection primitive.
+    const safeUser = String(userId).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48) || 'anon';
     // Identity: signed-in onboarded wallet user → their OWN MemWal account
     // (delegate client). Everyone else → the shared anonymous channel
     // (agent account on mainnet / local stand-in in dev). Never mixed.
@@ -126,9 +132,9 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (sess && !walletClient) {
       return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
     }
-    const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(userId) };
-    const client = walletClient ? walletClient.client : clientFor(userId).client;
-    const label = walletClient ? `User ${sess.address.slice(0, 10)}…` : `User ${userId}`;
+    const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
+    const client = walletClient ? walletClient.client : clientFor(safeUser).client;
+    const label = walletClient ? `User ${sess.address.slice(0, 10)}…` : `User ${safeUser}`;
 
     const recalled = await recallRelevant(client, message, 5);
     // Coded safety nets FIRST, before any LLM output:
@@ -145,10 +151,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const system = buildSystemPrompt(recalled);
       reply = await callLLM(system, message);
     }
-    // Auto-save AFTER generation only: shouldRemember gates writes (never chit-chat).
+    // Auto-save AFTER generation only, and NEVER when a safety guard fired: a
+    // blocked administration order must not be persisted as a durable fact.
     let saved = null;
-    if (shouldRemember(message)) {
-      try { saved = await rememberAndWait(client, `${label}: ${message}`); } catch { /* queue later */ }
+    if (!conflict && !interaction && shouldRemember(message)) {
+      try { saved = await rememberAndWait(client, `${label}: ${message}`); } catch { /* best-effort: a failed write is not fatal to the reply */ }
     }
     res.json({
       reply,

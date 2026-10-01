@@ -30,7 +30,7 @@ git clone https://github.com/tejas0111/dosedaughter.git
 cd dosedaughter/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 78 core + 56 wallet offline tests, no network
+npm test                    # 120 core + 55 wallet offline tests, no network
 npm run dev                 # server on :3001
 ```
 
@@ -90,7 +90,7 @@ Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.
 ## Repository layout
 
 ```
-app/                  Express server, Telegram bot, MemWal wrapper, seeder, 78 core + 56 wallet self-tests
+app/                  Express server, Telegram bot, MemWal wrapper, seeder, 120 core + 55 wallet self-tests
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -105,7 +105,7 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 134/134 offline self-tests pass (78 core + 56 wallet/crypto) | `npm test` — runs both suites; run it yourself |
+| 175/175 offline self-tests pass (120 core + 55 wallet/crypto) | `npm test` — runs both suites; run it yourself |
 
 Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc9879f605324bdbbb783`
 

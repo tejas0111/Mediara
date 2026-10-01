@@ -117,7 +117,16 @@ export function clearCookie() {
   return 'dd_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0';
 }
 export function sessionFromReq(req) {
-  const raw = req.headers.cookie || '';
-  const m = raw.match(/(?:^|;\s*)dd_session=([^;]+)/);
-  return m ? readSession(decodeURIComponent(m[1])) : null;
+  // Never throw on a malformed cookie (a client can set `dd_session=%`): a bad
+  // decode means "no session" (→ 401), not a 500.
+  try {
+    const raw = req.headers.cookie || '';
+    const m = raw.match(/(?:^|;\s*)dd_session=([^;]+)/);
+    if (!m) return null;
+    let token;
+    try { token = decodeURIComponent(m[1]); } catch { return null; }
+    return readSession(token);
+  } catch {
+    return null;
+  }
 }
