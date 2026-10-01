@@ -17,6 +17,8 @@ import {
 } from './onchain.js';
 import { upsertUser, markAccountLinked, getUser } from './userRegistry.js';
 
+const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
+
 // Graphql client is only used for tx byte building (tx.build({ client })).
 function buildClient() {
   return new SuiGraphQLClient({ url: process.env.SUI_GRAPHQL_URL || 'https://graphql.mainnet.sui.io/graphql', network: 'mainnet' });
@@ -33,7 +35,9 @@ function keypairFromHexPrivateKey(hex) {
 export async function walletStatus(address) {
   const user = getUser(address);
   let onchain = null;
-  if (!user?.accountId) onchain = await accountForOwner(address);
+  // Local mode must not make outbound Sui-mainnet calls (status is on every
+  // signed-in page load); registry-only is enough offline.
+  if (!user?.accountId && MODE === 'mainnet') onchain = await accountForOwner(address);
   const accountId = user?.accountId || onchain?.accountId || null;
   // "onboarded" means THIS server can act as the user's delegate: an account id
   // AND a delegate key on file. An account that exists onchain without a stored
@@ -159,6 +163,7 @@ export async function completeOnboarding(address, signatureBase64) {
 // linked. When `needsDelegateLink` is true the client must run the link flow
 // (prepareLinkDelegate → wallet signs → completeOnboarding) to become usable.
 export async function relinkExisting(address) {
+  if (MODE !== 'mainnet') return null; // no outbound mainnet calls in local mode
   const account = await accountForOwner(address);
   if (!account?.accountId) return null;
   const before = getUser(address); // decrypted view; null if row missing/corrupt

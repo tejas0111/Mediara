@@ -164,6 +164,7 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
       <h2>Doctor-visit summary</h2>
       <p class="muted">Compiled from recalled memory only \u2014 every line is traceable to a Walrus blob. Generated ${esc(new Date().toISOString().slice(0, 16).replace('T', ' '))} UTC.</p>
       ${section('Medications', groups.medications || [], mode)}
+      ${(groups.stopped && groups.stopped.length) ? section('Stopped / discontinued', groups.stopped, mode) : ''}
       ${section('Allergies', groups.allergies || [], mode)}
       ${section('Routine', groups.routine || [], mode)}
       ${section('Family & care', groups.familyAndCare || [], mode)}

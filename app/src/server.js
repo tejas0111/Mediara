@@ -65,7 +65,11 @@ const app = express();
 app.disable('x-powered-by');
 // Trust exactly one proxy hop (the platform edge) so req.ip is the real client.
 // With no proxy (local dev) leave it off — never trust client-supplied XFF.
-app.set('trust proxy', process.env.TRUST_PROXY ? (Number(process.env.TRUST_PROXY) || 1) : (process.env.VERCEL === '1' ? 1 : false));
+// Parse TRUST_PROXY explicitly: '0'/'false' MUST disable it (Number('0')||1 was 1).
+const tp = process.env.TRUST_PROXY;
+app.set('trust proxy', tp === undefined || tp === ''
+  ? (process.env.VERCEL === '1' ? 1 : false)
+  : (/^(?:0|false)$/i.test(tp) ? false : (Number(tp) || 1)));
 // Security headers on every response. CSP allows inline scripts (the UI is
 // server-rendered, no build step) but blocks every external origin.
 app.use((req, res, next) => {
@@ -169,6 +173,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // write their private health facts into a world-readable namespace. Fail loud.
     if (sess && !walletClient) {
       return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
+    }
+    // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
+    // must never be able to name one. Reserve the prefix for wallet sessions.
+    if (!walletClient && /^w-/i.test(safeUser)) {
+      return res.status(400).json({ error: 'that userId is reserved' });
     }
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
     const client = walletClient ? walletClient.client : clientFor(safeUser).client;
@@ -318,6 +327,9 @@ async function namespaceView(req, res) {
   const mine = sess ? userClientFor(sess.address) : null;
   if (sess && !mine) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
   const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
+  // A wallet vault is credential-scoped: refuse to resolve it anonymously. The
+  // namespace id is derivable from a public address, so it is not a secret.
+  if (!mine && /^w-/i.test(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
   const ra = await recallAllMeta(client, ALL_QUERIES, 25);
   return { userId, mode, recalled: ra.facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };
@@ -377,7 +389,7 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/wallet/status', async (req, res) => {
+app.get('/api/wallet/status', readLimiter, async (req, res) => {
   try {
     const sess = sessionFromReq(req);
     if (!sess) return res.json({ signedIn: false });
@@ -425,6 +437,10 @@ app.post('/api/wallet/relink', onboardLimiter, async (req, res) => {
     res.json({ ok: true, ...out });
   } catch (e) { fail(res, e); }
 });
+
+// Explicit terminal 404 (keeps the security headers the middleware set; the
+// default finalhandler replaces the CSP with `default-src 'none'`).
+app.use((req, res) => res.status(404).json({ error: 'not found' }));
 
 // Centralized JSON error handler (body-parser SyntaxError/413 happen before any
 // route). Never leak a stack or filesystem path; keep the API contract JSON.

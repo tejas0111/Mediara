@@ -138,6 +138,33 @@ test('write dedup: teaching the same fact twice reuses the blob', async () => {
   assert.equal(a.savedBlob, b.savedBlob);
 });
 
+test('wallet vault namespaces are not readable anonymously', async () => {
+  const addr = '0x' + 'ab'.repeat(32);
+  assert.equal((await get(`/api/summary?user=w-${addr}`)).status, 403);
+  assert.equal((await get(`/memory?user=w-${addr}`)).status, 403);
+  assert.equal((await get(`/print?user=w-${addr}`)).status, 403);
+  assert.equal((await get(`/replay?user=w-${addr}`)).status, 403);
+});
+
+test('anonymous chat cannot write to a reserved vault namespace', async () => {
+  const r = await post('/api/chat', { userId: 'w-0xabc', message: 'my mom takes Metformin 500mg at 8pm' });
+  assert.equal(r.status, 400);
+});
+
+test('/print shows discontinued medications', async () => {
+  const u = `rt-stop2-${Date.now()}`;
+  await chat(u, 'she takes Metformin 500mg every morning');
+  await chat(u, 'she stopped taking Metformin');
+  const html = await (await get(`/print?user=${u}`)).text();
+  assert.match(html, /Stopped \/ discontinued/);
+});
+
+test('unknown route keeps the strict CSP', async () => {
+  const res = await get('/nope');
+  assert.equal(res.status, 404);
+  assert.match(res.headers.get('content-security-policy') || '', /script-src 'self'/);
+});
+
 test('rate limiting: repeated chat requests eventually 429', async () => {
   const u = `rt-rl-${Date.now()}`;
   let got429 = false;
