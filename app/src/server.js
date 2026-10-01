@@ -219,9 +219,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (!conflict && !interaction && shouldRemember(message)) {
       memoryPersisted = false;
       try {
-        // Dedup: skip a write that is near-identical to an existing fact.
+        // Dedup: skip a write only when it is near-identical to an existing fact.
+        // The containment check prevents collapsing DIFFERENT facts that happen to
+        // score close (e.g. "Metformin at 8pm" vs "Metformin at 9pm").
+        const normText = (s) => String(s).toLowerCase().replace(/^user\s+\S+:\s*/i, '').replace(/\s+/g, ' ').trim();
         const near = await recallRelevant(client, message, 1);
-        if (near.length && (near[0].distance ?? 1) < 0.15) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
+        const a = normText(message), b = near.length ? normText(near[0].text) : '';
+        const isDup = near.length && (near[0].distance ?? 1) < 0.15 && (a === b || a.includes(b) || b.includes(a));
+        if (isDup) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
         else { saved = await rememberAndWait(client, `${label}: ${message}`); memoryPersisted = !!saved?.blob_id; }
       } catch { memoryPersisted = false; /* surfaced to the client below */ }
     }

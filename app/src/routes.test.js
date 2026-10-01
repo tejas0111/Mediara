@@ -165,6 +165,13 @@ test('unknown route keeps the strict CSP', async () => {
   assert.match(res.headers.get('content-security-policy') || '', /script-src 'self'/);
 });
 
+test('near-but-different facts are not deduped', async () => {
+  const u = `rt-dedup2-${Date.now()}`;
+  const a = await chat(u, 'Mom takes Metformin 500mg at 8pm');
+  const b = await chat(u, 'Mom takes Metformin 500mg at 9pm');
+  assert.notEqual(a.savedBlob, b.savedBlob);
+});
+
 test('rate limiting: repeated chat requests eventually 429', async () => {
   const u = `rt-rl-${Date.now()}`;
   let got429 = false;
