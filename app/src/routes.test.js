@@ -111,6 +111,33 @@ test('summary classification excludes negated allergies', async () => {
   assert.ok(s.medications.length >= 1, 'the medication should be classified');
 });
 
+test('non-demo fact appears on all whole-namespace reads', async () => {
+  const u = `rt-nondemo-${Date.now()}`;
+  await chat(u, 'She takes levothyroxine 50mcg at 7am');
+  const s = await (await get(`/api/summary?user=${u}`)).json();
+  assert.ok(s.medications.some((m) => /levothyroxine/i.test(m)), 'mcg drug should be classified as a medication');
+  assert.ok((await (await get(`/memory?user=${u}`)).text()).includes('levothyroxine'));
+  assert.ok((await (await get(`/print?user=${u}`)).text()).includes('levothyroxine'));
+  assert.ok((await (await get(`/replay?user=${u}`)).text()).includes('levothyroxine'));
+});
+
+test('discontinued medication is neither a current med nor an allergy', async () => {
+  const u = `rt-stop-${Date.now()}`;
+  await chat(u, 'she takes Metformin 500mg every morning');
+  await chat(u, 'she stopped taking Metformin');
+  const s = await (await get(`/api/summary?user=${u}`)).json();
+  assert.ok(s.medications.some((m) => /Metformin/i.test(m)));
+  assert.deepEqual(s.allergies, [], 'a stopped med must not be classified as an allergy');
+  assert.ok((s.stopped || []).some((m) => /stopped taking/i.test(m)));
+});
+
+test('write dedup: teaching the same fact twice reuses the blob', async () => {
+  const u = `rt-dedup-${Date.now()}`;
+  const a = await chat(u, 'Mom takes Amlodipine 5mg at 8am');
+  const b = await chat(u, 'Mom takes Amlodipine 5mg at 8am');
+  assert.equal(a.savedBlob, b.savedBlob);
+});
+
 test('rate limiting: repeated chat requests eventually 429', async () => {
   const u = `rt-rl-${Date.now()}`;
   let got429 = false;

@@ -92,7 +92,19 @@ const readLimiter = limiter({ keyFn: (req) => `read:${clientIp(req)}`, limit: 60
 // Nonce minting is cheap but unbounded; cap it (the nonce Map would otherwise grow).
 const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientIp(req)}`, limit: 30, windowMs: 60_000 });
 
-async function callLLM(system, userMessage) {
+// Bounded per-namespace conversation transcript so the model sees recent turns,
+// not just recalled facts (facts are durable; this is ephemeral context).
+const transcripts = new Map();
+function historyFor(ns) { return transcripts.get(ns) || []; }
+function rememberTurn(ns, role, content) {
+  const h = transcripts.get(ns) || [];
+  h.push({ role, content: String(content).slice(0, 500) });
+  while (h.length > 6) h.shift();
+  transcripts.set(ns, h);
+  if (transcripts.size > 2000) transcripts.clear();
+}
+
+async function callLLM(system, userMessage, history = []) {
   // OpenRouter (Gemini Flash default — Beyond Big Two eligible). Falls back to echo if no key.
   // Resilience: explicit max_tokens (default 65k exceeds free-tier credit), then free-model
   // fallback chain on 402/429 so the demo NEVER dies mid-judge-test. Errors stay graceful.
@@ -109,7 +121,7 @@ async function callLLM(system, userMessage) {
         body: JSON.stringify({
           model: m,
           max_tokens: 400,
-          messages: [{ role: 'system', content: system }, { role: 'user', content: userMessage }],
+          messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: userMessage }],
         }),
       });
       const data = await res.json();
@@ -151,6 +163,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
     const client = walletClient ? walletClient.client : clientFor(safeUser).client;
     const label = walletClient ? `User ${sess.address.slice(0, 10)}…` : `User ${safeUser}`;
+    const nsKey = identity.ns;
+    const history = historyFor(nsKey);
 
     const recalled = await recallRelevant(client, message, 5);
     // Coded safety nets FIRST, before any LLM output:
@@ -163,15 +177,27 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     } else if (interaction) {
       const lead = interaction.severity === 'high' ? 'STOP' : 'CAUTION';
       reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. Confirm with your doctor — this is not medical advice.`;
+    } else if (!process.env.OPENROUTER_API_KEY) {
+      // Keyless: answer FROM MEMORY deterministically — never a debug stub.
+      reply = recalled.length
+        ? `Here's what I remember about this person:\n- ${recalled.slice(0, 4).map((r) => String(r.text).replace(/^User\s+\S+:\s*/i, '')).join('\n- ')}\n\n(Add OPENROUTER_API_KEY for a conversational reply.) Confirm with your doctor — this is not medical advice.`
+        : `I don't have any memories for this user yet. Teach me 3 facts: daily meds with times, allergies, and routine.`;
     } else {
       const system = buildSystemPrompt(recalled);
-      reply = await callLLM(system, message);
+      reply = await callLLM(system, message, history);
     }
+    rememberTurn(nsKey, 'user', message);
+    rememberTurn(nsKey, 'assistant', reply);
     // Auto-save AFTER generation only, and NEVER when a safety guard fired: a
     // blocked administration order must not be persisted as a durable fact.
     let saved = null;
     if (!conflict && !interaction && shouldRemember(message)) {
-      try { saved = await rememberAndWait(client, `${label}: ${message}`); } catch { /* best-effort: a failed write is not fatal to the reply */ }
+      try {
+        // Dedup: skip a write that is near-identical to an existing fact.
+        const near = await recallRelevant(client, message, 1);
+        if (near.length && (near[0].distance ?? 1) < 0.15) saved = { blob_id: near[0].blob_id, deduped: true };
+        else saved = await rememberAndWait(client, `${label}: ${message}`);
+      } catch { /* best-effort: a failed write is not fatal to the reply */ }
     }
     res.json({
       reply,
@@ -190,23 +216,10 @@ app.get('/api/summary', readLimiter, async (req, res) => {
   // Doctor-visit summary compiled from recall ONLY — no chat history, no model memory.
   try {
     res.setHeader('Cache-Control', 'no-store');
-    // Mirror /memory: a signed-in onboarded user gets THEIR OWN vault, not demo-mom.
-    const sess = sessionFromReq(req);
-    // Reads must not silently ignore an expired session that /api/chat rejects.
-    if (!sess && hasSessionCookie(req)) return res.status(401).json({ error: 'Your session expired — sign in again to see your vault.' });
-    const mine = sess ? userClientFor(sess.address) : null;
-    if (sess && !mine) return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding.' });
-    const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
-    const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
-    const recalled = await recallAll(client, [
-      'medications allergies routine family',
-      'Metformin Amlodipine insulin dose',
-      'allergic rash ibuprofen',
-      'dinner bedtime morning reminder',
-      'daughter son doctor pharmacy emergency',
-      'blood sugar log target',
-      'Hindi WhatsApp refills',
-    ], 25);
+    // Same shared whole-namespace read as /memory, /print, /replay (no drift).
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    const { userId, mode, recalled } = view;
     const facts = recalled.map((r) => r.text);
     const summary = {
       user: userId,
@@ -223,26 +236,14 @@ app.get('/api/summary', readLimiter, async (req, res) => {
 app.get('/memory', readLimiter, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
-    // A signed-in onboarded wallet user sees THEIR OWN vault; everyone else
-    // sees the requested (or default demo) namespace.
-    const sess = sessionFromReq(req);
-    if (!sess && hasSessionCookie(req)) return res.status(401).send('Session expired — <a href="/">sign in again</a>.');
-    const mine = sess ? userClientFor(sess.address) : null;
-    if (sess && !mine) return res.status(409).send('Your memory vault is not linked — reconnect your wallet. <a href="/">Back</a>');
-    const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
-    const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
-    const recalled = await recallAll(client, [
-      'medications allergies routine family',
-      'takes dose mg pill',
-      'allergic rash',
-      'dinner bedtime routine',
-      'daughter doctor pharmacy emergency contact',
-    ], 25);
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    const { userId, mode, recalled, isVault, address } = view;
     res.send(memoryPage({
-      user: mine ? `${sess.address.slice(0, 10)}… (your vault)` : userId,
+      user: isVault ? `${String(address).slice(0, 10)}… (your vault)` : userId,
       mode,
       rows: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })),
-      agentShort: mine ? null : String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10),
+      agentShort: isVault ? null : String(process.env.MEMWAL_ACCOUNT_ID || '').slice(0, 10),
     }));
   } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
@@ -283,8 +284,8 @@ app.get('/demo', readLimiter, async (req, res) => {
 // Shared multi-angle queries for whole-namespace reads.
 const ALL_QUERIES = [
   'medications allergies routine family',
-  'Metformin Amlodipine insulin dose mg',
-  'allergic rash ibuprofen avoid',
+  'takes taking take dose pill tablet prescription mg mcg daily', // drug-agnostic
+  'allergic rash avoid reaction intolerance',
   'dinner bedtime morning reminder routine',
   'daughter son doctor pharmacy emergency contact',
   'blood sugar log target fasting',
@@ -299,7 +300,7 @@ async function namespaceView(req, res) {
   const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
   const recalled = await recallAll(client, ALL_QUERIES, 25);
-  return { userId, mode, recalled };
+  return { userId, mode, recalled, isVault: !!mine, address: sess?.address || null };
 }
 
 // Printable emergency card + doctor-visit summary (recall only).

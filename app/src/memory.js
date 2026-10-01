@@ -153,12 +153,13 @@ const ALLERGY_SIGNAL_RE = new RegExp(
     '\\bmakes?\\b[^.;,]{0,30}\\bsick\\b',
     '\\b(?:gives?|gave)\\b[^.;,]{0,30}\\brash\\b',
     "\\bcan(?:no|'?t|not)\\s+(?:have|take)\\b",
-    '\\bstop(?:s|ped|ping)?\\s+taking\\b',
-    '\\bswitch(?:ed|es|ing)?\\s+from\\b',
     `\\bno\\s+(?:more\\s+)?(?:${DRUG_ALT})\\b`,
   ].join('|'),
   'i',
 );
+// Discontinuation is NOT an allergy: "stopped taking Metformin" must not print
+// under Allergies on the emergency card, and must not count as a current med.
+const DISCONTINUE_RE = /\bstop(?:s|ped|ping)?\s+taking\b|\bno\s+longer\s+(?:taking|on)\b|\bdiscontinued\b|\bswitch(?:ed|es|ing)?\s+from\b|\bcame\s+off\b|\bnot\s+taking\b/i;
 const MED_SIGNAL_RE = /\btakes?\b|\btaking\b|\bmg\b|\btablet|\bpill|\bdose|\bprescription|\bmedicati/i;
 const isMedFact = (text) => MED_SIGNAL_RE.test(String(text || ''));
 
@@ -230,6 +231,7 @@ export function shouldRemember(text) {
   // Durable safety/care facts — ONE shared definition also used by the guards,
   // so every saved allergy phrasing is readable by the conflict/interaction net.
   if (hasAllergySignal(t)) return true;
+  if (DISCONTINUE_RE.test(t)) return true;
   // Care facts the emergency card / doctor summary exist to hold (contacts,
   // pharmacy, doctor, language, blood-sugar targets) — previously dropped.
   if (/\b(?:emergency|contact|pharmacy|refill|daughter|\bson\b|father|mother|whatsapp|hindi|blood\s+sugar|fasting|clinic|doctor|appointment|nurse|caregiver)\b/i.test(t)) return true;
@@ -494,17 +496,19 @@ export async function recallAll(client, queries, limit = 20) {
 // "daughter Priya manages weekend doses" lands in family, not medications.
 // Allergies ALWAYS win — misfiling an allergy is a safety bug.
 const CLASS_RULES = {
-  medications: [/metformin/i, /amlodipine/i, /\bmg\b/i, /\bpill/i, /tablet/i, /insulin/i, /\btakes?\b/i, /\btaking\b/i, /\bdose/i, /medicati/i, /prescript/i],
+  medications: [/metformin/i, /amlodipine/i, /\bmg\b/i, /\bmcg\b/i, /\b\d+\s?(?:mg|mcg|ml|iu|units?)\b/i, /\bpill/i, /tablet/i, /insulin/i, /\btakes?\b/i, /\btaking\b/i, /\bdose/i, /medicati/i, /prescript/i],
   routine: [/dinner/i, /bedtime/i, /breakfast/i, /\blunch\b/i, /reminder/i, /morning/i, /at \d/i, /\d\s?(am|pm)\b/i, /\bwalk/i],
   familyAndCare: [/daughter/i, /\bson\b/i, /\bmom\b/i, /\bdad\b/i, /doctor/i, /pharmacy/i, /emergency/i, /contact/i, /\bcall/i, /visit/i, /priya|arjun|\brao\b/i, /hindi/i, /whatsapp/i],
 };
 export function classifyFacts(facts) {
-  const out = { medications: [], allergies: [], routine: [], familyAndCare: [], unclassified: [] };
+  const out = { medications: [], allergies: [], stopped: [], routine: [], familyAndCare: [], unclassified: [] };
   for (const raw of facts || []) {
     const text = String(raw).replace(/^User\s+\S+:\s*/i, '');
     // Only ACTIVE (non-negated) allergy clauses count — "no known allergy" and
     // "not allergic to ibuprofen" must not be printed on the emergency card.
     if (isActiveAllergyFact(text)) { out.allergies.push(raw); continue; }
+    // A discontinued medication is neither a current med nor an allergy.
+    if (DISCONTINUE_RE.test(text)) { out.stopped.push(raw); continue; }
     let best = 'unclassified', bestScore = 0;
     for (const [cat, rules] of Object.entries(CLASS_RULES)) {
       const score = rules.reduce((n, re) => n + (re.test(text) ? 1 : 0), 0);

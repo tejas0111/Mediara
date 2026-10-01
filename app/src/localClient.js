@@ -61,7 +61,8 @@ function stem(w) {
 
 function norm(tok) {
   if (DRUGS.has(tok)) return 'med';
-  if (/\d/.test(tok) && tok.includes('mg')) return 'med';
+  if (/\d/.test(tok) && /(mg|mcg|ml|iu|units?)/.test(tok)) return 'med';
+  if (/\b(?:tablet|pill|dose|prescription|medication|mcg)\b/.test(tok)) return 'med';
   if (CANON.has(tok)) return CANON.get(tok);
   return stem(tok);
 }

@@ -316,5 +316,14 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok(/untrusted user data/i.test(inj), 'regression: system prompt declares memory as untrusted data');
 }
 
+// --- Regression: classifyFacts handles discontinuation + dose units (cycle 2) ---
+{
+  const g = classifyFacts(['takes Metformin 500mg every morning', 'stopped taking Metformin', 'She takes levothyroxine 50mcg at 7am']);
+  ok(g.medications.some((t) => /Metformin 500mg/.test(t)), 'classify: current med in medications');
+  ok((g.stopped || []).some((t) => /stopped taking/.test(t)), 'classify: discontinuation in the stopped bucket');
+  ok(g.allergies.length === 0, 'classify: a stopped med is NOT an allergy');
+  ok(g.medications.some((t) => /levothyroxine 50mcg/.test(t)), 'classify: mcg drug is a medication, not routine');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
