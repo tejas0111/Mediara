@@ -25,9 +25,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 // Escape anything echoed into an HTML error page (never reflect raw upstream text).
 const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Map an error to a status. Client-state errors carry `status` (e.g. 409 from
+// onboarding); everything else is a real 500 and is logged, never echoed raw.
+function fail(res, e) {
+  const code = (e && Number.isInteger(e.status) && e.status >= 400 && e.status < 600) ? e.status : 500;
+  if (code >= 500) console.error('request error:', String((e && e.message) || e).slice(0, 200));
+  res.status(code).json({ error: code >= 500 ? 'Internal error' : String((e && e.message) || e) });
+}
 // A session cookie that fails to parse means EXPIRED (not anonymous). Used to
 // avoid silently downgrading an expired signed-in user to the shared channel.
 const hasSessionCookie = (req) => /(?:^|;\s*)dd_session=/.test(req.headers.cookie || '');
+// Query-string user id: coerce arrays/objects and clamp length (never echo raw).
+const clampUser = (v) => { const s = Array.isArray(v) ? v[0] : v; return String(s == null ? '' : s).slice(0, 64) || 'demo-mom'; };
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 function clientFor(userId) {
@@ -42,8 +51,14 @@ function clientFor(userId) {
 function userClientFor(address) {
   const user = getUser(address);
   if (!user?.accountId || !user?.delegatePrivateKey) return null;
-  const ns = namespaceFor(`w-${address.slice(0, 10)}`);
-  return { client: createDelegateClient({ delegatePrivateKey: user.delegatePrivateKey, accountId: user.accountId, namespace: ns }), ns };
+  // Use the full address (namespaceFor bounds it to 48 chars) so two wallets can
+  // never collide into one vault namespace.
+  const ns = namespaceFor(`w-${address}`);
+  // Respect MEMWAL_MODE: in local dev a wallet user must NOT hit the live relayer.
+  const client = MODE === 'mainnet'
+    ? createDelegateClient({ delegatePrivateKey: user.delegatePrivateKey, accountId: user.accountId, namespace: ns })
+    : createLocalClient({ namespace: ns });
+  return { client, ns };
 }
 
 const app = express();
@@ -74,6 +89,8 @@ const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientIp(req)}`, limit: 1
 const chatLimiter = limiter({ keyFn: (req) => `chat:${clientIp(req)}`, limit: 30, windowMs: 60_000 });
 // Read routes fan out to several recall queries; cap them too (audit M9).
 const readLimiter = limiter({ keyFn: (req) => `read:${clientIp(req)}`, limit: 60, windowMs: 60_000 });
+// Nonce minting is cheap but unbounded; cap it (the nonce Map would otherwise grow).
+const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientIp(req)}`, limit: 30, windowMs: 60_000 });
 
 async function callLLM(system, userMessage) {
   // OpenRouter (Gemini Flash default — Beyond Big Two eligible). Falls back to echo if no key.
@@ -111,9 +128,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 500) {
       return res.status(400).json({ error: 'message must be 1-500 chars' });
     }
-    if (typeof userId !== 'string' || userId.length > 64) {
-      return res.status(400).json({ error: 'userId too long' });
-    }
+    if (typeof userId !== 'string') return res.status(400).json({ error: 'userId must be a string' });
+    if (userId.length > 64) return res.status(400).json({ error: 'userId too long' });
     // Strip control chars/newlines before the id is used as a namespace or a
     // stored fact label — otherwise it is a stored-prompt-injection primitive.
     const safeUser = String(userId).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48) || 'anon';
@@ -164,10 +180,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       memoryScope: identity.ns,
       identity: identity.kind,
       savedBlob: saved?.blob_id || null,
-      mode: walletClient ? 'mainnet' : (MODE === 'mainnet' ? 'mainnet' : 'local'),
+      mode: MODE,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     });
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 app.get('/api/summary', readLimiter, async (req, res) => {
@@ -176,9 +192,12 @@ app.get('/api/summary', readLimiter, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     // Mirror /memory: a signed-in onboarded user gets THEIR OWN vault, not demo-mom.
     const sess = sessionFromReq(req);
+    // Reads must not silently ignore an expired session that /api/chat rejects.
+    if (!sess && hasSessionCookie(req)) return res.status(401).json({ error: 'Your session expired — sign in again to see your vault.' });
     const mine = sess ? userClientFor(sess.address) : null;
-    const userId = mine ? mine.ns.replace(/^user-/, '') : (req.query.user || 'demo-mom');
-    const { client, mode } = mine ? { client: mine.client, mode: 'mainnet' } : clientFor(userId);
+    if (sess && !mine) return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding.' });
+    const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
+    const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
     const recalled = await recallAll(client, [
       'medications allergies routine family',
       'Metformin Amlodipine insulin dose',
@@ -198,7 +217,7 @@ app.get('/api/summary', readLimiter, async (req, res) => {
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     };
     res.json(summary);
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 app.get('/memory', readLimiter, async (req, res) => {
@@ -207,9 +226,11 @@ app.get('/memory', readLimiter, async (req, res) => {
     // A signed-in onboarded wallet user sees THEIR OWN vault; everyone else
     // sees the requested (or default demo) namespace.
     const sess = sessionFromReq(req);
+    if (!sess && hasSessionCookie(req)) return res.status(401).send('Session expired — <a href="/">sign in again</a>.');
     const mine = sess ? userClientFor(sess.address) : null;
-    const userId = mine ? mine.ns.replace(/^user-/, '') : (req.query.user || 'demo-mom');
-    const { client, mode } = mine ? { client: mine.client, mode: 'mainnet' } : clientFor(userId);
+    if (sess && !mine) return res.status(409).send('Your memory vault is not linked — reconnect your wallet. <a href="/">Back</a>');
+    const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
+    const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
     const recalled = await recallAll(client, [
       'medications allergies routine family',
       'takes dose mg pill',
@@ -230,7 +251,7 @@ app.get('/', (req, res) => {
   res.send(chatPage({ mode: MODE, model: process.env.LLM_MODEL || 'google/gemini-2.5-flash' }));
 });
 
-app.get('/demo', async (req, res) => {
+app.get('/demo', readLimiter, async (req, res) => {
   // LIVE before/after: same question, real recall against two namespaces.
   // demo-day1 is never seeded (empty); demo-day7 fills via POST /api/chat teaches.
   try {
@@ -270,11 +291,13 @@ const ALL_QUERIES = [
   'warfarin sertraline statin nitrate blood thinner',
 ];
 
-async function namespaceView(req) {
+async function namespaceView(req, res) {
   const sess = sessionFromReq(req);
+  if (!sess && hasSessionCookie(req)) { res.status(401).json({ error: 'Your session expired — sign in again.' }); return null; }
   const mine = sess ? userClientFor(sess.address) : null;
-  const userId = mine ? mine.ns.replace(/^user-/, '') : (req.query.user || 'demo-mom');
-  const { client, mode } = mine ? { client: mine.client, mode: 'mainnet' } : clientFor(userId);
+  if (sess && !mine) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
+  const userId = mine ? mine.ns.replace(/^user-/, '') : clampUser(req.query.user);
+  const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
   const recalled = await recallAll(client, ALL_QUERIES, 25);
   return { userId, mode, recalled };
 }
@@ -283,7 +306,9 @@ async function namespaceView(req) {
 app.get('/print', readLimiter, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
-    const { userId, mode, recalled } = await namespaceView(req);
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    const { userId, mode, recalled } = view;
     const facts = recalled.map((r) => ({ text: r.text, blob_id: r.blob_id }));
     const byText = new Map(facts.map((r) => [r.text, r]));
     const g = classifyFacts(facts.map((r) => r.text));
@@ -297,7 +322,9 @@ app.get('/print', readLimiter, async (req, res) => {
 app.get('/replay', readLimiter, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
-    const { userId, mode, recalled } = await namespaceView(req);
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    const { userId, mode, recalled } = view;
     res.send(replayPage({ user: userId, mode, facts: recalled.map((r) => ({ text: r.text, blob_id: r.blob_id })) }));
   } catch (e) { res.status(500).send(`<pre>${esc(String(e.message || e))}</pre>`); }
 });
@@ -305,7 +332,7 @@ app.get('/replay', readLimiter, async (req, res) => {
 // ---------------- wallet identity + per-user memory ----------------
 // Sign-in: the browser asks the wallet to sign a FIXED personal message; we
 // verify the signature server-side and set an HMAC session cookie. No fee.
-app.get('/api/auth/message', (req, res) => {
+app.get('/api/auth/message', nonceLimiter, (req, res) => {
   const { nonce, message } = issueNonce();
   res.setHeader('Cache-Control', 'no-store');
   res.json({ nonce, message });
@@ -318,10 +345,10 @@ app.post('/api/auth/verify', authLimiter, async (req, res) => {
     if (!consumeNonce(nonce)) return res.status(401).json({ error: 'sign-in challenge expired or already used — reload and try again' });
     const ok = await verifyWalletSignature({ address, signature, nonce });
     if (!ok) return res.status(401).json({ error: 'signature verification failed' });
-    const secure = req.secure || req.headers['x-forwarded-proto'] === 'https';
+    const secure = req.secure || (app.get('trust proxy') && req.headers['x-forwarded-proto'] === 'https');
     res.setHeader('Set-Cookie', sessionCookie(issueSession(ok.address), { secure }));
     res.json({ ok: true, address: ok.address });
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -335,7 +362,7 @@ app.get('/api/wallet/status', async (req, res) => {
     if (!sess) return res.json({ signedIn: false });
     const status = await walletStatus(sess.address);
     res.json({ signedIn: true, ...status });
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 // Onboarding step 1a (fresh users): tx bytes for create_account.
@@ -344,7 +371,7 @@ app.post('/api/wallet/onboard/create', onboardLimiter, async (req, res) => {
     const sess = sessionFromReq(req);
     if (!sess) return res.status(401).json({ error: 'sign in first' });
     res.json(await prepareCreateAccount(sess.address));
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 // Onboarding step 1b (fresh users after tx 1; existing users): link delegate.
@@ -353,7 +380,7 @@ app.post('/api/wallet/onboard/link', onboardLimiter, async (req, res) => {
     const sess = sessionFromReq(req);
     if (!sess) return res.status(401).json({ error: 'sign in first' });
     res.json(await prepareLinkDelegate(sess.address));
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 // Onboarding step 2: submit the visitor-signed transaction.
@@ -364,7 +391,7 @@ app.post('/api/wallet/onboard/complete', onboardLimiter, async (req, res) => {
     const { signature } = req.body || {};
     if (typeof signature !== 'string' || signature.length < 50) return res.status(400).json({ error: 'missing signature' });
     res.json(await completeOnboarding(sess.address, signature));
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
 });
 
 // Recovery: re-link an account that exists onchain but is missing locally.
@@ -375,7 +402,18 @@ app.post('/api/wallet/relink', onboardLimiter, async (req, res) => {
     const out = await relinkExisting(sess.address);
     if (!out) return res.status(404).json({ error: 'no account found onchain for this address' });
     res.json({ ok: true, ...out });
-  } catch (e) { res.status(500).json({ error: String(e.message || e) }); }
+  } catch (e) { fail(res, e); }
+});
+
+// Centralized JSON error handler (body-parser SyntaxError/413 happen before any
+// route). Never leak a stack or filesystem path; keep the API contract JSON.
+app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
+  if (res.headersSent) return next(err);
+  const code = err?.status || err?.statusCode || 500;
+  if (err?.type === 'entity.too.large' || code === 413) return res.status(413).json({ error: 'request body too large' });
+  if (err instanceof SyntaxError && 'body' in err) return res.status(400).json({ error: 'malformed JSON' });
+  if (code >= 500) console.error('unhandled error:', String(err?.message || err).slice(0, 200));
+  res.status(code >= 400 && code < 600 ? code : 500).json({ error: code >= 500 ? 'Internal error' : String(err?.message || err) });
 });
 
 const port = process.env.PORT || 3001;

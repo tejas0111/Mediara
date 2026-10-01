@@ -22,6 +22,10 @@ function buildClient() {
   return new SuiGraphQLClient({ url: process.env.SUI_GRAPHQL_URL || 'https://graphql.mainnet.sui.io/graphql', network: 'mainnet' });
 }
 
+// Client-state errors (user skipped a step / wrong order) carry a status so the
+// route returns 4xx, not a misleading 500.
+function clientError(message, status = 409) { const e = new Error(message); e.status = status; return e; }
+
 function keypairFromHexPrivateKey(hex) {
   return Ed25519Keypair.fromSecretKey(Uint8Array.from(Buffer.from(String(hex).replace(/^0x/, ''), 'hex')));
 }
@@ -71,7 +75,7 @@ export async function prepareCreateAccount(address) {
 export async function prepareLinkDelegate(address) {
   const user = getUser(address);
   let accountId = user?.accountId || (await accountForOwner(address))?.accountId || null;
-  if (!accountId) throw new Error('No MemWalAccount found for this address — create one first');
+  if (!accountId) throw clientError('No MemWalAccount found for this address — create one first', 409);
   // Recovery path: if we have an onchain account but no delegate key on file
   // (registry row lost on redeploy), generate + persist a fresh key now and link
   // it. Without this, a "needsRelink" user could never become usable again.
@@ -100,14 +104,22 @@ export async function prepareLinkDelegate(address) {
 export async function completeOnboarding(address, signatureBase64) {
   const user = getUser(address);
   if (!user?.pendingTxBytes || !user?.pendingPhase) {
-    throw new Error('No onboarding in progress for this address — call prepare first');
+    throw clientError('No onboarding in progress for this address — call prepare first', 409);
   }
-  const res = await executeSigned(
-    Uint8Array.from(Buffer.from(user.pendingTxBytes, 'base64')),
-    signatureBase64,
-  );
-  const digest = res?.digest || null;
-  upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
+  // Submit. Do NOT clear the pending state yet: if verification is transiently
+  // unavailable (indexer lag), the user can retry. If the tx already landed on a
+  // previous attempt, tolerate the "already executed" error and go verify.
+  let digest = null;
+  try {
+    const res = await executeSigned(
+      Uint8Array.from(Buffer.from(user.pendingTxBytes, 'base64')),
+      signatureBase64,
+    );
+    digest = res?.digest || null;
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (!/already|executed|duplicate|exists|consumed|invalid object/i.test(msg)) throw e;
+  }
 
   if (user.pendingPhase === 'create') {
     // Account id arrives via AccountCreated events (sender = the user).
@@ -117,11 +129,12 @@ export async function completeOnboarding(address, signatureBase64) {
       if (!account) await new Promise((r) => setTimeout(r, 3000));
     }
     if (!account?.accountId) {
-      throw new Error(`Transaction ${digest || ''} landed but the AccountCreated event is not indexed yet — retry /api/wallet/status in a few seconds`);
+      throw clientError(`Transaction ${digest || ''} landed but the AccountCreated event is not indexed yet — retry /api/wallet/status in a few seconds`, 409);
     }
     const check = await verifyAccount(account.accountId, { expectOwner: address });
     if (!check.ok) throw new Error(`Account verification failed: ${check.reason}`);
     markAccountLinked(address, account.accountId);
+    upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
     return { stage: 'created', accountId: account.accountId, digest, nextStep: 'link' };
   }
 
@@ -133,6 +146,7 @@ export async function completeOnboarding(address, signatureBase64) {
     expectDelegateAddress: user.delegateAddress,
   });
   if (!check.ok) throw new Error(`Link verification failed: ${check.reason}`);
+  upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
   return { stage: 'linked', accountId, digest, nextStep: null };
 }
 

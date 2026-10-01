@@ -230,6 +230,9 @@ export function shouldRemember(text) {
   // Durable safety/care facts — ONE shared definition also used by the guards,
   // so every saved allergy phrasing is readable by the conflict/interaction net.
   if (hasAllergySignal(t)) return true;
+  // Care facts the emergency card / doctor summary exist to hold (contacts,
+  // pharmacy, doctor, language, blood-sugar targets) — previously dropped.
+  if (/\b(?:emergency|contact|pharmacy|refill|daughter|\bson\b|father|mother|whatsapp|hindi|blood\s+sugar|fasting|clinic|doctor|appointment|nurse|caregiver)\b/i.test(t)) return true;
   // Meds / caregiver facts / routines. Bare meal words are deliberately NOT
   // enough ("dinner was nice" is chit-chat); a time/context is required.
   return /i take|\btakes?\b|\btaking\b|my (mom|dad|dose|routine|mother|father)|\bevery day\b|\bdaily\b|\bmedication\b|prescription|\bmeds?\b|\bpill|remind|\bmg\b|\d\s?mg|\d:\d|\d\s?(am|pm)\b|\b(?:dinner|breakfast|lunch)\b.*\bat\s+\d|\bbedtime\b|\broutine\b/.test(t);
@@ -247,7 +250,7 @@ export function shouldRemember(text) {
 // "Should I avoid giving her ibuprofen?" still blocks. Shared by both guards.
 // Administration verbs/units: their presence means the message is an ORDER or
 // ask to actually give the drug, not a lesson, so it must reach the guard.
-const ADMIN_VERB_RE = /\b(?:give|gives|gave|giving|take|takes|took|taking|administer|administered|administering|dose|dosed|dosing|inject|injected|injecting|injection|mg|tablet|tablets|pill|pills)\b/i;
+const ADMIN_VERB_RE = /\b(?:give|gives|gave|giving|take|takes|took|taking|administer|administered|administering|dose|dosed|dosing|inject|injected|injecting|injection|use|uses|used|using|tablet|tablets|pill|pills)\b|\d\s?(?:mg|mcg|ml|units?|iu)\b|\bmgs?\b|\bswitch(?:ed|es|ing)?\s+\w+\s+to\b/i;
 const TEACHING_SIGNAL_RE = /\ballerg|intoleran|\bavoid(?:s|ed|ing)?\b|\bcan(?:no|'?t|not)\s+(?:have|take)\b|\breaction\s+to\b|\bhad\s+a\s+reaction\b|\bmakes?\b[^.;,]{0,30}\bsick\b/i;
 export function isTeachingStatement(message) {
   const m = String(message ?? '');

@@ -15,6 +15,8 @@ import {
   createClient,
   shouldRemember,
   findConflict,
+  findInteraction,
+  classifyFacts,
   rememberAndWait,
   recallRelevant,
   buildSystemPrompt,
@@ -52,7 +54,7 @@ async function callLLM(system, userMessage) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   const model = process.env.LLM_MODEL || 'google/gemini-2.5-flash';
   if (!apiKey) return `[no LLM key] system would inject ${system.length} chars of memory. You said: ${userMessage}`;
-  const models = [model, 'inclusionai/ling-3.0-flash-vl:free', 'liquid/lfm-2.5-2.6b:free'].filter((m, i, a) => a.indexOf(m) === i);
+  const models = [model, 'inclusionai/ling-3.0-flash-vl:free', 'liquid/lfm-2.5-2.6b:free', 'nex-agi/nex-n2.5-mini:free'].filter((m, i, a) => a.indexOf(m) === i);
   for (const m of models) {
     try {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -84,15 +86,9 @@ function formatMemory(recalled) {
     .join('\n');
 }
 
+// Reuse the shared, negation-aware classifier so Telegram and web agree.
 function compileSummary(recalled) {
-  const facts = recalled.map((r) => r.text);
-  const pick = (re) => facts.filter((t) => re.test(String(t).toLowerCase()));
-  return {
-    medications: pick(/take|mg|dose|pill|med/),
-    allergies: pick(/allerg/),
-    routine: pick(/routine|dinner|bedtime|morning|reminder|walk/),
-    familyAndCare: pick(/mom|dad|daughter|son|doctor|pharmacy|emergency|contact|visit|hindi|whatsapp/),
-  };
+  return classifyFacts(recalled.map((r) => r.text));
 }
 
 function resetLocalNamespace(ns) {
@@ -100,7 +96,9 @@ function resetLocalNamespace(ns) {
   try {
     const db = JSON.parse(fs.readFileSync(store, 'utf8'));
     if (db.namespaces) delete db.namespaces[ns];
-    fs.writeFileSync(store, JSON.stringify(db, null, 2));
+    const tmp = store + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+    fs.renameSync(tmp, store);
     return true;
   } catch {
     return false;
@@ -142,22 +140,28 @@ bot.on('message', async (msg) => {
     }
     if (text.startsWith('/')) return void (await bot.sendMessage(chatId, 'Commands: /start /memory /summary /reset'));
 
-    const { client, mode } = clientFor(chatId);
+    const { client } = clientFor(chatId);
     const recalled = await recallRelevant(client, text, 5);
-    // Coded safety net FIRST (same as web): allergy conflict blocks before any LLM output.
+    // Coded safety nets FIRST (identical to web): allergy conflict, then curated
+    // drug–drug interaction. Neither must differ between channels.
     const conflict = findConflict(text, recalled);
+    const interaction = conflict ? null : findInteraction(text, recalled);
     let reply;
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. ${DISCLAIMER}`;
+    } else if (interaction) {
+      const lead = interaction.severity === 'high' ? 'STOP' : 'CAUTION';
+      reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. ${DISCLAIMER}`;
     } else {
       reply = await callLLM(buildSystemPrompt(recalled), text);
     }
     let savedNote = '';
-    if (shouldRemember(text)) {
+    // Never persist a message a guard just blocked.
+    if (!conflict && !interaction && shouldRemember(text)) {
       try {
         const saved = await rememberAndWait(client, `User tg-${chatId}: ${text}`);
         if (saved?.blob_id) savedNote = ` (saved ${saved.blob_id})`;
-      } catch { /* queue later */ }
+      } catch { /* best-effort: a failed write is not fatal */ }
     }
     await bot.sendMessage(chatId, `${reply}${savedNote}\n${DISCLAIMER}`);
   } catch (e) {

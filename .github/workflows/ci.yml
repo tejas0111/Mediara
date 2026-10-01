@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Syntax check
+        run: |
+          for f in src/*.js public/app.js; do node --check "$f"; done
+      - name: Unit + wallet tests
+        run: npm test
+      - name: Red-team guard eval
+        run: npm run eval
