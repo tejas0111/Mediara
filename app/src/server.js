@@ -51,9 +51,25 @@ const normalizeUser = (v, fallback = 'demo-mom') => {
 const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
+
+// Reuse MemWal clients: constructing one per request repeats the relayer
+// /version + /config + Seal-session handshake (~3s) on every mainnet call. Cache
+// by key with a TTL below the Seal session expiry (5 min).
+const CLIENT_TTL_MS = 4 * 60 * 1000;
+const clientCache = new Map();
+function cachedClient(key, make) {
+  const now = Date.now();
+  const hit = clientCache.get(key);
+  if (hit && now - hit.at < CLIENT_TTL_MS) return hit.client;
+  const client = make();
+  clientCache.set(key, { client, at: now });
+  if (clientCache.size > 500) { for (const k of clientCache.keys()) { clientCache.delete(k); if (clientCache.size <= 400) break; } }
+  return client;
+}
+
 function clientFor(userId) {
   const ns = namespaceFor(userId);
-  if (MODE === 'mainnet') return { client: createClient({ namespace: ns }), mode: 'mainnet' };
+  if (MODE === 'mainnet') return { client: cachedClient(`m:${ns}`, () => createClient({ namespace: ns })), mode: 'mainnet' };
   return { client: createLocalClient({ namespace: ns }), mode: 'local' };
 }
 
@@ -69,7 +85,7 @@ function userClientFor(address) {
   const ns = namespaceFor(`vault-${crypto.createHash('sha256').update(String(address).toLowerCase()).digest('hex').slice(0, 32)}`);
   // Respect MEMWAL_MODE: in local dev a wallet user must NOT hit the live relayer.
   const client = MODE === 'mainnet'
-    ? createDelegateClient({ delegatePrivateKey: user.delegatePrivateKey, accountId: user.accountId, namespace: ns })
+    ? cachedClient(`d:${user.accountId}:${ns}`, () => createDelegateClient({ delegatePrivateKey: user.delegatePrivateKey, accountId: user.accountId, namespace: ns }))
     : createLocalClient({ namespace: ns });
   return { client, ns };
 }
@@ -383,6 +399,8 @@ app.get('/demo', readLimiter, async (req, res) => {
 });
 
 // Shared multi-angle queries for whole-namespace reads.
+// Last-known-good whole-namespace reads, served (stale-labelled) during an outage.
+const lastGood = new Map(); // userId -> { facts, at }
 const ALL_QUERIES = [
   'medications allergies routine family',
   'takes taking take dose pill tablet prescription mg mcg daily', // drug-agnostic
@@ -404,7 +422,16 @@ async function namespaceView(req, res) {
   if (!mine && isReservedNs(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
   const ra = await recallAllMeta(client, ALL_QUERIES, 25);
-  return { userId, mode, recalled: ra.facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };
+  // Last-known-good cache: on an outage, serve the most recent successful read
+  // (labelled stale) rather than a blank card — a safety product should show
+  // stale-but-labelled allergies, not "UNKNOWN".
+  if (!ra.degraded && ra.facts.length) lastGood.set(userId, { facts: ra.facts, at: Date.now() });
+  let facts = ra.facts;
+  if (ra.degraded) {
+    const lg = lastGood.get(userId);
+    if (lg && Date.now() - lg.at < 10 * 60 * 1000) facts = lg.facts;
+  }
+  return { userId, mode, recalled: facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };
 }
 
 // Printable emergency card + doctor-visit summary (recall only).
@@ -585,6 +612,9 @@ if (process.env.VERCEL !== '1' && import.meta.url === `file://${process.argv[1]}
   // Generous socket cap: per-upstream timeouts keep the handler bounded; a tight
   // socket timeout would kill legitimate requests with an empty reply (curl 52).
   server.setTimeout(120_000);
+  // Graceful shutdown: stop accepting, drain, then force-exit.
+  const shutdown = () => { console.log('shutting down…'); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 10_000).unref(); };
+  process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
 // Last-resort visibility: never let a stray rejection/throw take the process
 // down silently in a demo.
