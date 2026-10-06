@@ -72,6 +72,7 @@ export default function CompareView({ userId }: { userId: string }) {
 
   return (
     <div className="cmp-wrap">
+      <p className="eyebrow">Namespaces</p>
       <h2 className="cmp-title">Compare namespaces</h2>
       <p className="cmp-hint">
         Compare two memory namespaces side by side. Shared facts and per-namespace facts each cite their blob receipts.

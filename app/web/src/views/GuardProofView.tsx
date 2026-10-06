@@ -56,6 +56,7 @@ export default function GuardProofView({ userId }: { userId: string }) {
 
   return (
     <div className="gp-wrap">
+      <p className="eyebrow">Safety</p>
       <div className="gp-top">
         <h2 className="gp-title">Guard proof</h2>
         {data.verify.ok ? (
@@ -88,19 +89,18 @@ export default function GuardProofView({ userId }: { userId: string }) {
                   </CardTitle>
                   <CardDescription>
                     <span className="gp-badges">
-                      <Badge variant="default">{e.kind}</Badge>
                       <Badge variant={e.severity === 'high' || e.severity === 'critical' ? 'danger' : 'warn'}>
-                        {e.severity}
+                        {clean(e.severity)}
                       </Badge>
                     </span>
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <p className="gp-line">
-                    <strong>Substance:</strong> {e.substance}
-                    {e.withSubstance ? <> with {e.withSubstance}</> : null}
+                    <strong>Substance:</strong> {clean(e.substance)}
+                    {e.withSubstance ? <> with {clean(e.withSubstance)}</> : null}
                   </p>
-                  <p className="gp-line"><strong>Reason:</strong> {e.reason}</p>
+                  <p className="gp-line"><strong>Reason:</strong> {clean(e.reason)}</p>
                   <blockquote className="gp-quote">&ldquo;{clean(e.fact)}&rdquo;</blockquote>
                   {short ? (
                     <p className="gp-line gp-cite">
@@ -114,7 +114,7 @@ export default function GuardProofView({ userId }: { userId: string }) {
                   ) : (
                     <p className="gp-line gp-cite">Source blob unavailable (local record)</p>
                   )}
-                  <blockquote className="gp-quote gp-msg">&ldquo;{e.message}&rdquo;</blockquote>
+                  <blockquote className="gp-quote gp-msg">&ldquo;{clean(e.message)}&rdquo;</blockquote>
                   <p className="gp-time">Entry #{e.n} · {e.at} · user {e.userId}</p>
                 </CardContent>
               </Card>

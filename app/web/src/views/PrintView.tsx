@@ -90,6 +90,7 @@ export default function PrintView({ userId }: { userId: string }) {
 
   return (
     <div className="pr-wrap">
+      <p className="eyebrow">Emergency</p>
       <div className="pr-toolbar no-print">
         <Button variant="primary" onClick={() => window.print()}>Print emergency card</Button>
         <span className="pr-toolbar-hint">Allergies print first and large; blob receipts print with every fact.</span>

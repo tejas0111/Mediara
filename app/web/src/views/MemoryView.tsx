@@ -121,6 +121,7 @@ export default function MemoryView({ userId }: { userId: string }) {
 
   return (
     <div className="mem-wrap">
+      <p className="eyebrow">Care summary</p>
       <div className="mem-top">
         <h2 className="mem-title">Memory — {data.user}</h2>
         <Badge variant={mode}>{data.mode}</Badge>

@@ -64,9 +64,15 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-/** Strip the stored "User <id>:" label prefix for display. */
+/** Strip the stored "User <id>:" label prefix for display.
+ * Also strips emoji chrome (server strings like the morning brief may carry
+ * pictographs such as U+2600/U+26A0/U+2705/U+274C/U+2B50): views render
+ * Badge/Icon affordances instead, never raw emoji. Ellipsis, middots and
+ * dashes are untouched. */
 export const clean = (t: string) =>
-  String(t ?? '').replace(/^User\s+\S+:\s*/i, '');
+  String(t ?? '')
+    .replace(/^User\s+\S+:\s*/i, '')
+    .replace(/[\u2600-\u27BF\u2B00-\u2BFF\uFE00-\uFE0F\u{1F000}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u200D]/gu, '');
 
 /** Short blob id for receipts: local-ids in full-ish, mainnet truncated. */
 export const shortBlob = (id: string | null) => {

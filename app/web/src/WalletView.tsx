@@ -338,6 +338,7 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
 
   return (
     <div className="wallet">
+      <p className="eyebrow">Account</p>
       <Card>
         <CardHeader>
           <CardTitle>Wallet</CardTitle>
@@ -384,7 +385,9 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
               {!account ? (
                 <div className="stack">
                   <div className="btn-row">
-                    <ConnectButton connectText="Connect Sui wallet" />
+                    <span className="top-connect">
+                      <ConnectButton connectText="Connect Sui wallet" className="btn btn-sm wallet-btn" />
+                    </span>
                   </div>
                   {noWalletInstalled ? (
                     <FieldHint>No Sui wallet detected in this browser. Install one (e.g. Slush — https://slush.app), then connect.</FieldHint>
@@ -464,7 +467,7 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
               {txBytes ? (
                 <div className="stack">
                   <p className="muted">Sign this transaction in your Sui wallet:</p>
-                  <p className="mono msg">{trunc(txBytes)}</p>
+                  <p className="mono msg" title={txBytes}>{trunc(txBytes)}</p>
                   <div className="btn-row">
                     <Button size="sm" onClick={() => void copyTx()}>Copy full txBytes</Button>
                     <Button size="sm" variant="primary" onClick={() => void signStepTx()} disabled={stepBusy || !addrMatch}>
@@ -477,7 +480,7 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
                   {stepSig ? (
                     <div className="stack">
                       <FieldLabel htmlFor="w-stepsig">Wallet signature (base64)</FieldLabel>
-                      <p className="mono msg">{trunc(stepSig)}</p>
+                      <p className="mono msg" title={stepSig}>{trunc(stepSig)}</p>
                       <div className="btn-row">
                         <Button variant="primary" disabled={stepBusy} onClick={() => void finishStep(step === 0 ? 'create' : 'link')}>
                           {stepBusy ? 'Submitting…' : step === 0 ? 'Submit & create' : 'Submit & complete onboarding'}

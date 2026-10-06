@@ -40,7 +40,7 @@ function reducedMotion(): boolean {
 }
 
 function AssistantBody({ msg, mode }: { msg: ChatMsg; mode: 'local' | 'mainnet' | null }) {
-  const text = msg.text;
+  const text = clean(msg.text);
   if (text.startsWith('STOP')) {
     const blob = msg.savedBlob ?? msg.recalled?.[0]?.blob_id ?? null;
     const short = shortBlob(blob);
@@ -209,7 +209,7 @@ export default function ChatView(props: ChatViewProps) {
           msgs.map((m) =>
             m.role === 'user' ? (
               <div key={m.id} className="row row-user">
-                <div className="bubble">{m.text}</div>
+                <div className="bubble">{clean(m.text)}</div>
               </div>
             ) : (
               <div key={m.id} className="row row-asst">

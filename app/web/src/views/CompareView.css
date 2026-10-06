@@ -8,7 +8,10 @@
 }
 .cmp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .cmp-actions { display: flex; align-items: flex-end; }
-.cmp-counts { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
+@media (max-width: 480px) {
+  .cmp-actions .btn { width: 100%; }
+}
+.cmp-counts { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; font-variant-numeric: tabular-nums; }
 .cmp-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
 @media (min-width: 760px) {
   .cmp-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }

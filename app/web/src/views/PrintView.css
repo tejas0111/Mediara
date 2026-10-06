@@ -1,7 +1,7 @@
 .pr-wrap { display: flex; flex-direction: column; gap: 14px; min-width: 0; max-width: 100%; }
 .pr-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
 .pr-toolbar-hint { font-size: 13px; color: var(--muted); line-height: 1.5; overflow-wrap: break-word; flex: 1 1 220px; min-width: 0; }
-.pr-big { font-size: 20px !important; overflow-wrap: anywhere; }
+.pr-big { font-size: 20px; overflow-wrap: anywhere; }
 .pr-allergies { border: 2px solid var(--danger); border-radius: var(--r-md); background: var(--danger-soft); padding: 16px; margin-bottom: 16px; min-width: 0; }
 .pr-allergy-h { margin: 0 0 10px; font-size: clamp(20px, 5vw, 24px); font-weight: 800; letter-spacing: 0.01em; line-height: 1.2; color: var(--danger); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: break-word; }
 .pr-allergy-list { list-style: none; padding-left: 0; }

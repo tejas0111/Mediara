@@ -7,7 +7,7 @@
   margin: 0 auto;
   padding: 28px 20px;
 }
-.stack { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.stack { display: flex; flex-direction: column; gap: 12px; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .muted { color: var(--muted); font-size: 13.5px; }
 .msg {
@@ -35,6 +35,10 @@ details.adv > summary {
   list-style: none; display: flex; align-items: center; gap: 6px;
 }
 details.adv > summary::-webkit-details-marker { display: none; }
-details.adv > summary::before { content: "+"; font-weight: 700; }
-details.adv[open] > summary::before { content: "\2013"; }
+details.adv > summary::before {
+  content: ""; flex: none; width: 7px; height: 7px;
+  border-right: 2px solid var(--faint); border-bottom: 2px solid var(--faint);
+  transform: rotate(-45deg);
+}
+details.adv[open] > summary::before { transform: rotate(45deg); }
 details.adv .stack { margin-top: 12px; }

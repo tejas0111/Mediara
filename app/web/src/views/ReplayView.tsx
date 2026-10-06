@@ -103,6 +103,7 @@ export default function ReplayView({ userId }: { userId: string }) {
 
   return (
     <div className="replay-wrap">
+      <p className="eyebrow">History</p>
       <div className="replay-top">
         <h2 className="replay-title">Replay — {data.user}</h2>
         <Badge variant={data.mode === 'mainnet' ? 'mainnet' : 'local'}>{data.mode}</Badge>

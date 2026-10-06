@@ -25,9 +25,9 @@
   --ok: #15803d;
   --ok-soft: #f0fdf4;
   --ok-border: #bbf7d0;
-  --link: #4f46e5;
-  --r-sm: 10px;
-  --r-md: 14px;
+  --link: #18181b;
+  --r-sm: 8px;
+  --r-md: 12px;
   --r-lg: 20px;
   --shadow-1: 0 1px 2px rgb(0 0 0 / 0.05);
   --shadow-2: 0 8px 30px rgb(0 0 0 / 0.08);
@@ -49,11 +49,11 @@ body {
   line-height: 1.6;
 }
 button { font: inherit; }
-a { color: var(--link); }
+a { color: var(--link); text-underline-offset: 2px; }
 :focus-visible {
   outline: 2px solid var(--text);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 .skip {
   position: absolute;
@@ -92,7 +92,7 @@ a { color: var(--link); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .btn-sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
-.btn-icon { padding: 7px; border-radius: 9px; }
+.btn-icon { padding: 7px; border-radius: 8px; }
 .btn > svg { width: 16px; height: 16px; flex: none; }
 
 .card {
@@ -121,7 +121,7 @@ a { color: var(--link); }
   white-space: nowrap;
 }
 .badge-local { background: var(--surface-2); }
-.badge-mainnet { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
+.badge-mainnet { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .badge-danger { background: var(--danger-soft); border-color: var(--danger-border); color: var(--danger); }
 .badge-warn { background: var(--warn-soft); border-color: var(--warn-border); color: var(--warn); }
 .badge-ok { background: var(--ok-soft); border-color: var(--ok-border); color: var(--ok); }
@@ -230,4 +230,18 @@ a { color: var(--link); }
 :root {
   --topbar-from: #ffffff;
   --topbar-to: #f3f4f6;
+  --ring: 0 0 0 3px rgb(24 24 27 / 0.1);
 }
+
+/* Eyebrow labels for view section headers: one caps usage, always 11px. */
+.eyebrow {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+/* Tabular numerals for counts, ids, progress. */
+.mono, .tnum { font-variant-numeric: tabular-nums; }

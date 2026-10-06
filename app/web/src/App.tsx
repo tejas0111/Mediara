@@ -390,15 +390,6 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
                       </button>
                     </li>
                   ))}
-                  <li>
-                    <button
-                      type="button"
-                      className={cn('nav-it', view === 'wallet' && 'nav-active')}
-                      onClick={() => { navigate('wallet'); setDrawer(false); }}
-                    >
-                      <IconWallet /> <span className="nav-label">Wallet</span>
-                    </button>
-                  </li>
                 </ul>
               </details>
             </li>

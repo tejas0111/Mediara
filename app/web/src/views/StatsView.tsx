@@ -1,5 +1,5 @@
 import React from 'react';
-import { ApiError, getUsage, type UsageResponse } from '../api';
+import { ApiError, clean, getUsage, type UsageResponse } from '../api';
 import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Empty, Skeleton } from '../ui';
 import './StatsView.css';
 
@@ -54,10 +54,11 @@ export default function StatsView({ userId }: { userId: string }) {
 
   return (
     <div className="st-wrap">
+      <p className="eyebrow">Server activity</p>
       <h2 className="st-title">Usage</h2>
       <p className="st-hint">Per-user memory and turn counts with blob receipts. Qualifying users meet the minimum memories requirement.</p>
       <Alert variant={data.meetsRequirement ? 'ok' : 'warn'}>
-        {data.meetsRequirement ? 'Requirement MET' : 'Requirement NOT MET'} — {data.qualifyingUsers} qualifying users
+        {data.meetsRequirement ? 'Requirement met' : 'Requirement not met'} — {data.qualifyingUsers} qualifying users
         (needs {data.requirement.distinctUsers} users × {data.requirement.memoriesPerUser} memories).
       </Alert>
 
@@ -89,7 +90,7 @@ export default function StatsView({ userId }: { userId: string }) {
                     {u.blobs.map((b) => (
                       <li key={b.blobId} className="st-blob">
                         <code className="mono">{b.blobId}</code>
-                        <span className="st-blob-text">{b.text}</span>{' '}
+                        <span className="st-blob-text">{clean(b.text)}</span>{' '}
                         {b.link ? (
                           <a href={b.link} target="_blank" rel="noreferrer">walruscan</a>
                         ) : (

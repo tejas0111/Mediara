@@ -105,6 +105,7 @@ export default function DemoView({ userId }: { userId: string }) {
 
   return (
     <div className="demo-wrap">
+      <p className="eyebrow">Demo</p>
       <div className="demo-top">
         <h2 className="demo-title">Demo: a week of memory</h2>
         {seed ? (
@@ -126,7 +127,7 @@ export default function DemoView({ userId }: { userId: string }) {
       <div className="demo-grid">
         <Card>
           <CardHeader>
-            <CardTitle>BEFORE — <span className="mono">{BEFORE_NS}</span></CardTitle>
+            <CardTitle>Before — <span className="mono">{BEFORE_NS}</span></CardTitle>
             <CardDescription>Namespace {BEFORE_NS} · Blob count: {before.blobCount} · {before.facts.length} facts · {before.mode}</CardDescription>
           </CardHeader>
           <CardContent>
@@ -135,7 +136,7 @@ export default function DemoView({ userId }: { userId: string }) {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>AFTER — <span className="mono">{afterNs}</span></CardTitle>
+            <CardTitle>After — <span className="mono">{afterNs}</span></CardTitle>
             <CardDescription>Namespace {afterNs} · Blob count: {after.blobCount} · {after.facts.length} facts · {after.mode}</CardDescription>
           </CardHeader>
           <CardContent>
