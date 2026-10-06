@@ -43,9 +43,11 @@ import {
 } from './ui';
 import './App.css';
 
-const NAV: Array<{ key: ViewKey; label: string }> = [
+const TOP_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'memory', label: 'Memory' },
   { key: 'proof', label: 'Guard proof' },
+];
+const MORE_NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'print', label: 'Print' },
   { key: 'demo', label: 'Demo' },
   { key: 'replay', label: 'Replay' },
@@ -357,7 +359,7 @@ export default function App() {
                 <IconChat /> <span className="nav-label">Chat</span>
               </button>
             </li>
-            {NAV.map((n) => (
+            {TOP_NAV.map((n) => (
               <li key={n.key}>
                 <button
                   type="button"
@@ -368,6 +370,35 @@ export default function App() {
                 </button>
               </li>
             ))}
+            <li>
+              <details className="more">
+                <summary className="nav-it more-sum">
+                  <span className="nav-label">More views</span>
+                </summary>
+                <ul className="nav-list more-list">
+                  {MORE_NAV.map((n) => (
+                    <li key={n.key}>
+                      <button
+                        type="button"
+                        className={cn('nav-it', view === n.key && 'nav-active')}
+                        onClick={() => { navigate(n.key); setDrawer(false); }}
+                      >
+                        <span className="nav-label">{n.label}</span>
+                      </button>
+                    </li>
+                  ))}
+                  <li>
+                    <button
+                      type="button"
+                      className={cn('nav-it', view === 'wallet' && 'nav-active')}
+                      onClick={() => { navigate('wallet'); setDrawer(false); }}
+                    >
+                      <IconWallet /> <span className="nav-label">Wallet</span>
+                    </button>
+                  </li>
+                </ul>
+              </details>
+            </li>
             <li>
               <button
                 type="button"

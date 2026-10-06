@@ -446,3 +446,13 @@
   background: var(--border); border-radius: 8px; border: 2px solid transparent; background-clip: content-box;
 }
 .sess-list::-webkit-scrollbar-track, .sidebar::-webkit-scrollbar-track, .chat-list::-webkit-scrollbar-track { background: transparent; }
+
+/* More-views expander: keeps the sticky top to 2-3 essentials */
+.more { margin: 0; }
+.more-sum { cursor: pointer; list-style: none; }
+.more-sum::-webkit-details-marker { display: none; }
+.more-sum::after {
+  content: "+"; margin-left: auto; color: var(--faint); font-weight: 600; font-size: 14px; line-height: 1;
+}
+.more[open] > .more-sum::after { content: "\2013"; }
+.more-list { margin-top: 2px; border-left: 1px solid var(--border-soft); margin-left: 12px; padding-left: 6px; }
