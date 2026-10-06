@@ -29,7 +29,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: var(--accent);
+  background: linear-gradient(135deg, #3f3f46, #18181b);
   color: var(--accent-text);
   font-weight: 700;
   font-size: 16px;
@@ -53,6 +53,9 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  border-top: 1px solid var(--border-soft);
+  margin-top: 8px;
+  padding-top: 12px;
 }
 .side-grow .sess-list { max-height: none; flex: 1; min-height: 64px; }
 .side-h {
@@ -123,7 +126,11 @@
   overflow: hidden;
 }
 .sess:hover { background: var(--surface-2); }
-.sess-active { background: var(--surface); border-color: var(--border); color: var(--text); }
+.sess-active { background: var(--surface); border-color: var(--border); color: var(--text); position: relative; }
+.sess-active::before {
+  content: ""; position: absolute; left: -14px; top: 8px; bottom: 8px; width: 3px;
+  border-radius: 3px; background: var(--accent);
+}
 .sess-ic { display: inline-flex; color: var(--faint); flex: none; }
 .sess-ic svg { width: 14px; height: 14px; }
 .sess-title {
@@ -184,7 +191,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.nav-it:hover { background: var(--surface-2); color: var(--text); }
+.nav-it { transition: background .15s var(--ease), border-color .15s var(--ease), transform .15s var(--ease); }
+.nav-it:hover { background: var(--surface-2); color: var(--text); transform: translateX(1px); }
 .nav-it:hover svg { color: var(--muted); }
 .nav-active { background: var(--surface); border-color: var(--border); color: var(--text); font-weight: 600; }
 .nav-active svg { color: var(--text); }
@@ -427,3 +435,14 @@
   .topbar > .only-mobile { display: inline-flex; margin-left: 0; }
   .sess-del { opacity: 1; }
 }
+
+/* premium thin scrollbars — shell scroll containers only */
+.sess-list, .sidebar, .chat-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.sess-list::-webkit-scrollbar, .sidebar::-webkit-scrollbar, .chat-list::-webkit-scrollbar { width: 8px; height: 8px; }
+.sess-list::-webkit-scrollbar-thumb, .sidebar::-webkit-scrollbar-thumb, .chat-list::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 8px; border: 2px solid transparent; background-clip: content-box;
+}
+.sess-list::-webkit-scrollbar-track, .sidebar::-webkit-scrollbar-track, .chat-list::-webkit-scrollbar-track { background: transparent; }
