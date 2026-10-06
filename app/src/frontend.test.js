@@ -96,3 +96,20 @@ test('SPA api client covers every JSON route the views need', () => {
     assert.ok(api.includes(`'${p}'`) || api.includes(`\`${p}`), `api.ts covers ${p}`);
   }
 });
+
+test('SPA shell layout: features above history, account at bottom, topbar always on', () => {
+  const app = wread('src/App.tsx');
+  const css = wread('src/App.css');
+  assert.ok(app.indexOf('Features') < app.indexOf('Chats'), 'Features nav renders above chat history');
+  assert.ok(app.includes('className="acct"') && app.includes('Account'), 'sidebar bottom has the account block + dialog');
+  assert.ok(app.includes('VIEW_TITLES[view]'), 'topbar shows the current view title');
+  assert.ok(app.includes('top-right') && app.includes('Connect wallet'), 'topbar right cluster has the wallet action');
+  assert.ok(/\.topbar \{\s*\n?\s*display: flex/.test(css), 'topbar is always visible, not mobile-only');
+  assert.ok(css.includes('.side-grow') && css.includes('.acct'), 'history grows+scrolls, account styles exist');
+});
+
+test('SPA print still hides only chrome after the reshuffle', () => {
+  const css = wread('src/views/PrintView.css');
+  assert.ok(css.includes('.sidebar') && css.includes('.topbar'), 'print hides sidebar + topbar');
+  assert.ok(!/\.pr-blobids\s*\{[^}]*display:\s*none/.test(css), 'blob receipts stay visible on paper');
+});

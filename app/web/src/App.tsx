@@ -26,6 +26,9 @@ import type { WalletStatus } from './api';
 import {
   Badge,
   Button,
+  Dialog,
+  FieldHint,
+  FieldLabel,
   IconChat,
   IconMenu,
   IconPlus,
@@ -34,19 +37,31 @@ import {
   IconWallet,
   IconX,
   Input,
+  Separator,
   cn,
 } from './ui';
 import './App.css';
 
 const NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'memory', label: 'Memory' },
+  { key: 'proof', label: 'Guard proof' },
+  { key: 'print', label: 'Print' },
   { key: 'demo', label: 'Demo' },
   { key: 'replay', label: 'Replay' },
   { key: 'compare', label: 'Compare' },
-  { key: 'proof', label: 'Guard proof' },
   { key: 'stats', label: 'Stats' },
-  { key: 'print', label: 'Print' },
 ];
+const VIEW_TITLES: Record<ViewKey, string> = {
+  chat: 'Chat',
+  memory: 'Memory',
+  demo: 'Demo',
+  replay: 'Replay',
+  compare: 'Compare',
+  proof: 'Guard proof',
+  stats: 'Stats',
+  print: 'Print',
+  wallet: 'Wallet',
+};
 
 const MEM_KEY = 'ddMemoryOn';
 
@@ -67,6 +82,7 @@ export default function App() {
   const [filter, setFilter] = React.useState('');
   const [drawer, setDrawer] = React.useState(false);
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
+  const [acctOpen, setAcctOpen] = React.useState(false);
   const [wallet, setWallet] = React.useState<WalletStatus | null>(null);
 
   const view = routeView(route);
@@ -111,6 +127,7 @@ export default function App() {
     const v = draftId.trim() || 'demo-mom';
     setDraftId(v);
     setUserId(v);
+    setAcctOpen(false);
     navigate('chat');
   }
 
@@ -215,7 +232,43 @@ export default function App() {
           </Button>
         </div>
 
-        <div className="side-sec">
+        <nav className="side-sec" aria-label="Features">
+          <p className="side-h">Features</p>
+          <ul className="nav-list">
+            <li>
+              <button
+                type="button"
+                className={cn('nav-it', view === 'chat' && 'nav-active')}
+                onClick={() => { navigate('chat'); setDrawer(false); }}
+              >
+                <IconChat /> Chat
+              </button>
+            </li>
+            {NAV.map((n) => (
+              <li key={n.key}>
+                <button
+                  type="button"
+                  className={cn('nav-it', view === n.key && 'nav-active')}
+                  onClick={() => { navigate(n.key); setDrawer(false); }}
+                >
+                  {n.label}
+                </button>
+              </li>
+            ))}
+            <li>
+              <button
+                type="button"
+                className={cn('nav-it', view === 'wallet' && 'nav-active')}
+                onClick={() => { navigate('wallet'); setDrawer(false); }}
+              >
+                <IconWallet /> Wallet
+              </button>
+            </li>
+          </ul>
+        </nav>
+
+        <div className="side-sec side-grow">
+          <p className="side-h">Chats</p>
           <div className="search-wrap">
             <span className="search-ic" aria-hidden="true"><IconSearch /></span>
             <Input
@@ -252,85 +305,48 @@ export default function App() {
           {visible.length === 0 ? <p className="side-note">No chats yet.</p> : null}
         </div>
 
-        <nav className="side-sec" aria-label="Views">
-          <p className="side-h">Views</p>
-          <ul className="nav-list">
-            <li>
-              <button
-                type="button"
-                className={cn('nav-it', view === 'chat' && 'nav-active')}
-                onClick={() => { navigate('chat'); setDrawer(false); }}
-              >
-                <IconChat /> Chat
-              </button>
-            </li>
-            {NAV.map((n) => (
-              <li key={n.key}>
-                <button
-                  type="button"
-                  className={cn('nav-it', view === n.key && 'nav-active')}
-                  onClick={() => { navigate(n.key); setDrawer(false); }}
-                >
-                  {n.label}
-                </button>
-              </li>
-            ))}
-            <li>
-              <button
-                type="button"
-                className={cn('nav-it', view === 'wallet' && 'nav-active')}
-                onClick={() => { navigate('wallet'); setDrawer(false); }}
-              >
-                <IconWallet /> Wallet
-              </button>
-            </li>
-          </ul>
-        </nav>
-
         <div className="side-foot">
-          <div className="uid-row">
-            <Input
-              value={draftId}
-              onChange={(e) => setDraftId(e.target.value)}
-              aria-label="User ID"
-              placeholder="user id"
-            />
-            <Button size="sm" onClick={applyUser}>Apply</Button>
-          </div>
-          <div className="foot-row">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={memoryOn}
-              aria-label="Memory"
-              className={cn('switch', memoryOn && 'switch-on')}
-              onClick={toggleMemory}
-            >
-              <span className="knob" />
-            </button>
-            <span className="foot-label">Memory {memoryOn ? 'on' : 'off'}</span>
-            <Badge variant={mode === 'mainnet' ? 'mainnet' : 'local'}>
-              {mode ?? 'local?'}
-            </Badge>
-          </div>
-          <div className="foot-row">
-            <Button size="sm" onClick={() => void handleWalletButton()}>
-              {wallet?.signedIn ? 'Sign out' : 'Sign in'}
-            </Button>
-            <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
-              {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'wallet out'}
-            </Badge>
-          </div>
+          <button type="button" className="acct" onClick={() => setAcctOpen(true)} aria-haspopup="dialog">
+            <span className="avatar" aria-hidden="true">{userId.slice(0, 1).toUpperCase()}</span>
+            <span className="acct-meta">
+              <span className="acct-id">{userId}</span>
+              <span className="acct-sub">
+                {wallet?.signedIn
+                  ? `Wallet ${wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'connected'}`
+                  : 'Guest — not signed in'}
+              </span>
+            </span>
+          </button>
         </div>
       </aside>
 
       <div className="main-col">
         <header className="topbar">
-          <button type="button" className="icon-btn" aria-label="Open menu" onClick={() => setDrawer(true)}>
+          <button type="button" className="icon-btn only-mobile" aria-label="Open menu" onClick={() => setDrawer(true)}>
             <IconMenu />
           </button>
-          <span className="top-title">DoseDaughter</span>
-          <Badge variant={mode === 'mainnet' ? 'mainnet' : 'local'}>{mode ?? 'local?'}</Badge>
+          <span className="top-title">{VIEW_TITLES[view]}</span>
+          <div className="top-right">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={memoryOn}
+              aria-label="Memory"
+              title={`Memory ${memoryOn ? 'on' : 'off'} — toggle to compare with and without memory`}
+              className={cn('switch', memoryOn && 'switch-on')}
+              onClick={toggleMemory}
+            >
+              <span className="knob" />
+            </button>
+            <span className="mem-label">Memory {memoryOn ? 'on' : 'off'}</span>
+            <Badge variant={mode === 'mainnet' ? 'mainnet' : 'local'}>{mode ?? 'local?'}</Badge>
+            <Button size="sm" onClick={() => void handleWalletButton()}>
+              <IconWallet />
+              {wallet?.signedIn
+                ? (wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'Sign out')
+                : 'Connect wallet'}
+            </Button>
+          </div>
         </header>
         <main id="main" className="main" tabIndex={-1}>
           {view === 'chat' ? (
@@ -363,6 +379,36 @@ export default function App() {
           )}
         </main>
       </div>
+      {acctOpen ? (
+        <Dialog title="Account" onClose={() => setAcctOpen(false)}>
+          <FieldLabel htmlFor="acct-uid">User ID</FieldLabel>
+          <div className="uid-row">
+            <Input
+              id="acct-uid"
+              value={draftId}
+              onChange={(e) => setDraftId(e.target.value)}
+              placeholder="user id"
+            />
+            <Button size="sm" variant="primary" onClick={applyUser}>Apply</Button>
+          </div>
+          <FieldHint>Memory namespace: user-{draftId.trim() || userId}. Chats are per browser + user.</FieldHint>
+          <Separator />
+          <div className="foot-row">
+            <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
+              {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'wallet out'}
+            </Badge>
+            <Button
+              size="sm"
+              onClick={() => { setAcctOpen(false); void handleWalletButton(); }}
+            >
+              {wallet?.signedIn ? 'Sign out' : 'Sign in'}
+            </Button>
+            <Button size="sm" onClick={() => { setAcctOpen(false); navigate('wallet'); setDrawer(false); }}>
+              Wallet details
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   );
 }
