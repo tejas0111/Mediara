@@ -17,3 +17,9 @@
 @media (prefers-reduced-motion: reduce) {
   .demo-wrap *, .demo-wrap *::before, .demo-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* Page column: scroll inside .main, centered 860px, chat side-padding rhythm. */
+.demo-wrap { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: 860px; margin: 0 auto; padding: 28px 20px; }
+@media (max-width: 480px) {
+  .demo-wrap { padding: 20px 12px; }
+}

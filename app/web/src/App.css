@@ -322,6 +322,88 @@
 .main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .only-mobile { display: none; }
 
+/* FIX 1 — one-click connect: dAppKit ConnectButton in the topbar, dressed
+   like .btn.btn-sm (className is passed through AND this wrapper rule holds
+   the look even where dAppKit's own classes win specificity). */
+.top-connect { display: inline-flex; flex: none; min-width: 0; }
+.top-connect button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-weight: 550;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: none;
+}
+.top-connect button:hover { background: var(--surface-2); }
+
+/* FIX 3 — Demo|Mainnet segmented toggle (local same-origin server only). */
+.env-seg {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.env-opt {
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 550;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.env-opt + .env-opt { border-left: 1px solid var(--border); }
+.env-opt:hover { background: var(--surface-2); }
+.env-active { background: var(--accent); color: var(--accent-text); }
+.env-active:hover { background: var(--accent-hover); }
+
+/* FIX 2 — unified page column: every view root scrolls inside .main and
+   shares the chat side-padding rhythm at a centered 860px column.
+   (Each views/*.css root carries the same rules; this central fallback keeps
+   any view aligned even if its own sheet loads late.) */
+.main > .chat { max-width: 860px; }
+.main > .mem-wrap,
+.main > .demo-wrap,
+.main > .cmp-wrap,
+.main > .replay-wrap,
+.main > .gp-wrap,
+.main > .st-wrap,
+.main > .pr-wrap,
+.main > .wallet {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 20px;
+}
+@media (max-width: 480px) {
+  .main > .mem-wrap,
+  .main > .demo-wrap,
+  .main > .cmp-wrap,
+  .main > .replay-wrap,
+  .main > .gp-wrap,
+  .main > .st-wrap,
+  .main > .pr-wrap,
+  .main > .wallet { padding: 20px 12px; }
+  .env-opt { padding: 5px 8px; font-size: 12.5px; }
+}
+@media (max-width: 640px) {
+  .top-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 6px; }
+}
+
 @media (max-width: 900px) {
   .sidebar {
     position: fixed;

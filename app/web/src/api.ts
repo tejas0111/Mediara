@@ -10,8 +10,52 @@ export class ApiError extends Error {
   }
 }
 
+// -------------------------------------------------------- base routing ---
+// Demo|Mainnet environment switch. '' = same-origin (local demo server).
+// A custom absolute URL (e.g. https://mainnet-host) routes every req() there.
+// Persisted in localStorage under `ddApiBase`.
+const API_BASE_KEY = 'ddApiBase';
+
+export function getApiBase(): string {
+  try {
+    return localStorage.getItem(API_BASE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function setApiBase(base: string): void {
+  try {
+    const v = String(base ?? '').trim().replace(/\/+$/, '');
+    if (!v) localStorage.removeItem(API_BASE_KEY);
+    else localStorage.setItem(API_BASE_KEY, v);
+  } catch {
+    /* storage unavailable — base stays same-origin for this session */
+  }
+}
+
+export interface HealthResult {
+  ok: boolean;
+  mode: 'local' | 'mainnet' | null;
+  error?: string;
+}
+
+/** Probe `<base>/healthz` (base '' = same-origin). Never throws. */
+export async function checkHealth(base?: string): Promise<HealthResult> {
+  const b = String(base ?? getApiBase()).trim().replace(/\/+$/, '');
+  const url = `${b}/healthz`;
+  try {
+    const r = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!r.ok) return { ok: false, mode: null, error: `server responded ${r.status}` };
+    const body = (await r.json().catch(() => ({}))) as { mode?: unknown };
+    return { ok: true, mode: body.mode === 'mainnet' ? 'mainnet' : 'local' };
+  } catch (e) {
+    return { ok: false, mode: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(path, {
+  const r = await fetch(`${getApiBase()}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
   });

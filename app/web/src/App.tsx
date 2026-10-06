@@ -21,9 +21,9 @@ import {
   titleFor,
 } from './chat';
 import type { ChatMsg, ChatSession, Route, ViewKey } from './chat';
-import { authLogout, walletStatus } from './api';
+import { authLogout, checkHealth, getApiBase, setApiBase, walletStatus } from './api';
 import type { WalletStatus } from './api';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 import {
   Badge,
   Button,
@@ -85,12 +85,21 @@ export default function App() {
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
   const [acctOpen, setAcctOpen] = React.useState(false);
   const [wallet, setWallet] = React.useState<WalletStatus | null>(null);
+  // Demo|Mainnet environment switch (local same-origin server only).
+  // sameOriginMode = what the serving backend reports; the Demo|Mainnet toggle
+  // is visible only when it is 'local'. `mode` = effective backend mode for
+  // the ACTIVE base (same-origin or custom URL), refreshed via checkHealth.
+  const [sameOriginMode, setSameOriginMode] = React.useState<'local' | 'mainnet' | null>(null);
+  const [envChoice, setEnvChoice] = React.useState<'demo' | 'mainnet'>(() => (getApiBase() ? 'mainnet' : 'demo'));
+  const [envError, setEnvError] = React.useState<string | null>(null);
+  const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase());
+  const [urlTest, setUrlTest] = React.useState<string | null>(null);
+  const [urlBusy, setUrlBusy] = React.useState(false);
   // dAppKit wallet connection (client-side) vs server session (signed-in):
-  // "Connect" = no wallet, "Sign in" = wallet but no session, address = session.
+  // no wallet = ConnectButton opens the chooser modal directly,
+  // wallet-but-no-session = "Sign in" navigates to #/wallet,
+  // session = short address opens the Account dialog.
   const suiAccount = useCurrentAccount();
-  const walletLabel = wallet?.signedIn
-    ? (wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'Sign out')
-    : (suiAccount ? 'Sign in' : 'Connect wallet');
 
   const view = routeView(route);
   const activeId = routeSessionId(route);
@@ -104,9 +113,32 @@ export default function App() {
     }
   }, []);
 
+  const refreshEffectiveMode = React.useCallback(async (base: string) => {
+    try {
+      const h = await checkHealth(base);
+      if (h.ok && h.mode) setMode(h.mode);
+    } catch {
+      /* keep last known mode — badge never lies about an unknown backend */
+    }
+  }, []);
+
   React.useEffect(() => {
     void refreshWallet();
-  }, [refreshWallet]);
+    // Initial backend state: same-origin mode decides toggle visibility;
+    // active-base health decides the badge. Both run on mount.
+    void (async () => {
+      try {
+        const same = await checkHealth('');
+        if (same.ok && same.mode) setSameOriginMode(same.mode);
+      } catch {
+        /* offline dev — toggle stays hidden until ChatView reports local */
+      }
+      const active = getApiBase();
+      setMainnetUrl(active);
+      setEnvChoice(active ? 'mainnet' : 'demo');
+      await refreshEffectiveMode(active);
+    })();
+  }, [refreshWallet, refreshEffectiveMode]);
 
   React.useEffect(() => {
     const onHash = () => {
@@ -195,17 +227,91 @@ export default function App() {
     setSessions(renSess(userId, id, next));
   }
 
-  async function handleWalletButton() {
-    if (wallet?.signedIn) {
-      try {
-        await authLogout();
-      } catch {
-        /* show wallet view for the honest error */
-      }
-      await refreshWallet();
-      navigate('wallet');
+  function handleMode(m: 'local' | 'mainnet') {
+    setMode(m);
+    // Chat traffic uses the active base; when on same-origin (Demo) the
+    // reported mode IS the same-origin mode, so the toggle can appear even
+    // if the mount-time /healthz probe failed.
+    if (!getApiBase()) setSameOriginMode(m);
+  }
+
+  async function handleSignOut() {
+    try {
+      await authLogout();
+    } catch {
+      /* show wallet view for the honest error */
+    }
+    await refreshWallet();
+    setAcctOpen(false);
+    navigate('wallet');
+  }
+
+  // --- Demo|Mainnet environment switch (same-origin local server only) ---
+  function switchToDemo() {
+    setApiBase('');
+    setMainnetUrl('');
+    setEnvChoice('demo');
+    setEnvError(null);
+    setUrlTest(null);
+    void refreshEffectiveMode('');
+    void refreshWallet();
+  }
+
+  async function switchToMainnet() {
+    const url = getApiBase().trim();
+    if (!url) {
+      // No URL configured — open the Account dialog URL section with an
+      // honest error. Never silently switch.
+      setEnvError('No Mainnet server URL set — paste one below, Test it, then Save.');
+      setAcctOpen(true);
+      return;
+    }
+    setEnvError(null);
+    const h = await checkHealth(url);
+    if (h.ok && h.mode) {
+      setEnvChoice('mainnet');
+      setMode(h.mode);
+      void refreshWallet();
     } else {
-      navigate('wallet');
+      setEnvError(`Mainnet server unreachable (${h.error ?? 'no response'}) — staying on Demo. Open Account to fix the URL.`);
+      setAcctOpen(true);
+    }
+  }
+
+  async function testMainnetUrl() {
+    setUrlBusy(true);
+    setUrlTest(null);
+    try {
+      const h = await checkHealth(mainnetUrl.trim());
+      setUrlTest(h.ok ? `OK — server mode: ${h.mode}` : `Failed: ${h.error ?? 'no response'}`);
+    } finally {
+      setUrlBusy(false);
+    }
+  }
+
+  async function saveMainnetUrl() {
+    const v = mainnetUrl.trim();
+    if (!v) {
+      // Empty URL = back to Demo; instant.
+      switchToDemo();
+      return;
+    }
+    setUrlBusy(true);
+    try {
+      const h = await checkHealth(v);
+      if (h.ok && h.mode) {
+        setApiBase(v);
+        setEnvChoice('mainnet');
+        setMode(h.mode);
+        setUrlTest(`OK — server mode: ${h.mode}. Saved.`);
+        setEnvError(null);
+        void refreshWallet();
+      } else {
+        // Persist ONLY on ok — keep the old base untouched.
+        setUrlTest(`Failed: ${h.error ?? 'no response'} — not saved.`);
+      }
+    } finally {
+      setUrlBusy(false);
     }
   }
 
@@ -356,19 +462,57 @@ export default function App() {
             >
               {mode === 'mainnet' ? 'Mainnet' : 'Local demo'}
             </Badge>
-            <Button
-              size="sm"
-              className="wallet-btn"
-              aria-label={wallet?.signedIn
-                ? (wallet.address ? `Wallet ${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)} — sign out` : 'Wallet connected — sign out')
-                : (suiAccount ? `Sui wallet ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)} connected — sign in` : 'Connect wallet')}
-              onClick={() => void handleWalletButton()}
-            >
-              <IconWallet />
-              <span className="wallet-label">
-                {walletLabel}
+            {sameOriginMode === 'local' ? (
+              <div className="env-seg" role="group" aria-label="Environment">
+                <button
+                  type="button"
+                  className={cn('env-opt', envChoice === 'demo' && 'env-active')}
+                  aria-pressed={envChoice === 'demo'}
+                  onClick={switchToDemo}
+                >
+                  Demo
+                </button>
+                <button
+                  type="button"
+                  className={cn('env-opt', envChoice === 'mainnet' && 'env-active')}
+                  aria-pressed={envChoice === 'mainnet'}
+                  onClick={() => void switchToMainnet()}
+                >
+                  Mainnet
+                </button>
+              </div>
+            ) : null}
+            {wallet?.signedIn ? (
+              <Button
+                size="sm"
+                className="wallet-btn"
+                aria-label={wallet.address ? `Wallet ${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)} — account` : 'Wallet connected — account'}
+                onClick={() => setAcctOpen(true)}
+              >
+                <IconWallet />
+                <span className="wallet-label">
+                  {wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'Sign out'}
+                </span>
+              </Button>
+            ) : suiAccount ? (
+              <Button
+                size="sm"
+                className="wallet-btn"
+                aria-label={`Sui wallet ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)} connected — sign in`}
+                onClick={() => navigate('wallet')}
+              >
+                <IconWallet />
+                <span className="wallet-label">Sign in</span>
+              </Button>
+            ) : (
+              <span className="top-connect">
+                <ConnectButton
+                  connectText="Connect wallet"
+                  className="btn btn-sm wallet-btn"
+                  aria-label="Connect wallet"
+                />
               </span>
-            </Button>
+            )}
           </div>
         </header>
         <main id="main" className="main" tabIndex={-1}>
@@ -381,7 +525,7 @@ export default function App() {
               selectSession={handleSelect}
               newSession={handleNewSessionProp}
               pushMsg={pushMsg}
-              onMode={setMode}
+              onMode={handleMode}
             />
           ) : view === 'wallet' ? (
             <WalletView userId={userId} onAuth={() => void refreshWallet()} />
@@ -416,6 +560,25 @@ export default function App() {
           </div>
           <FieldHint>Memory namespace: user-{draftId.trim() || userId}. Chats are per browser + user.</FieldHint>
           <Separator />
+          <FieldLabel htmlFor="acct-url">Mainnet server URL</FieldLabel>
+          <div className="uid-row">
+            <Input
+              id="acct-url"
+              value={mainnetUrl}
+              onChange={(e) => { setMainnetUrl(e.target.value); setUrlTest(null); }}
+              placeholder="https://… (empty = Demo)"
+              inputMode="url"
+            />
+            <Button size="sm" onClick={() => void testMainnetUrl()} disabled={urlBusy}>
+              {urlBusy ? 'Testing…' : 'Test'}
+            </Button>
+            <Button size="sm" variant="primary" onClick={() => void saveMainnetUrl()} disabled={urlBusy}>
+              Save
+            </Button>
+          </div>
+          {urlTest ? <FieldHint>{urlTest}</FieldHint> : null}
+          {envError ? <FieldHint>{envError}</FieldHint> : null}
+          <Separator />
           <div className="foot-row">
             <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
               {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'wallet out'}
@@ -425,7 +588,7 @@ export default function App() {
             </Badge>
             <Button
               size="sm"
-              onClick={() => { setAcctOpen(false); void handleWalletButton(); }}
+              onClick={() => { void handleSignOut(); }}
             >
               {wallet?.signedIn ? 'Sign out' : 'Sign in'}
             </Button>

@@ -132,3 +132,21 @@ test('SPA shell copy is self-explanatory (no mystery badges)', () => {
   const css = wread('src/App.css') + wread('src/tokens.css');
   assert.ok(css.includes('#ffffff') && css.includes('#f3f4f6'), 'topbar white-to-grey tone present');
 });
+
+test('SPA wallet connects in one click (no double prompt)', () => {
+  const app = wread('src/App.tsx');
+  assert.ok(app.includes('connectText="Connect wallet"'), 'topbar opens the chooser directly');
+  assert.ok(app.includes('@mysten/dapp-kit'), 'topbar uses dAppKit state, not navigation-only');
+});
+
+test('SPA views share one aligned scroll column + env toggle wiring', () => {
+  const shell = wread('src/App.css');
+  for (const root of ['.mem-wrap', '.demo-wrap', '.replay-wrap', '.cmp-wrap', '.gp-wrap', '.st-wrap']) {
+    assert.ok(shell.includes(root), `shell aligns ${root} in the shared column`);
+  }
+  assert.ok(shell.includes('overflow-y: auto') && shell.includes('max-width: 860px'), 'shared column scrolls centered');
+  const api = wread('src/api.ts');
+  assert.ok(api.includes('getApiBase') && api.includes('setApiBase') && api.includes('checkHealth'), 'api base routing exists');
+  const app = wread('src/App.tsx');
+  assert.ok(app.includes('Mainnet server URL') && app.includes('Environment'), 'Demo/Mainnet toggle + URL setting exist');
+});

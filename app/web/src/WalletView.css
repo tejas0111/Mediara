@@ -19,3 +19,9 @@
   margin: 0;
 }
 .status-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Page column: scroll inside .main, centered 860px like every other view. */
+.wallet { flex: 1; min-height: 0; overflow-y: auto; max-width: 860px; }
+@media (max-width: 480px) {
+  .wallet { padding: 20px 12px; }
+}
