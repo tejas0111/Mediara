@@ -61,6 +61,11 @@ dev mode is never presented as Mainnet.
 | `GET` | `/api/summary` | `?user=<id>` (default `demo-mom`) | `{user, mode, medications[], allergies[], routine[], familyAndCare[], blobCount, disclaimer}` from recall only |
 | `GET` | `/memory` | `?user=<id>` | HTML memory receipts page (wallet users see their own vault) |
 | `GET` | `/demo` | `?persona=day1\|day7` | LIVE before/after: real recall on empty `demo-day1` vs taught namespace |
+| `GET` | `/guard-proof` | — | Public tamper-evident ledger of every STOP/CAUTION (hash-chained; `verify()` runs on every view) |
+| `GET` | `/api/guard-proof` | — | Ledger as JSON with `{count, verify, entries}` |
+| `GET` | `/api/usage` | `?format=md` | Usage evidence: per-user memory counts vs the ≥3×≥10 requirement (markdown via `format=md`) |
+| `GET` | `/api/proactive` | `?user=<id>` | Morning med plan + whole-namespace interaction cross-check (recall only, deterministic) |
+| `POST` | `/api/nudge` | `{users:[id], hour}` | Runs the proactive tick per user on demand (scheduler-equivalent; hour 0–11 → morning brief) |
 | `GET` | `/healthz` | — | `{ok, mode, time}` for uptime checks and deploy verification |
 | `GET` | `/api/auth/message` · `POST /api/auth/verify` · `POST /api/auth/logout` | wallet sign-in (signature → HMAC session cookie) | rate-limited |
 | `GET` | `/api/wallet/status` | session cookie | `{signedIn, onboarded, needsRelink, accountId}` |
@@ -82,7 +87,8 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js` | 242 offline checks (core 148 + wallet/auth/crypto/rate-limit 55 + route 33), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js` | 269 offline checks (core 164 + wallet/auth/crypto/rate-limit 61 + route 33 + stats 11), no network |
+| `npm run stats` | `node src/stats.js` | **Judge command**: per-user memory counts → the ≥3 users × ≥10 memories requirement. `-- --live` reads Walrus itself; `-- --json` is machine-readable. Exit 0 = requirement met. Appends `evidence/USAGE-LEDGER.md` |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
 | `npm run seed` / `npm run seed:10` | `node src/seed10.js [userId]` | Writes 12 facts, needs mainnet keys; appends to `evidence/blob-ledger.md` |
@@ -101,6 +107,8 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - `src/onboarding.js` — Orchestrates the two-transaction user onboarding (user signs, user pays), verifies owner + delegate on the account object before use.
 - `src/userRegistry.js` — Per-user store: address → `{accountId, delegateKey…}` with **AES-256-GCM encryption at rest** (key derived from `SESSION_SECRET`); fails loudly instead of returning garbage.
 - `src/cryptoUtils.js` / `src/rateLimit.js` — Secret-at-rest crypto; dependency-free fixed-window rate limiter.
+- `src/usage.js` — Usage evidence (`UsageTracker`: the per-user blob ledger behind `/api/usage` and `npm run stats`), `GuardProof` (hash-chained, tamper-evident STOP/CAUTION ledger on `/guard-proof`), and the proactive engine (`morningBriefFromRecall`, `nightlyCrossCheckFromRecall`, `tickOnce`).
+- `src/stats.js` — Judge-facing CLI: per-user usage evidence from the server ledger, or **live from Walrus** with `-- --live` (multi-angle recall per namespace, walruscan links, honest exit code: 0 only when ≥3 users × ≥10 memories is met).
 
 ## Security posture
 
@@ -111,7 +119,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
 - `src/verify.js` — Mainnet health + write/recall probe.
-- `src/selftest.js` — 120 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/fuzz/bulk/concurrency regressions); `src/wallet.test.js` adds 61 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 11 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, escaping, classification) — `npm test` runs all three = 186.
+- `src/selftest.js` — 164 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/OOV fallback/negation-scope/fuzz/bulk/concurrency/resilience regressions); `src/wallet.test.js` adds 61 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 33 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, escaping, classification, degraded-mode); `src/stats.test.js` adds 11 usage/proof tests — `npm test` runs all four = 269.
 - `api/index.js` + `vercel.json` + `DEPLOY.md` — Vercel deploy wiring (serverless entry, rewrites, 5-min guide; prod MUST be mainnet — serverless disk is ephemeral).
 
 ## Local vs Mainnet — honesty box

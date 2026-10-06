@@ -13,7 +13,7 @@ const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset
   <div class="brand"><span class="logo">&#129461;</span>
     <div><h1>DoseDaughter</h1><p>a caregiver chatbot that never re-asks a dose</p></div></div>
   <nav class="topnav" aria-label="Primary">
-    <a href="/">Chat</a><a href="/demo">Before / After</a><a href="/memory?user=demo-mom">Memory</a><a href="/print?user=demo-mom">Print</a><a href="/replay?user=demo-mom">Replay</a><a href="/compare?a=demo-mom&amp;b=demo-day7">Isolation</a>
+    <a href="/">Chat</a><a href="/demo">Before / After</a><a href="/memory?user=demo-mom">Memory</a><a href="/guard-proof">Guard&nbsp;proof</a><a href="/print?user=demo-mom">Print</a><a href="/replay?user=demo-mom">Replay</a><a href="/compare?a=demo-mom&amp;b=demo-day7">Isolation</a>
     <span class="pill ${mode === 'mainnet' ? 'mainnet' : 'local'}"><span class="dot"></span>${mode === 'mainnet' ? 'Walrus Mainnet' : 'Local demo'}</span>
   </nav>
 </div></header>`;
@@ -77,6 +77,36 @@ export function chatPage({ mode }) {
   </div>
   ${FOOT(mode)}
 </div></main>
+</body></html>`;
+}
+
+// ---------- guard-proof ledger ----------
+export function ledgerPage({ mode, entries, verify }) {
+  const badge = (b) => (b ? '<span class="pill mainnet"><span class="dot"></span>high</span>' : '<span class="pill local"><span class="dot"></span>moderate</span>');
+  const rows = entries.length
+    ? entries.map((e) => `<tr>
+        <td class="mono">#${e.n}</td><td>${esc(e.at)}</td><td class="mono">${esc(e.userId)}</td>
+        <td>${badge(e.severity === 'high')}</td>
+        <td><b>${esc(String(e.kind) === 'interaction' ? `${e.substance} × ${e.withSubstance}` : e.substance)}</b>${e.reason ? ` — ${esc(e.reason)}` : ''}<br><small>${esc(e.message)}</small></td>
+        <td><small>fact: “${esc(e.fact)}”</small>${e.blobId ? `<br><small class="mono">blob ${esc(String(e.blobId).slice(0, 16))}…</small>` : ''}</td>
+        <td class="mono"><small>${esc(String(e.hash).slice(0, 12))}…</small></td>
+      </tr>`).join('')
+    : '<tr><td colspan="7"><i>No guard has fired yet — teach an allergy, then ask the trap question.</i></td></tr>';
+  const chain = verify.ok
+    ? '<span class="pill mainnet"><span class="dot"></span>chain intact</span>'
+    : `<span class="pill local"><span class="dot"></span>CHAIN BROKEN at #${verify.brokenAt}</span>`;
+  return TOP('DoseDaughter — guard proof', mode) + `
+<main class="wrap" id="main">
+  <h1 class="pg">Guard proof — every STOP, on the record</h1>
+  <p class="sub">Append-only ledger of every safety block, with the recalled fact and blob id that fired it. Each entry carries the hash of the previous one — any edit after the fact breaks the chain.</p>
+  <p class="sub">${chain} · ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} · machine-readable: <a href="/api/guard-proof">/api/guard-proof</a> · <a href="/">back to chat</a></p>
+  <div class="notice ${mode === 'mainnet' ? 'mainnet' : 'local'}">Live receipt: ask “Can she take ibuprofen for her headache?” in the <a href="/">chat</a> (demo persona knows the ibuprofen allergy), then reload this page — the STOP that just fired is already on it, with the Walrus blob that caused it.</div>
+  <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13.5px">
+    <thead><tr style="text-align:left;border-bottom:1px solid currentColor;opacity:.7"><th>#</th><th>when (UTC)</th><th>user</th><th>severity</th><th>what was blocked</th><th>evidence</th><th>hash</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>
+  ${FOOT(mode)}
+</main>
 </body></html>`;
 }
 

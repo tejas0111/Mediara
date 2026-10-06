@@ -14,6 +14,10 @@ import path from 'node:path';
 // Configure BEFORE importing the app (dotenv does not override existing vars).
 const TMP = path.join(os.tmpdir(), `dd-routes-${process.pid}-${Date.now()}.json`);
 process.env.DD_LOCAL_STORE = TMP;
+// Ledger isolation: route tests must never append to the repo's real usage /
+// guard-proof ledgers (they are judge-facing evidence).
+process.env.DD_USAGE_LEDGER = TMP + '.usage.json';
+process.env.DD_GUARD_PROOF = TMP + '.gp.json';
 process.env.MEMWAL_MODE = 'local';
 process.env.SESSION_SECRET = 'routes-test-secret';
 process.env.OPENROUTER_API_KEY = ''; // force the keyless path; guard must still block

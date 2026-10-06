@@ -22,6 +22,9 @@ DoseDaughter stores every fact the family teaches it as an **encrypted blob on W
 - **Doctor-visit summary from recall only.** `GET /api/summary` (and the printable `/print` card) compiles medications, allergies, routine, and care contacts — no hallucination, every line traceable to a blob.
 - **Day 1 → Day 90 replay.** `/replay` animates a caregiver's memory accumulating — and the day the guard stops a dangerous dose.
 - **Public receipts.** A `/memory` page shows every stored fact with a live [walruscan.com](https://walruscan.com) link. Nothing to hide, everything to verify.
+- **Guard proof, not guard claims.** Every STOP/CAUTION is appended to `/guard-proof` — an append-only, **hash-chained** ledger with the exact recalled fact and blob id that fired it; the published chain re-verifies itself on every view, so an edit after the fact is detectable. Judges don't have to trust the demo — the receipt is public.
+- **The memory reaches out.** A proactive tick (6-hourly in dev, on-demand via `/api/proactive` and `/api/nudge`) sends a **morning med brief** from recall and runs the **interaction cross-check over the whole namespace nightly** — the same curated table as chat, so a warfarin taught on Monday and an SSRI taught on Thursday still collide on Friday, even though no single message ever named both.
+- **Usage you can grade.** `npm run stats` reads the per-user memory ledger (`/api/usage`) — or Walrus itself with `--live` — and judges the hackathon's ≥3 users × ≥10 memories requirement with an honest exit code and a walruscan link for every blob.
 
 **All memory lives on Walrus Mainnet** — 13 memory facts for the demo persona (12 seeded + 1 taught live), all live on Mainnet; the [blob ledger](evidence/blob-ledger.md) records every blob ID (15 unique, including probes). No Postgres, no vector DB, no server-side memory store.
 
@@ -32,7 +35,7 @@ git clone https://github.com/tejas0111/dosedaughter.git
 cd dosedaughter/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 148 core + 61 wallet + 33 route tests, no network
+npm test                    # 164 core + 61 wallet + 33 route + 11 stats tests, no network
 npm run dev                 # server on :3001
 ```
 
@@ -92,7 +95,7 @@ Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.
 ## Repository layout
 
 ```
-app/                  Express server, Telegram bot, MemWal wrapper, seeder, 148 core + 61 wallet + 33 route tests
+app/                  Express server, Telegram bot, MemWal wrapper, seeder, 164 core + 61 wallet + 33 route + 11 stats tests
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -107,7 +110,10 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 242/242 offline checks pass (148 core + 61 wallet + 33 route) | `npm test` — run it yourself |
+| 269/269 offline checks pass (164 core + 61 wallet + 33 route + 11 stats) | `npm test` — run it yourself |
+| **Real-use requirement (≥3 users × ≥10 memories) — judged from Walrus, not vibes** | `npm run stats` (`--live` reads the relayer; every blob id links to walruscan) · [`/api/usage`](app/README.md) |
+| **Every STOP/CAUTION is public and tamper-evident** | [`/guard-proof`](app/src/page.js) — append-only hash-chain ledger; `/api/guard-proof` includes a chain verification |
+| **Memory that reaches out** | morning med brief + nightly interaction cross-check over the whole namespace — `/api/proactive` (on demand), `/api/nudge` (per-user tick), 6-hourly scheduler in dev |
 | **Memory changes the outcome on 12/12 adverse probes** (0/5 false positives) | [`evidence/AB-RESULTS.md`](evidence/AB-RESULTS.md) — `npm run eval` (memory-off vs memory-on) |
 
 Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df78dee53a89416db780dae0bc9879f605324bdbbb783`

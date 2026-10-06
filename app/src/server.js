@@ -13,14 +13,15 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
-import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage } from './page.js';
+import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser, registryStatus } from './userRegistry.js';
 import { limiter, clientKey } from './rateLimit.js';
+import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -51,6 +52,11 @@ const normalizeUser = (v, fallback = 'demo-mom') => {
 const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
+
+// Usage evidence (hackathon requirement: ≥3 users × ≥10 memories) + the
+// tamper-evident guard ledger. Both persist next to the server code.
+const usage = new UsageTracker({ persistPath: process.env.DD_USAGE_LEDGER || path.join(__dirname, 'usage-ledger.json') });
+const guardProof = new GuardProof({ persistPath: process.env.DD_GUARD_PROOF || path.join(__dirname, 'guard-proof.json') });
 
 // Reuse MemWal clients: constructing one per request repeats the relayer
 // /version + /config + Seal-session handshake (~3s) on every mainnet call. Cache
@@ -158,7 +164,9 @@ function clientId(req, res) {
 function historyFor(ns) { return transcripts.get(ns) || []; }
 function rememberTurn(ns, role, content) {
   const h = transcripts.get(ns) || [];
-  h.push({ role, content: String(content).slice(0, 500) });
+  // Neutralise tag delimiters so a prior turn cannot break out of its chat role
+  // framing and masquerade as system instructions.
+  h.push({ role, content: sanitizeChatTurn(content) });
   while (h.length > 6) h.shift();
   transcripts.set(ns, h);
   // Bounded LRU: evict oldest instead of wiping everyone's context.
@@ -268,6 +276,10 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     //   1) allergy conflict (hard block)  2) curated drug–drug interaction.
     const conflict = memoryOff ? null : findConflict(message, guardFacts);
     const interaction = (memoryOff || conflict) ? null : findInteraction(message, guardFacts);
+    // Public proof: every fired guard is appended to the tamper-evident ledger
+    // (/guard-proof) with the exact recalled fact + blob id behind the decision.
+    if (conflict) guardProof.record({ userId: safeUser, kind: 'conflict', substance: conflict.substance, severity: 'high', reason: 'recalled allergy', fact: conflict.fact, blobId: conflict.blob_id, message });
+    if (interaction) guardProof.record({ userId: safeUser, kind: 'interaction', substance: interaction.substance, withSubstance: interaction.withSubstance, severity: interaction.severity, reason: interaction.reason, fact: interaction.fact, blobId: interaction.blob_id, message });
     let reply;
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. Confirm with your doctor — this is not medical advice.`;
@@ -315,6 +327,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (saved?.blob_id && /^I don't have any memories/i.test(reply)) {
       reply = `Noted \u2014 I'll remember: \u201c${message}\u201d. Confirm with your doctor \u2014 this is not medical advice.`;
     }
+    // Usage evidence: only REAL chat turns and only blobs Walrus actually
+    // returned are counted — `npm run stats` reads this same ledger.
+    usage.touchUser(safeUser, { turn: true });
+    if (saved?.blob_id) usage.recordMemory(safeUser, { blobId: saved.blob_id, text: message });
+
     res.json({
       reply,
       recalled: recalled.map((r) => r.text),
@@ -497,6 +514,67 @@ app.get('/api/export', readLimiter, async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// Usage evidence (hackathon requirement ≥3 users × ≥10 memories): JSON view.
+app.get('/api/usage', readLimiter, (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const wantsMd = String(req.query.format || '') === 'md';
+    const s = usage.summary({ mode: MODE });
+    res.json({ ...s.json, markdown: wantsMd ? s.md : undefined });
+  } catch (e) { fail(res, e); }
+});
+
+// Guard-proof ledger: human page + machine JSON. The JSON includes a chain
+// verification so anyone can check the ledger was not edited after the fact.
+app.get('/guard-proof', readLimiter, (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const verify = guardProof.verify();
+    res.send(ledgerPage({ mode: MODE, entries: guardProof.list({ limit: 100 }), verify }));
+  } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
+});
+
+app.get('/api/guard-proof', readLimiter, (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ count: guardProof.entries.length, verify: guardProof.verify(), entries: guardProof.list({ limit: 100 }) });
+  } catch (e) { fail(res, e); }
+});
+
+// Proactive safety brief (on demand): morning med plan + a nightly-style
+// interaction cross-check of the WHOLE namespace — the same interaction table
+// as chat, catching pairs taught on different days. Read-only.
+app.get('/api/proactive', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    const morning = morningBriefFromRecall(view.recalled);
+    const interactionWarnings = nightlyCrossCheckFromRecall(view.recalled);
+    res.json({ user: view.userId, mode: view.mode, degraded: view.degraded, morning, interactionWarnings });
+  } catch (e) { fail(res, e); }
+});
+
+// The proactive tick, runnable on demand for judges (no Telegram token needed
+// on the server): runs the full brief + cross-check per tracked user and logs
+// the result. `hour` is overridable so the morning/evening split is demoable.
+app.post('/api/nudge', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const hour = Number(req.body?.hour);
+    const requested = Array.isArray(req.body?.users) ? req.body.users.map(String) : null;
+    const targets = requested ? requested.filter((u) => u && !isReservedNs(u)) : null;
+    const out = [];
+    for (const u of targets || []) {
+      const { client } = clientFor(u);
+      const tick = await tickOnce(client, { hour: Number.isFinite(hour) ? hour : new Date().getUTCHours() });
+      out.push({ user: u, items: tick?.items || [] });
+      if (tick) console.log(`[nudge] ${u}: ${tick.items.map((i) => i.kind).join(', ')}`);
+    }
+    res.json({ mode: MODE, delivery: 'log (wire a channel to send these)', users: out });
+  } catch (e) { fail(res, e); }
+});
+
 // Seed-status: blob count + agent id + whether the >=10 Mainnet bar is met.
 app.get('/api/seed-status', readLimiter, async (req, res) => {
   try {
@@ -620,6 +698,23 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 const port = process.env.PORT || 3001;
 if (process.env.VERCEL !== '1' && import.meta.url === `file://${process.argv[1]}`) {
   const server = app.listen(port, () => console.log(`DoseDaughter on :${port}`));
+  // Proactive loop: the memory reaches OUT on a schedule (every 6h) — morning
+  // med plan + nightly interaction cross-check per tracked user. Off-switch:
+  // DD_NUDGE=off. Runs only when the server actually listens (never under tests/Vercel).
+  if (process.env.DD_NUDGE !== 'off') {
+    const NUDGE_USERS = ['demo-mom', 'user-a', 'user-b'];
+    const nudgeTimer = setInterval(() => {
+      (async () => {
+        for (const u of NUDGE_USERS) {
+          try {
+            const tick = await tickOnce(clientFor(u).client);
+            if (tick) console.log(`[nudge] ${u}: ${tick.items.map((i) => i.kind).join(', ')}`);
+          } catch (e) { console.error(`[nudge] ${u} failed:`, String((e && e.message) || e).slice(0, 120)); }
+        }
+      })();
+    }, 6 * 60 * 60 * 1000);
+    nudgeTimer.unref();
+  }
   // A listen failure (EADDRINUSE) must not crash as an unhandled 'error' event.
   server.on('error', (e) => { console.error('listen error:', String((e && e.message) || e)); process.exit(1); });
   // Generous socket cap: per-upstream timeouts keep the handler bounded; a tight
