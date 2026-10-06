@@ -1,10 +1,10 @@
 # Netlify deploy config for DoseDaughter (Express app -> serverless function).
-# The app is server-rendered Express; Netlify runs it through serverless-http.
+# The app is Express + a React SPA (app/web); Netlify runs it through serverless-http.
 # NOTE: production MUST set MEMWAL_MODE=mainnet + keys, SESSION_SECRET, and
 # OPENROUTER_API_KEY in the Netlify UI (Site settings -> Environment variables).
 [build]
   base = "app"
-  command = "echo \"no build step\""
+  command = "npm --prefix web install --no-audit --no-fund && npm --prefix web run build"
   publish = "public"
 
 [build.environment]
@@ -13,7 +13,7 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
-  included_files = ["public/**", "src/**"]
+  included_files = ["public/**", "src/**", "web/dist/**"]
 
 # All dynamic routes go to the Express function; existing static files under
 # app/public (e.g. /assets/app.js) are served directly by Netlify first.

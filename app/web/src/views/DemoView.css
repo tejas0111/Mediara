@@ -1,0 +1,13 @@
+.demo-wrap { display: flex; flex-direction: column; gap: 14px; }
+.demo-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.demo-title { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.demo-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 760px) {
+  .demo-grid { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+.demo-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.demo-fact { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-soft); }
+.demo-cite { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .demo-wrap *, .demo-wrap *::before, .demo-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

@@ -1,0 +1,19 @@
+.cmp-wrap { display: flex; flex-direction: column; gap: 14px; }
+.cmp-title { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.cmp-form { display: grid; grid-template-columns: 1fr; gap: 12px; }
+@media (min-width: 640px) {
+  .cmp-form { grid-template-columns: 1fr 1fr auto; align-items: end; }
+}
+.cmp-field { display: flex; flex-direction: column; }
+.cmp-actions { display: flex; align-items: flex-end; }
+.cmp-counts { display: flex; gap: 8px; flex-wrap: wrap; }
+.cmp-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 760px) {
+  .cmp-grid { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+.cmp-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.cmp-fact { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-soft); }
+.cmp-cite { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .cmp-wrap *, .cmp-wrap *::before, .cmp-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

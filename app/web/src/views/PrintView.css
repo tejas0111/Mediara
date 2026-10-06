@@ -1,0 +1,23 @@
+.pr-wrap { display: flex; flex-direction: column; gap: 14px; }
+.pr-toolbar { display: flex; gap: 8px; }
+.pr-big { font-size: 20px !important; }
+.pr-allergies { border: 2px solid var(--danger); border-radius: var(--r-md); background: var(--danger-soft); padding: 14px 16px; margin-bottom: 16px; }
+.pr-allergy-h { margin: 0 0 10px; font-size: 22px; font-weight: 800; letter-spacing: 0.01em; color: var(--danger); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pr-allergy-list { list-style: none; }
+.pr-allergy-item { font-size: 17px; font-weight: 650; }
+.pr-unknown { margin: 0; font-weight: 700; color: var(--warn); font-size: 16px; }
+.pr-h { margin: 16px 0 8px; font-size: 15px; font-weight: 700; }
+.pr-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.pr-item { font-size: 14.5px; }
+.pr-muted { color: var(--muted); font-size: 14px; margin: 0; }
+.pr-blobids { margin: 16px 0 0; font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  .pr-wrap *, .pr-wrap *::before, .pr-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+@media print {
+  .sidebar, .topbar, .backdrop, .no-print { display: none !important; }
+  .pr-wrap { gap: 10px; }
+  .pr-allergies { break-inside: avoid; }
+  .pr-blobids { display: block !important; }
+  a { text-decoration: none; color: inherit; }
+}

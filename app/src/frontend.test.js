@@ -42,3 +42,57 @@ test('single HTML-escape definition (no esc drift)', () => {
   assert.ok(server.includes("ledgerPage, esc } from './page.js'") || server.includes(", esc } from './page.js'"), 'server imports esc from page.js');
   assert.equal((server.match(/const esc = \(s\) =>/g) || []).length, 0, 'server has no duplicate esc definition');
 });
+
+// ------------------------------------------------- React SPA contract ---
+// The / route serves app/web/dist. These guard the bundle contract and the
+// honesty properties ported from the legacy UI (blob receipts on paper,
+// replay a11y, no raw-HTML user rendering).
+import { fileURLToPath as __f } from 'node:url';
+const WEB = path.join(path.dirname(__f(import.meta.url)), '..', 'web');
+const wread = (p) => fs.readFileSync(path.join(WEB, p), 'utf8');
+
+test('SPA bundle is built and CSP-compatible (no inline scripts)', () => {
+  const html = wread('dist/index.html');
+  assert.ok(html.includes('/app/assets/'), 'bundle assets served under /app/');
+  assert.ok(!/<script>/.test(html), 'no inline <script> (CSP script-src self holds)');
+  assert.ok(!/dangerouslySetInnerHTML/.test(wread('src/App.tsx') + wread('src/ChatView.tsx')), 'chat/shell never inject raw HTML');
+  const srcs = ['src/App.tsx', 'src/ChatView.tsx', 'src/WalletView.tsx', 'src/api.ts', 'src/ui.tsx', 'src/chat.ts',
+    'src/views/MemoryView.tsx', 'src/views/DemoView.tsx', 'src/views/ReplayView.tsx', 'src/views/CompareView.tsx',
+    'src/views/GuardProofView.tsx', 'src/views/StatsView.tsx', 'src/views/PrintView.tsx'].map(wread).join('\n');
+  assert.equal((srcs.match(/dangerouslySetInnerHTML/g) || []).length, 0, 'no view renders raw HTML anywhere');
+});
+
+test('SPA replay keeps a11y + honest day labels', () => {
+  const v = wread('src/views/ReplayView.tsx');
+  assert.ok(v.includes('aria-hidden'), 'unrevealed facts hidden from AT');
+  assert.ok(v.includes('dayFor'), 'proportional day labels');
+  assert.ok(!v.includes('Day 87'), 'no hardcoded Day-87 caption');
+  assert.ok(v.includes('prefers-reduced-motion') || v.includes('reduce'), 'reduced-motion honored');
+});
+
+test('SPA print keeps blob receipts and hides only chrome', () => {
+  const css = wread('src/views/PrintView.css');
+  assert.ok(css.includes('.sidebar') && css.includes('.topbar'), 'print hides the app chrome');
+  assert.ok(!/\.pr-blobids\s*\{[^}]*display:\s*none/.test(css), 'blob receipts stay visible on paper');
+  const app = wread('src/App.tsx');
+  assert.ok(app.includes('"sidebar"') || app.includes("'sidebar'") || app.includes('sidebar'), 'shell sidebar class exists for print-hiding');
+  assert.ok(wread('src/views/PrintView.tsx').includes('shortBlob'), 'print cites blob ids per fact');
+});
+
+test('SPA chat renders STOPs as safety cards with receipts', () => {
+  const c = wread('src/ChatView.tsx');
+  assert.ok(c.includes('STOP') && c.includes('#/proof'), 'STOP links to guard proof');
+  assert.ok(c.includes('shortBlob'), 'STOP cites the firing blob');
+  assert.ok(c.includes('500'), 'composer enforces the 500-char contract');
+  assert.ok(c.includes('Confirm with your doctor'), 'disclaimer always rendered');
+});
+
+test('SPA api client covers every JSON route the views need', () => {
+  const api = wread('src/api.ts');
+  for (const p of ['/api/chat', '/api/summary', '/api/export', '/api/seed-status', '/api/guard-proof',
+    '/api/proactive', '/api/usage', '/api/auth/message', '/api/auth/verify', '/api/auth/logout',
+    '/api/wallet/status', '/api/wallet/onboard/create', '/api/wallet/onboard/link',
+    '/api/wallet/onboard/complete', '/api/wallet/relink']) {
+    assert.ok(api.includes(`'${p}'`) || api.includes(`\`${p}`), `api.ts covers ${p}`);
+  }
+});

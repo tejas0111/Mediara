@@ -87,7 +87,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/frontend.test.js` | 293 offline checks (core 180 + wallet/auth/crypto/rate-limit 61 + route 36 + stats 11 + frontend 5), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/frontend.test.js` | 298 offline checks (core 180 + wallet/auth/crypto/rate-limit 61 + route 36 + stats 11 + frontend 10), no network |
 | `npm run stats` | `node src/stats.js` | **Judge command**: per-user memory counts → the ≥3 users × ≥10 memories requirement. `-- --live` reads Walrus itself; `-- --json` is machine-readable. Exit 0 = requirement met. Appends `evidence/USAGE-LEDGER.md` |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
@@ -119,7 +119,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
 - `src/verify.js` — Mainnet health + write/recall probe.
-- `src/selftest.js` — 180 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/OOV fallback/negation-scope/class-gaps/fuzz/bulk/concurrency/resilience regressions); `src/wallet.test.js` adds 61 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 36 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, nudge caps, escaping, classification, degraded-mode); `src/stats.test.js` adds 11 usage/proof tests; `src/frontend.test.js` adds 5 print/replay/XSS honesty checks — `npm test` runs all five = 293.
+- `src/selftest.js` — 180 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/OOV fallback/negation-scope/class-gaps/fuzz/bulk/concurrency/resilience regressions); `src/wallet.test.js` adds 61 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 36 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, nudge caps, escaping, classification, degraded-mode); `src/stats.test.js` adds 11 usage/proof tests; `src/frontend.test.js` adds 5 legacy print/replay/XSS checks + 5 React-SPA bundle-contract checks (CSP, replay a11y, print receipts, STOP cards, route coverage) — `npm test` runs all five = 298.
 - `api/index.js` + `vercel.json` + `DEPLOY.md` — Vercel deploy wiring (serverless entry, rewrites, 5-min guide; prod MUST be mainnet — serverless disk is ephemeral).
 
 ## Local vs Mainnet — honesty box
@@ -154,3 +154,18 @@ Per-chat namespace is `user-tg-<chatId>`; `/reset` clears local rows only (mainn
 - **LLM echo:** without `OPENROUTER_API_KEY` replies are `[no LLM key] …` echoes with memory-char counts — memory flow still works. Default model `google/gemini-2.5-flash` via `LLM_MODEL`.
 
 > Medical disclaimer: DoseDaughter reminds and flags only — never adjusts dosage. Always confirm with your doctor.
+
+## React SPA (app/web) — the premium UI at `/`
+
+Vite + React 18 + TypeScript, hand-vendored shadcn-style primitives (zero runtime
+deps, MIT-clean), white/greyish ChatGPT-type shell: sidebar history + centered chat.
+
+| Command | Purpose |
+|---|---|
+| `npm run build:web` (in `app/`) | install `web/` deps + `vite build` → `web/dist/` (committed, so clone-and-run works) |
+| `npm run dev --prefix web` | Vite dev on :5173, `/api` proxied to the Express server on :3001 |
+
+- Hash routing (`#/memory`, `#/demo`, `#/replay`, `#/compare`, `#/proof`, `#/stats`, `#/print`, `#/wallet`) — no server fallback needed.
+- Express serves `web/dist` at `/app` (immutable hashed assets) and `index.html` at `/`; without a build it falls back to the legacy server-rendered chat.
+- CSP unchanged (`script-src 'self'` — one bundled module file, no inline scripts).
+- Chat history lives in `localStorage` per user id; memory itself stays on Walrus.

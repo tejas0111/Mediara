@@ -1,0 +1,16 @@
+.gp-wrap { display: flex; flex-direction: column; gap: 14px; }
+.gp-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.gp-title { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: -0.01em; }
+.gp-list { display: grid; grid-template-columns: 1fr; gap: 14px; }
+@media (min-width: 760px) {
+  .gp-list { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+.gp-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.gp-line { margin: 0 0 8px; font-size: 14px; }
+.gp-quote { margin: 8px 0; padding: 8px 12px; border-left: 3px solid var(--border); background: var(--bg-soft); border-radius: 0 var(--r-sm) var(--r-sm) 0; font-size: 14px; }
+.gp-msg { border-left-color: var(--faint); color: var(--text-2); }
+.gp-cite { font-size: 12.5px; color: var(--muted); }
+.gp-time { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+  .gp-wrap *, .gp-wrap *::before, .gp-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

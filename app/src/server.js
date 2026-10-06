@@ -10,6 +10,7 @@
 // memory lands in THEIR OWN MemWalAccount (they own it; app wallet never touched).
 import 'dotenv/config';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -134,6 +135,10 @@ app.use((req, res, next) => {
 });
 // Static UI assets (hand-written CSS/JS in app/public).
 app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
+// React SPA bundle (Vite build in app/web/dist, served under /app). Hashed
+// filenames are immutable; index.html is served explicitly at / (never cached).
+const WEB_DIST = path.join(__dirname, '..', 'web', 'dist');
+app.use('/app', express.static(WEB_DIST, { maxAge: '1y', index: false, immutable: true }));
 // 16 KB JSON bodies — chat messages and tx signatures are tiny; anything
 // larger is abuse. (Express's json parser rejects oversize with 413.)
 app.use(express.json({ limit: '16kb' }));
@@ -394,7 +399,11 @@ app.get('/memory', readLimiter, async (req, res) => {
 
 app.get('/', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.send(chatPage({ mode: MODE }));
+  try {
+    res.send(fs.readFileSync(path.join(WEB_DIST, 'index.html'), 'utf8'));
+  } catch {
+    res.send(chatPage({ mode: MODE }));
+  }
 });
 
 app.get('/demo', readLimiter, async (req, res) => {

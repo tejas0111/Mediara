@@ -18,7 +18,8 @@
     "dev": "node src/server.js",
     "seed:10": "node src/seed10.js",
     "verify:memwal": "node src/verify.js",
-    "demo:seed": "node src/seed-demo.js"
+    "demo:seed": "node src/seed-demo.js",
+    "build:web": "npm --prefix web install --no-audit --no-fund && npm --prefix web run build"
   },
   "type": "module",
   "engines": {
