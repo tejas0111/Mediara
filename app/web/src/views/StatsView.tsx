@@ -40,7 +40,7 @@ export default function StatsView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>{error}</p>
+        <p style={{ margin: 0 }}>Could not load usage: {error}. Counts below may be unavailable — retry before reporting them.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -49,19 +49,20 @@ export default function StatsView({ userId }: { userId: string }) {
   }
 
   if (!data) {
-    return <Empty title="No usage data" />;
+    return <Empty title="No usage data">No usage recorded yet — usage appears after memories are stored.</Empty>;
   }
 
   return (
     <div className="st-wrap">
       <h2 className="st-title">Usage</h2>
+      <p className="st-hint">Per-user memory and turn counts with blob receipts. Qualifying users meet the minimum memories requirement.</p>
       <Alert variant={data.meetsRequirement ? 'ok' : 'warn'}>
         {data.meetsRequirement ? 'Requirement MET' : 'Requirement NOT MET'} — {data.qualifyingUsers} qualifying users
         (needs {data.requirement.distinctUsers} users × {data.requirement.memoriesPerUser} memories).
       </Alert>
 
       {data.users.length === 0 ? (
-        <Empty title="No users yet" />
+        <Empty title="No users yet">No users have stored memories yet — stats appear after the first save.</Empty>
       ) : (
         <div className="st-grid">
           {data.users.map((u) => (
@@ -78,6 +79,8 @@ export default function StatsView({ userId }: { userId: string }) {
                   <Badge variant={u.meetsMinimum ? 'ok' : 'warn'}>
                     {u.meetsMinimum ? 'meets minimum' : 'below minimum'}
                   </Badge>
+                  <Badge variant="default">{u.memories} memories</Badge>
+                  <Badge variant="default">{u.turns} turns</Badge>
                 </div>
                 {u.blobs.length === 0 ? (
                   <p className="st-muted">No blobs recorded.</p>
@@ -101,7 +104,7 @@ export default function StatsView({ userId }: { userId: string }) {
           ))}
         </div>
       )}
-      <p className="st-muted">Generated {data.generatedAt} · mode {data.mode}</p>
+      <p className="st-muted">Generated {data.generatedAt} · mode {data.mode} · Confirm with your doctor — this is not medical advice.</p>
     </div>
   );
 }

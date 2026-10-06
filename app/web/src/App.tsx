@@ -23,6 +23,7 @@ import {
 import type { ChatMsg, ChatSession, Route, ViewKey } from './chat';
 import { authLogout, walletStatus } from './api';
 import type { WalletStatus } from './api';
+import { useCurrentAccount } from '@mysten/dapp-kit';
 import {
   Badge,
   Button,
@@ -84,6 +85,12 @@ export default function App() {
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
   const [acctOpen, setAcctOpen] = React.useState(false);
   const [wallet, setWallet] = React.useState<WalletStatus | null>(null);
+  // dAppKit wallet connection (client-side) vs server session (signed-in):
+  // "Connect" = no wallet, "Sign in" = wallet but no session, address = session.
+  const suiAccount = useCurrentAccount();
+  const walletLabel = wallet?.signedIn
+    ? (wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'Sign out')
+    : (suiAccount ? 'Sign in' : 'Connect wallet');
 
   const view = routeView(route);
   const activeId = routeSessionId(route);
@@ -241,7 +248,7 @@ export default function App() {
                 className={cn('nav-it', view === 'chat' && 'nav-active')}
                 onClick={() => { navigate('chat'); setDrawer(false); }}
               >
-                <IconChat /> Chat
+                <IconChat /> <span className="nav-label">Chat</span>
               </button>
             </li>
             {NAV.map((n) => (
@@ -251,7 +258,7 @@ export default function App() {
                   className={cn('nav-it', view === n.key && 'nav-active')}
                   onClick={() => { navigate(n.key); setDrawer(false); }}
                 >
-                  {n.label}
+                  <span className="nav-label">{n.label}</span>
                 </button>
               </li>
             ))}
@@ -261,7 +268,7 @@ export default function App() {
                 className={cn('nav-it', view === 'wallet' && 'nav-active')}
                 onClick={() => { navigate('wallet'); setDrawer(false); }}
               >
-                <IconWallet /> Wallet
+                <IconWallet /> <span className="nav-label">Wallet</span>
               </button>
             </li>
           </ul>
@@ -302,7 +309,11 @@ export default function App() {
               </li>
             ))}
           </ul>
-          {visible.length === 0 ? <p className="side-note">No chats yet.</p> : null}
+          {visible.length === 0 ? (
+            <p className="side-note">
+              {q ? `No chats match “${filter.trim()}”.` : 'No chats yet — start one above.'}
+            </p>
+          ) : null}
         </div>
 
         <div className="side-foot">
@@ -339,12 +350,24 @@ export default function App() {
               <span className="knob" />
             </button>
             <span className="mem-label">Memory {memoryOn ? 'on' : 'off'}</span>
-            <Badge variant={mode === 'mainnet' ? 'mainnet' : 'local'}>{mode ?? 'local?'}</Badge>
-            <Button size="sm" onClick={() => void handleWalletButton()}>
+            <Badge
+              variant={mode === 'mainnet' ? 'mainnet' : 'local'}
+              title={mode === 'mainnet' ? 'Mainnet = real Walrus memory' : 'Local demo = browser-side stand-in, no chain'}
+            >
+              {mode === 'mainnet' ? 'Mainnet' : 'Local demo'}
+            </Badge>
+            <Button
+              size="sm"
+              className="wallet-btn"
+              aria-label={wallet?.signedIn
+                ? (wallet.address ? `Wallet ${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)} — sign out` : 'Wallet connected — sign out')
+                : (suiAccount ? `Sui wallet ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)} connected — sign in` : 'Connect wallet')}
+              onClick={() => void handleWalletButton()}
+            >
               <IconWallet />
-              {wallet?.signedIn
-                ? (wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'Sign out')
-                : 'Connect wallet'}
+              <span className="wallet-label">
+                {walletLabel}
+              </span>
             </Button>
           </div>
         </header>
@@ -396,6 +419,9 @@ export default function App() {
           <div className="foot-row">
             <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
               {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'wallet out'}
+            </Badge>
+            <Badge variant={suiAccount ? 'mainnet' : 'default'}>
+              {suiAccount ? `sui ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)}` : 'sui out'}
             </Badge>
             <Button
               size="sm"

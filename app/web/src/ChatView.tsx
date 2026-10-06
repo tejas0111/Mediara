@@ -8,7 +8,7 @@ import {
 } from './api';
 import type { ChatMsg, ChatSession } from './chat';
 import { msgId } from './chat';
-import { Alert, Button, IconShield, Spinner, cn } from './ui';
+import { Alert, Badge, Button, IconShield, Spinner, cn } from './ui';
 import './ChatView.css';
 
 export interface ChatViewProps {
@@ -68,12 +68,28 @@ function AssistantBody({ msg, mode }: { msg: ChatMsg; mode: 'local' | 'mainnet' 
     );
   }
   if (text.startsWith('CAUTION')) {
+    const blob = msg.savedBlob ?? msg.recalled?.[0]?.blob_id ?? null;
+    const short = shortBlob(blob);
+    const link = walruscan(blob);
     return (
       <Alert variant="warn" className="asst-alert">
         <p className="asst-alert-title">
-          <IconShield /> Caution
+          <IconShield /> Caution — check before acting
         </p>
         <p className="asst-text">{text}</p>
+        {short ? (
+          <p className="cite">
+            Source blob <span className="mono">{short}</span>
+            {link && mode === 'mainnet' ? (
+              <>
+                {' · '}<a href={link} target="_blank" rel="noreferrer">walruscan</a>
+              </>
+            ) : null}
+            {' · '}<a href="#/proof">guard proof</a>
+          </p>
+        ) : (
+          <p className="cite"><a href="#/proof">guard proof</a></p>
+        )}
       </Alert>
     );
   }
@@ -161,12 +177,19 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div className="chat">
+      {!memoryOn ? (
+        <Alert variant="warn" className="chat-memoff">
+          Memory is off — I will answer without saving or recalling. Turn memory on to keep facts for {userId}.
+        </Alert>
+      ) : null}
       <div className="chat-list" ref={listRef} role="log" aria-label="Conversation" aria-live="polite">
         {empty ? (
           <div className="greet">
+            <Badge variant={memoryOn ? 'ok' : 'warn'}>{memoryOn ? 'Memory on' : 'Memory off'} · {userId}</Badge>
             <h2>What can I remember for you today?</h2>
             <p className="greet-sub">
               Tell me once — medications, allergies, routines — and I will keep it for {userId}.
+              Ask anything; safety checks run before every answer.
             </p>
             <div className="chips">
               {SUGGESTIONS.map((s) => (
@@ -209,10 +232,10 @@ export default function ChatView(props: ChatViewProps) {
                   ) : null}
                   <p className={cn('saved', m.savedBlob ? 'saved-yes' : 'saved-no')}>
                     {m.savedBlob
-                      ? `Saved · blob ${shortBlob(m.savedBlob) ?? m.savedBlob}`
+                      ? `Saved to memory · blob ${shortBlob(m.savedBlob) ?? m.savedBlob}`
                       : m.memoryPersisted === false || !memoryOn
-                        ? 'Not saved'
-                        : 'Not saved'}
+                        ? 'Not saved — memory off or nothing new to store'
+                        : 'Not saved — nothing new to store'}
                   </p>
                 </div>
               </div>
@@ -228,14 +251,14 @@ export default function ChatView(props: ChatViewProps) {
 
       {error ? (
         <Alert variant="danger" className="send-error">
-          <span>{error}</span>
+          <span>{error} Nothing was saved for this turn — you can retry safely.</span>
           {lastFailed ? (
-            <Button size="sm" onClick={retry} disabled={pending}>Retry</Button>
+            <Button size="sm" onClick={retry} disabled={pending}>{pending ? 'Retrying…' : 'Retry'}</Button>
           ) : null}
         </Alert>
       ) : null}
 
-      <p className="disclaimer">Confirm with your doctor — this is not medical advice.</p>
+      <p className="disclaimer">Confirm with your doctor — this is not medical advice. Safety checks run before every answer.</p>
 
       <form
         className="composer"

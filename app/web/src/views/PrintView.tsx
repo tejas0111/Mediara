@@ -66,7 +66,7 @@ export default function PrintView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>{error}</p>
+        <p style={{ margin: 0 }}>Could not load the emergency card for {userId}: {error}. Do not print from this state — retry first.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -75,7 +75,7 @@ export default function PrintView({ userId }: { userId: string }) {
   }
 
   if (!data) {
-    return <Empty title="No emergency summary" />;
+    return <Empty title="No emergency summary">Nothing stored for {userId} yet — add allergies and medications in chat first.</Empty>;
   }
 
   const stale = data.stale || !data.allergiesKnown;
@@ -91,7 +91,8 @@ export default function PrintView({ userId }: { userId: string }) {
   return (
     <div className="pr-wrap">
       <div className="pr-toolbar no-print">
-        <Button variant="primary" onClick={() => window.print()}>Print</Button>
+        <Button variant="primary" onClick={() => window.print()}>Print emergency card</Button>
+        <span className="pr-toolbar-hint">Allergies print first and large; blob receipts print with every fact.</span>
       </div>
 
       {stale ? (

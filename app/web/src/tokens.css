@@ -225,3 +225,9 @@ a { color: var(--link); }
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---- shell additions (additive only; existing tokens untouched) ---- */
+:root {
+  --topbar-from: #ffffff;
+  --topbar-to: #f3f4f6;
+}

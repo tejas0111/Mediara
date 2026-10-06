@@ -91,7 +91,7 @@ export default function DemoView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>{error}</p>
+        <p style={{ margin: 0 }}>Could not load the demo: {error}. Retry before presenting this view.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -100,7 +100,7 @@ export default function DemoView({ userId }: { userId: string }) {
   }
 
   if (!before || !after) {
-    return <Empty title="No demo data" />;
+    return <Empty title="No demo data">Demo namespaces are empty — seed demo data, then reload this view.</Empty>;
   }
 
   return (
@@ -113,8 +113,12 @@ export default function DemoView({ userId }: { userId: string }) {
           </Badge>
         ) : null}
       </div>
+      <p className="demo-hint">
+        The same fixed question is answered before and after a week of remembered facts.
+        Both sides cite their Walrus blob receipts.
+      </p>
       <p className="demo-q">Fixed question: &ldquo;{QUESTION}&rdquo;</p>
-      <p className="demo-q">
+      <p className="demo-q demo-ns">
         Showing <code className="mono">{afterNs}</code> for AFTER
         {afterNs === AFTER_FALLBACK ? ` (fell back from ${AFTER_TRY}, which was empty)` : ''}.
       </p>
@@ -122,8 +126,8 @@ export default function DemoView({ userId }: { userId: string }) {
       <div className="demo-grid">
         <Card>
           <CardHeader>
-            <CardTitle>BEFORE — {BEFORE_NS}</CardTitle>
-            <CardDescription>Blob count: {before.blobCount} · {before.facts.length} facts</CardDescription>
+            <CardTitle>BEFORE — <span className="mono">{BEFORE_NS}</span></CardTitle>
+            <CardDescription>Namespace {BEFORE_NS} · Blob count: {before.blobCount} · {before.facts.length} facts · {before.mode}</CardDescription>
           </CardHeader>
           <CardContent>
             <FactList facts={before.facts} />
@@ -131,14 +135,15 @@ export default function DemoView({ userId }: { userId: string }) {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>AFTER — {afterNs}</CardTitle>
-            <CardDescription>Blob count: {after.blobCount} · {after.facts.length} facts</CardDescription>
+            <CardTitle>AFTER — <span className="mono">{afterNs}</span></CardTitle>
+            <CardDescription>Namespace {afterNs} · Blob count: {after.blobCount} · {after.facts.length} facts · {after.mode}</CardDescription>
           </CardHeader>
           <CardContent>
             <FactList facts={after.facts} />
           </CardContent>
         </Card>
       </div>
+      <p className="demo-foot">Confirm with your doctor — this is not medical advice.</p>
     </div>
   );
 }

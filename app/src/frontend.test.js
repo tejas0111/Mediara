@@ -113,3 +113,22 @@ test('SPA print still hides only chrome after the reshuffle', () => {
   assert.ok(css.includes('.sidebar') && css.includes('.topbar'), 'print hides sidebar + topbar');
   assert.ok(!/\.pr-blobids\s*\{[^}]*display:\s*none/.test(css), 'blob receipts stay visible on paper');
 });
+
+test('SPA wallet uses Sui dAppKit (server verifies Sui signatures only)', () => {
+  const srcs = ['src/App.tsx', 'src/ChatView.tsx', 'src/WalletView.tsx', 'src/main.tsx', 'src/api.ts', 'src/ui.tsx', 'src/chat.ts',
+    'src/views/MemoryView.tsx', 'src/views/DemoView.tsx', 'src/views/ReplayView.tsx', 'src/views/CompareView.tsx',
+    'src/views/GuardProofView.tsx', 'src/views/StatsView.tsx', 'src/views/PrintView.tsx'].map(wread).join('\n');
+  assert.equal((srcs.match(/window\.ethereum/g) || []).length, 0, 'no ethereum signing path (it can never verify)');
+  const main = wread('src/main.tsx');
+  assert.ok(main.includes('SuiClientProvider') && main.includes('WalletProvider'), 'dAppKit providers mounted');
+  const wv = wread('src/WalletView.tsx');
+  assert.ok(wv.includes('useSignPersonalMessage') && wv.includes('ConnectButton'), 'sign-in via dAppKit personal message');
+});
+
+test('SPA shell copy is self-explanatory (no mystery badges)', () => {
+  const app = wread('src/App.tsx');
+  assert.ok(!app.includes("'local?'") && !app.includes('"local?"'), 'no bare "local?" badge text');
+  assert.ok(app.includes('Local demo') && app.includes('stand-in'), 'mode badge explains the backend');
+  const css = wread('src/App.css') + wread('src/tokens.css');
+  assert.ok(css.includes('#ffffff') && css.includes('#f3f4f6'), 'topbar white-to-grey tone present');
+});

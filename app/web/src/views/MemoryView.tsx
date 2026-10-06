@@ -104,7 +104,7 @@ export default function MemoryView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>{error}</p>
+        <p style={{ margin: 0 }}>Could not load memory for {userId}: {error}. Nothing shown may be incomplete — retry before relying on it.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -113,7 +113,7 @@ export default function MemoryView({ userId }: { userId: string }) {
   }
 
   if (!data) {
-    return <Empty title="No memory yet" />;
+    return <Empty title="No memory yet">Nothing stored for {userId} yet — add a fact in chat to get started.</Empty>;
   }
 
   const stale = data.stale || !data.allergiesKnown;
@@ -127,33 +127,19 @@ export default function MemoryView({ userId }: { userId: string }) {
         {stale ? <Badge variant="warn">stale</Badge> : <Badge variant="ok">fresh</Badge>}
         {!data.allergiesKnown ? <Badge variant="danger">allergies unconfirmed</Badge> : null}
       </div>
+      <p className="mem-hint">
+        Every fact below carries its Walrus blob receipt. Allergies are quoted verbatim — confirm with the patient or carer before acting.
+      </p>
 
       {stale ? (
         <Alert variant="warn">
           {data.stale
-            ? 'Stale data — this memory may be incomplete. Verify with the patient or carer.'
-            : 'Allergy history unconfirmed — assume nothing is safe until checked.'}
+            ? 'Stale data — this memory may be incomplete. Verify with the patient or carer before relying on it.'
+            : 'Allergy history unconfirmed — assume nothing is safe until checked with the patient or carer.'}
         </Alert>
       ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Current medications</CardTitle>
-          <CardDescription>{data.medications.length} on record</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Current medications"
-            items={data.medications}
-            blobOf={blobOf}
-            stale={stale}
-            emptyUnknown="UNKNOWN — medication list may be incomplete."
-            emptyNone="No current medications on record."
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
+      <Card className="mem-allergy-card">
         <CardHeader>
           <CardTitle>Allergies</CardTitle>
           <CardDescription>Critical — quoted verbatim with blob receipts</CardDescription>
@@ -168,6 +154,23 @@ export default function MemoryView({ userId }: { userId: string }) {
             emptyUnknown="UNKNOWN — allergy history may be incomplete. Assume nothing is safe."
             emptyNone="No known allergies on record."
             badge={<Badge variant="danger">critical</Badge>}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Current medications</CardTitle>
+          <CardDescription>{data.medications.length} on record</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Section
+            title="Current medications"
+            items={data.medications}
+            blobOf={blobOf}
+            stale={stale}
+            emptyUnknown="UNKNOWN — medication list may be incomplete."
+            emptyNone="No current medications on record."
           />
         </CardContent>
       </Card>
@@ -233,7 +236,7 @@ export default function MemoryView({ userId }: { userId: string }) {
             emptyUnknown="UNKNOWN — unclassified notes may be incomplete."
             emptyNone="Nothing unclassified."
           />
-          <p className="mem-foot">{data.disclaimer} · Generated {data.generatedAt} · Blobs on record: {data.blobCount}</p>
+          <p className="mem-foot">{data.disclaimer} · Generated {data.generatedAt} · Blobs on record: {data.blobCount} · {data.mode}</p>
         </CardContent>
       </Card>
     </div>

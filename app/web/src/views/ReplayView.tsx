@@ -69,7 +69,7 @@ export default function ReplayView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>{error}</p>
+        <p style={{ margin: 0 }}>Could not load replay for {userId}: {error}. The timeline below may be incomplete — retry first.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -82,7 +82,7 @@ export default function ReplayView({ userId }: { userId: string }) {
   }
 
   if (data.facts.length === 0) {
-    return <Empty title="No facts to replay" action={<Button size="sm" onClick={load}>Retry</Button>} />;
+    return <Empty title="No facts to replay">Nothing stored for {userId} yet — add facts in chat, then replay their history.</Empty>;
   }
 
   const facts: ExportResponse['facts'] = data.facts;
@@ -107,12 +107,19 @@ export default function ReplayView({ userId }: { userId: string }) {
         <h2 className="replay-title">Replay — {data.user}</h2>
         <Badge variant={data.mode === 'mainnet' ? 'mainnet' : 'local'}>{data.mode}</Badge>
         <div className="replay-controls">
-          <Button variant="primary" size="sm" onClick={play} disabled={playing}>
-            {done ? 'Replay again' : playing ? 'Playing…' : 'Play'}
-          </Button>
+          {playing ? (
+            <Button variant="primary" size="sm" onClick={() => setPlaying(false)}>Pause</Button>
+          ) : (
+            <Button variant="primary" size="sm" onClick={play}>
+              {done ? 'Replay again' : shown > 0 ? 'Resume' : 'Play'}
+            </Button>
+          )}
           <Button size="sm" onClick={() => { setPlaying(false); setShown(0); }}>Reset</Button>
         </div>
       </div>
+      <p className="replay-hint">
+        Watch how remembered facts accumulated — then see the guard refuse a risky question on the final day.
+      </p>
 
       <div
         className="replay-bar"
@@ -125,8 +132,8 @@ export default function ReplayView({ userId }: { userId: string }) {
         <div className="replay-fill" style={{ width: `${pct}%` }} />
       </div>
       <p className="replay-caption">
-        Showing {shown} of {facts.length} facts · {facts.length} total
-        {shown > 0 ? ` · up to Day ${dayFor(Math.max(shown - 1, 0), facts.length)}` : ''}
+        Showing {shown} of {facts.length} facts
+        {shown > 0 ? ` · up to Day ${dayFor(Math.max(shown - 1, 0), facts.length)} of 90` : ' · press Play to begin'}
       </p>
 
       <ol className="replay">
@@ -164,8 +171,8 @@ export default function ReplayView({ userId }: { userId: string }) {
               <CardTitle>STOP — final day refusal</CardTitle>
             </CardHeader>
             <CardContent>
-              <p>Question: &ldquo;{STOP_QUESTION}&rdquo;</p>
-              <p>No — ibuprofen is refused. Allergy on record: &ldquo;{clean(allergyFact.text)}&rdquo;</p>
+              <p className="replay-stop-q">Question: &ldquo;{STOP_QUESTION}&rdquo;</p>
+              <p className="replay-stop-a">No — ibuprofen is refused. Allergy on record: &ldquo;{clean(allergyFact.text)}&rdquo;</p>
               {stopShort ? (
                 <p className="replay-cite">
                   Source blob <code className="mono">{stopShort}</code>
@@ -174,8 +181,12 @@ export default function ReplayView({ userId }: { userId: string }) {
                       {' '}<a href={stopLink} target="_blank" rel="noreferrer">walruscan</a>
                     </>
                   ) : null}
+                  {' '}<a href="#/proof">guard proof</a>
                 </p>
-              ) : null}
+              ) : (
+                <p className="replay-cite"><a href="#/proof">guard proof</a></p>
+              )}
+              <p className="replay-stop-note">Confirm with your doctor — this is not medical advice.</p>
             </CardContent>
           </Card>
         </div>

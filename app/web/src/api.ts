@@ -184,6 +184,8 @@ export interface WalletStatus {
   signedIn: boolean;
   staleSession?: boolean;
   onboarded?: boolean;
+  pendingPhase?: string | null;
+  needsRelink?: boolean;
   address?: string;
   accountId?: string;
 }

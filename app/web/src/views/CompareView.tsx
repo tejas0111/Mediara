@@ -73,6 +73,9 @@ export default function CompareView({ userId }: { userId: string }) {
   return (
     <div className="cmp-wrap">
       <h2 className="cmp-title">Compare namespaces</h2>
+      <p className="cmp-hint">
+        Compare two memory namespaces side by side. Shared facts and per-namespace facts each cite their blob receipts.
+      </p>
       <form
         className="cmp-form"
         onSubmit={(e) => {
@@ -94,6 +97,7 @@ export default function CompareView({ userId }: { userId: string }) {
           </Button>
         </div>
       </form>
+      <p className="cmp-hint cmp-hint-sm">Tip: namespaces are per user — try demo-mom against demo-day7. Empty input falls back to those defaults.</p>
 
       {loading && !compared ? (
         <div aria-busy="true">
@@ -104,7 +108,7 @@ export default function CompareView({ userId }: { userId: string }) {
 
       {error ? (
         <Alert variant="danger">
-          <p style={{ margin: 0 }}>{error}</p>
+          <p style={{ margin: 0 }}>Could not compare these namespaces: {error}. Check the names and retry.</p>
           <div style={{ marginTop: 10 }}>
             <Button size="sm" onClick={() => compare(aId, bId)}>Retry</Button>
           </div>
@@ -132,8 +136,8 @@ export default function CompareView({ userId }: { userId: string }) {
           <div className="cmp-grid">
             <Card>
               <CardHeader>
-                <CardTitle>{a.user} ({a.facts.length})</CardTitle>
-                <CardDescription>Blob count: {a.blobCount} · unique: {uniqueA.length}</CardDescription>
+                <CardTitle><span className="mono">{a.user}</span> ({a.facts.length})</CardTitle>
+                <CardDescription>Namespace {a.user} · Blob count: {a.blobCount} · unique: {uniqueA.length} · {a.mode}</CardDescription>
               </CardHeader>
               <CardContent>
                 <FactList facts={a.facts} />
@@ -141,8 +145,8 @@ export default function CompareView({ userId }: { userId: string }) {
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>{b.user} ({b.facts.length})</CardTitle>
-                <CardDescription>Blob count: {b.blobCount} · unique: {uniqueB.length}</CardDescription>
+                <CardTitle><span className="mono">{b.user}</span> ({b.facts.length})</CardTitle>
+                <CardDescription>Namespace {b.user} · Blob count: {b.blobCount} · unique: {uniqueB.length} · {b.mode}</CardDescription>
               </CardHeader>
               <CardContent>
                 <FactList facts={b.facts} />

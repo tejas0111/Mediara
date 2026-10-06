@@ -40,7 +40,7 @@ export default function GuardProofView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>{error}</p>
+        <p style={{ margin: 0 }}>Could not load guard proof: {error}. The chain status below may be unavailable — retry before relying on it.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -64,6 +64,14 @@ export default function GuardProofView({ userId }: { userId: string }) {
           <Badge variant="danger">BROKEN at #{data.verify.brokenAt ?? '?'}</Badge>
         )}
       </div>
+      <p className="gp-hint">
+        Every STOP the guard fired, newest first — each entry quotes the fact that triggered it and cites the Walrus blob behind it.
+      </p>
+      {!data.verify.ok ? (
+        <Alert variant="danger">
+          Chain verification failed at entry #{data.verify.brokenAt ?? '?'}. Treat entries below as unverified until the chain is repaired.
+        </Alert>
+      ) : null}
 
       {entries.length === 0 ? (
         <Empty title="No guard has fired yet">No guard has fired yet — ask a blocked question in chat.</Empty>
@@ -96,16 +104,18 @@ export default function GuardProofView({ userId }: { userId: string }) {
                   <blockquote className="gp-quote">&ldquo;{clean(e.fact)}&rdquo;</blockquote>
                   {short ? (
                     <p className="gp-line gp-cite">
-                      <code className="mono">{short}</code>
+                      Source blob <code className="mono">{short}</code>
                       {link ? (
                         <>
                           {' '}<a href={link} target="_blank" rel="noreferrer">walruscan</a>
                         </>
                       ) : null}
                     </p>
-                  ) : null}
+                  ) : (
+                    <p className="gp-line gp-cite">Source blob unavailable (local record)</p>
+                  )}
                   <blockquote className="gp-quote gp-msg">&ldquo;{e.message}&rdquo;</blockquote>
-                  <p className="gp-time">{e.at}</p>
+                  <p className="gp-time">Entry #{e.n} · {e.at} · user {e.userId}</p>
                 </CardContent>
               </Card>
             );
