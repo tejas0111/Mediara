@@ -20,7 +20,7 @@ import {
   walletStatus,
 } from './api';
 import type { WalletStatus } from './api';
-import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, FieldHint, Input, FieldLabel } from './ui';
+import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, FieldHint, IconCheck, Input, FieldLabel, Skeleton } from './ui';
 import './WalletView.css';
 
 const SUI_ADDR_RE = /^0x[0-9a-fA-F]{64}$/;
@@ -341,87 +341,97 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
       <Card>
         <CardHeader>
           <CardTitle>Wallet</CardTitle>
+          <CardDescription>
+            You&apos;re chatting as <span className="mono">{userId}</span>. Signing in binds this browser
+            to your Sui address and unlocks your private memory vault.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="muted">Acting as <span className="mono">{userId}</span>. Sign-in binds this browser session to your Sui wallet address.</p>
           {loading ? (
-            <p className="muted">Checking wallet status…</p>
+            <div className="stack" aria-busy="true">
+              <Skeleton style={{ height: 22, width: '55%' }} />
+              <Skeleton style={{ height: 40 }} />
+            </div>
           ) : statusError ? (
-            <Alert variant="danger">{statusError}</Alert>
-          ) : (
-            <p className="status-row">
-              <Badge variant={signedIn ? 'ok' : 'default'}>{signedIn ? 'signed in' : 'signed out'}</Badge>
-              {signedIn && status?.address ? <span className="mono">{status.address}</span> : null}
-              {signedIn ? (
-                <Badge variant={onboarded ? 'mainnet' : 'warn'}>{onboarded ? 'onboarded' : 'not onboarded'}</Badge>
-              ) : null}
-              {status?.staleSession ? <Badge variant="warn">stale session</Badge> : null}
-            </p>
-          )}
-          {account ? (
-            <p className="muted">Connected Sui wallet: <span className="mono">{account.address}</span></p>
-          ) : null}
-
-          {!signedIn ? (
             <div className="stack">
+              <Alert variant="danger">{statusError}</Alert>
               <div className="btn-row">
-                <ConnectButton connectText="Connect Sui wallet" />
+                <Button size="sm" onClick={() => void refresh()}>Retry</Button>
               </div>
-              {noWalletInstalled ? (
-                <FieldHint>No Sui wallet detected in this browser. Install one (e.g. Slush — https://slush.app) then connect.</FieldHint>
-              ) : null}
-              {account ? (
-                <div className="stack">
-                  <Button variant="primary" onClick={() => void signInWithWallet()} disabled={authBusy}>
-                    {authBusy ? 'Signing…' : `Sign in as ${shortAddr(account.address)}`}
-                  </Button>
-                  <div className="btn-row">
-                    <Button size="sm" onClick={() => void fetchChallenge()} disabled={authBusy}>
-                      {message ? 'Retry with fresh message' : 'Get sign-in message'}
-                    </Button>
-                    <Button size="sm" onClick={() => void disconnectOnly()} disabled={authBusy || disconnectWallet.isPending}>
-                      Disconnect wallet
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-              {message ? (
-                <div className="stack">
-                  <FieldLabel>Sign this message (exact bytes)</FieldLabel>
-                  <p className="mono msg">{message}</p>
-                  <FieldHint>Your wallet signs these exact bytes. Nonces are single-use — if an attempt fails or expires, use “Retry with fresh message”.</FieldHint>
-                </div>
-              ) : null}
-              <div className="stack">
-                <FieldLabel htmlFor="w-addr">Manual fallback — Sui wallet address</FieldLabel>
-                <Input id="w-addr" value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="0x… (64 hex chars)" />
-                <FieldLabel htmlFor="w-sig">Manual fallback — Sui signature (base64)</FieldLabel>
-                <Input id="w-sig" value={sig} onChange={(e) => setSig(e.target.value)} placeholder="Base64 Sui personal-message signature" />
-                <div className="btn-row">
-                  {!message ? (
-                    <Button size="sm" onClick={() => void fetchChallenge()} disabled={authBusy}>
-                      Get sign-in message
-                    </Button>
-                  ) : null}
-                  <Button onClick={() => void manualVerify()} disabled={authBusy || !nonce || !addr.trim() || !sig.trim()}>
-                    Verify signature
-                  </Button>
-                </div>
-                <FieldHint>Paste a Sui-format signature over the message above. Ethereum signatures cannot verify and are not accepted.</FieldHint>
+            </div>
+          ) : signedIn ? (
+            <div className="stack">
+              <p className="signed-line">
+                <IconCheck /> Signed in as{' '}
+                <span className="mono" title={status?.address ?? ''}>{status?.address ? shortAddr(status.address) : 'unknown address'}</span>
+              </p>
+              <div className="btn-row">
+                <Badge variant={onboarded ? 'ok' : 'warn'}>{onboarded ? 'Memory vault ready' : 'Vault setup needed'}</Badge>
+                <Button size="sm" onClick={() => void signOut()} disabled={authBusy}>
+                  {authBusy ? 'Signing out…' : 'Sign out'}
+                </Button>
               </div>
+              {account && status?.address && account.address.toLowerCase() !== status.address.toLowerCase() ? (
+                <Alert variant="warn">
+                  Connected wallet {shortAddr(account.address)} is not the signed-in one.{' '}
+                  <Button size="sm" onClick={() => void disconnectOnly()}>Disconnect</Button>
+                </Alert>
+              ) : null}
               {authError ? <Alert variant="danger">{authError}</Alert> : null}
             </div>
           ) : (
             <div className="stack">
-              <div className="btn-row">
-                <Button onClick={() => void signOut()} disabled={authBusy}>Sign out</Button>
-                {account ? (
-                  <Button size="sm" onClick={() => void disconnectOnly()} disabled={authBusy || disconnectWallet.isPending}>
-                    Disconnect wallet
+              {!account ? (
+                <div className="stack">
+                  <div className="btn-row">
+                    <ConnectButton connectText="Connect Sui wallet" />
+                  </div>
+                  {noWalletInstalled ? (
+                    <FieldHint>No Sui wallet detected in this browser. Install one (e.g. Slush — https://slush.app), then connect.</FieldHint>
+                  ) : (
+                    <FieldHint>Connect your Sui wallet to begin — signing in takes one more click.</FieldHint>
+                  )}
+                </div>
+              ) : (
+                <div className="stack">
+                  <Button variant="primary" onClick={() => void signInWithWallet()} disabled={authBusy}>
+                    {authBusy ? 'Check your wallet…' : `Sign in as ${shortAddr(account.address)}`}
                   </Button>
-                ) : null}
-              </div>
+                  {authBusy ? (
+                    <FieldHint>Approve the signature request in your wallet to finish signing in.</FieldHint>
+                  ) : null}
+                  {status?.staleSession ? (
+                    <FieldHint>Your last session expired — signing in again takes one click.</FieldHint>
+                  ) : null}
+                  <div className="btn-row">
+                    <Button size="sm" onClick={() => void disconnectOnly()} disabled={authBusy || disconnectWallet.isPending}>
+                      Use a different wallet
+                    </Button>
+                  </div>
+                </div>
+              )}
               {authError ? <Alert variant="danger">{authError}</Alert> : null}
+              <details className="adv">
+                <summary>Advanced: manual signature</summary>
+                <div className="stack">
+                  <FieldHint>Only for wallets that cannot sign through the button above. Paste a Sui-format (base64) signature — nothing else verifies.</FieldHint>
+                  <div className="btn-row">
+                    <Button size="sm" onClick={() => void fetchChallenge()} disabled={authBusy}>
+                      {message ? 'Retry with fresh message' : 'Get sign-in message'}
+                    </Button>
+                  </div>
+                  {message ? <p className="mono msg">{message}</p> : null}
+                  <FieldLabel htmlFor="w-addr">Sui wallet address</FieldLabel>
+                  <Input id="w-addr" value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="0x… (64 hex chars)" />
+                  <FieldLabel htmlFor="w-sig">Sui signature (base64)</FieldLabel>
+                  <Input id="w-sig" value={sig} onChange={(e) => setSig(e.target.value)} placeholder="Base64 Sui personal-message signature" />
+                  <div className="btn-row">
+                    <Button onClick={() => void manualVerify()} disabled={authBusy || !nonce || !addr.trim() || !sig.trim()}>
+                      Verify signature
+                    </Button>
+                  </div>
+                </div>
+              </details>
             </div>
           )}
         </CardContent>

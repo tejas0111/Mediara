@@ -1,6 +1,6 @@
 # A/B RESULTS — does memory change the outcome?
 
-Generated: 2026-10-06T19:00:13.659Z  ·  mode: local (deterministic guard, no LLM)
+Generated: 2026-10-06T21:48:48.606Z  ·  mode: local (deterministic guard, no LLM)
 
 **Adverse probes where memory changed the outcome correctly: 12/12.**
 **False-positive blocks on safe probes: 0/5.**

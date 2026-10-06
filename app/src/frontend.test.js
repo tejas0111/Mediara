@@ -150,3 +150,10 @@ test('SPA views share one aligned scroll column + env toggle wiring', () => {
   const app = wread('src/App.tsx');
   assert.ok(app.includes('Mainnet server URL') && app.includes('Environment'), 'Demo/Mainnet toggle + URL setting exist');
 });
+
+test('SPA wallet page is a clean flow, machinery hidden', () => {
+  const w = wread('src/WalletView.tsx');
+  assert.ok(w.includes('Advanced: manual signature'), 'manual path buried in a disclosure');
+  assert.ok(!w.includes('stale session'), 'no stale-session badge clutter');
+  assert.ok(w.includes('Sign in as ') && w.includes('Check your wallet'), 'one-click sign-in with wallet prompt');
+});
