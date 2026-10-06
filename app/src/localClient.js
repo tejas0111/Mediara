@@ -11,24 +11,27 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Overridable for tests (DD_LOCAL_STORE) so route tests never mutate the demo store.
+// Read dynamically (not once at import) so selftest/eval pick up a temp store
+// even when the env var is set after import.
+const storePath = () => process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
 const STORE = process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
 
 function load() {
   // Distinguish "empty" from "unreadable": a corrupt store must fail LOUD so the
   // guard fails closed, not silently return no memories.
   let raw;
-  try { raw = fs.readFileSync(STORE, 'utf8'); }
+  try { raw = fs.readFileSync(storePath(), 'utf8'); }
   catch (e) { if (e.code === 'ENOENT') return { namespaces: {} }; throw e; }
   try { return JSON.parse(raw); }
-  catch (e) { throw new Error(`local store is corrupt (${STORE}): ${e.message}`); }
+  catch (e) { throw new Error(`local store is corrupt (${storePath()}): ${e.message}`); }
 }
 // Atomic write: serialize to a unique tmp file, then rename. rename() is atomic
 // on the same filesystem, so a concurrent reader or a crash never observes a
 // half-written / corrupt .local-memory.json.
 function save(db) {
-  const tmp = `${STORE}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  const tmp = `${storePath()}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, STORE);
+  fs.renameSync(tmp, storePath());
 }
 // In-process mutex: every mutation across all local clients shares one promise
 // chain, so read-modify-write sequences cannot interleave and lose facts when

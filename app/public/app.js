@@ -234,23 +234,23 @@
     var facts = document.querySelectorAll('#rpFacts li');
     var day = $('rpDay'), prog = $('rpProgress'), stop = $('rpStop'), cap = $('rpCaption');
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var days = [1, 7, 14, 30, 45, 60, 75, 87, 90];
+    var dayFor = function (idx, total) { if (total <= 1) return 90; return Math.round(1 + (89 * idx) / (total - 1)); };
     var playing = false;
     play.addEventListener('click', function () {
       if (playing) return; playing = true;
-      Array.prototype.forEach.call(facts, function (li) { li.classList.remove('show'); });
+      Array.prototype.forEach.call(facts, function (li) { li.classList.remove('show'); li.setAttribute('aria-hidden', 'true'); });
       if (stop) stop.hidden = true; if (prog) prog.style.width = '0%'; if (day) day.textContent = 'Day 1';
       if (reduce) {
-        Array.prototype.forEach.call(facts, function (li) { li.classList.add('show'); });
+        Array.prototype.forEach.call(facts, function (li) { li.classList.add('show'); li.removeAttribute('aria-hidden'); });
         if (prog) prog.style.width = '100%'; if (day) day.textContent = 'Day 90';
         if (stop) stop.hidden = false; if (cap) cap.textContent = 'Memory complete.'; playing = false; return;
       }
       var i = 0, n = facts.length;
       (function step() {
-        if (i >= n) { if (stop) stop.hidden = false; if (day) day.textContent = 'Day 90'; if (cap) cap.textContent = '\u2026and the day it stops a dangerous dose.'; playing = false; return; }
-        facts[i].classList.add('show');
+        if (i >= n) { if (stop) stop.hidden = false; if (day) day.textContent = 'Day 90'; if (cap) cap.textContent = '\u2026and the day it stops a dangerous dose (Day ' + dayFor(Math.max(n - 1, 0), n) + ').'; playing = false; return; }
+        facts[i].classList.add('show'); facts[i].removeAttribute('aria-hidden');
         if (prog) prog.style.width = Math.round(((i + 1) / n) * 100) + '%';
-        if (day) day.textContent = 'Day ' + days[Math.min(i, days.length - 1)];
+        if (day) day.textContent = 'Day ' + dayFor(i, n);
         i++; setTimeout(step, 420);
       })();
     });

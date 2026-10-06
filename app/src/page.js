@@ -1,7 +1,12 @@
 // DoseDaughter — server-rendered page shells (hand-written UI, no framework/build).
 // Untrusted text is escaped server-side (esc); the client uses textContent only.
-const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ASSET_V = '10';
+export const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const __pdir = path.dirname(fileURLToPath(import.meta.url));
+let ASSET_V = '10';
+try { ASSET_V = String(Math.floor(fs.statSync(path.join(__pdir, '..', 'public', 'app.css')).mtimeMs)); } catch {}
 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -238,7 +243,7 @@ export function comparePage({ q, mode, a, b, aFacts, bFacts }) {
 
 // ---------- Day 1 -> Day 90 replay ----------
 export function replayPage({ user, mode, facts, stale }) {
-  const items = facts.map((f, i) => `<li data-i="${i}"><span class="rpf">${esc(String(f.text).replace(/^User\s+\S+:\s*/i, ''))}</span>${blobTag(f.blob_id, mode)}</li>`).join('');
+  const items = facts.map((f, i) => `<li data-i="${i}" aria-hidden="true"><span class="rpf">${esc(String(f.text).replace(/^User\s+\S+:\s*/i, ''))}</span>${blobTag(f.blob_id, mode)}</li>`).join('');
   return TOP('DoseDaughter \u2014 90-day replay', mode) + `
 <main class="wrap" id="main">
   <h1 class="pg">Day 1 \u2192 Day 90</h1>
@@ -251,7 +256,7 @@ export function replayPage({ user, mode, facts, stale }) {
     </div>
     <div class="replay-bar"><div class="replay-progress" id="rpProgress"></div></div>
     <ul class="replay-facts" id="rpFacts">${items}</ul>
-    <div class="replay-stop" id="rpStop" hidden role="alert"><b>Day 87 \u2014 STOP</b><br>\u201cCan she take ibuprofen for her headache?\u201d \u2192 DoseDaughter refuses and cites the allergy blob. This is the moment the memory earns its keep.</div>
+    <div class="replay-stop" id="rpStop" hidden role="alert"><b>Final day \u2014 STOP</b><br>\u201cCan she take ibuprofen for her headache?\u201d \u2192 DoseDaughter refuses and cites the allergy blob. This is the moment the memory earns its keep.</div>
     <p class="sub" id="rpCaption" style="margin-top:14px">Press play.</p>
   </div>
   ${FOOT(mode)}

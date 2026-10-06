@@ -60,6 +60,7 @@ G('write gate saves an allergy', () => shouldRemember('She is allergic to ibupro
 G('write gate skips a question', () => shouldRemember('What meds does mom take?'), false);
 
 // ---------- 2. RECALL probes (local stand-in; offline) ----------
+if (!process.env.DD_LOCAL_STORE) { const _o = (await import('node:os')).default; const _pa = (await import('node:path')).default; process.env.DD_LOCAL_STORE = _pa.join(_o.tmpdir(), `dd-eval-${process.pid}-${Date.now()}.json`); }
 const ns = 'eval-' + Date.now();
 const lc = createLocalClient({ namespace: ns });
 await lc.remember('Mom takes Metformin 500mg at 8pm after food');

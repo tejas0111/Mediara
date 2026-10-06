@@ -158,7 +158,9 @@ delegate keys and users must relink. The memory blobs themselves remain on Mainn
 
 ## Testing
 
-`npm test` runs two offline suites (no network): `src/selftest.js` (core memory,
-safety, fuzz, concurrency) and `src/wallet.test.js` (auth, crypto, rate limit).
+`npm test` runs five offline suites (no network): `src/selftest.js` (core memory,
+safety, fuzz, concurrency), `src/wallet.test.js` (auth, crypto, rate limit),
+`src/routes.test.js` (HTTP guard/identity/degradation), `src/stats.test.js`
+(usage/guard-proof ledgers), and `src/frontend.test.js` (print/replay honesty smoke).
 See [evidence/TEST-LOG.md](../evidence/TEST-LOG.md) for the dated probe log and
 [evidence/blob-ledger.md](../evidence/blob-ledger.md) for the live Mainnet blob IDs.

@@ -294,6 +294,24 @@ test('/api/seed-status reports a real census field', async () => {
   assert.ok('censusAvailable' in j && 'meetsMinimum' in j);
 });
 
+test('/api/nudge caps unauthenticated fan-out at 5 users', async () => {
+  const users = Array.from({ length: 6 }, (_, i) => `rt-nudge-${Date.now()}-${i}`);
+  const r = await post('/api/nudge', { users, hour: 8 });
+  assert.equal(r.status, 413, 'oversized users[] must be refused');
+});
+
+test('/api/nudge normalises before the reserved check (junk prefixes cannot slip past)', async () => {
+  const r = await post('/api/nudge', { users: ['!!vault-abc', '..w-0xabc'], hour: 8 });
+  assert.equal(r.status, 200);
+  assert.deepEqual((await r.json()).users, [], 'reserved namespaces resolve to no targets');
+});
+
+test('terminal error handler never echoes un-vetted 4xx text', async () => {
+  const r = await post('/api/chat', { userId: 'x', message: 12345 });
+  assert.equal(r.status, 400);
+  assert.deepEqual(await r.json(), { error: 'message must be 1-500 chars' });
+});
+
 test('degraded memory: emergency card fails closed and drug questions 503', async () => {
   const { resetBreaker } = await import('./memory.js');
   const u = `rt-degraded-${Date.now()}`;

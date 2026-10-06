@@ -10,7 +10,18 @@ export const MAX_DISTANCE = 0.7;
 
 export function namespaceFor(userId) {
   if (userId == null) return 'user-anon';
-  return `user-${String(userId).toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 48) || 'anon'}`;
+  const raw = String(userId);
+  const clean = raw.toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 48) || 'anon';
+  // Collision-resistant for LONG ids: distinct ids sharing a 48-char prefix must
+  // not share one namespace ('a'*48+'X' vs 'a'*48+'Y'). Short ids keep the
+  // stable form (user-mom, user-priyas) so existing namespaces never migrate.
+  if (raw.length > 48) {
+    let h = 0;
+    for (let i = 0; i < raw.length; i++) h = ((h * 31 + raw.charCodeAt(i)) >>> 0);
+    const suffix = h.toString(16).padStart(8, '0');
+    return `user-${clean.slice(0, 39)}-${suffix}`;
+  }
+  return `user-${clean}`;
 }
 
 export function createClient({ namespace } = {}) {
@@ -61,6 +72,10 @@ export const DRUG_CLASS = {
   meloxicam: 'nsaid',
   ketoprofen: 'nsaid',
   etoricoxib: 'nsaid',
+  ketorolac: 'nsaid',
+  piroxicam: 'nsaid',
+  nabumetone: 'nsaid',
+  sulindac: 'nsaid',
   paracetamol: 'paracetamol',
   // Anticoagulants / antiplatelets
   warfarin: 'anticoagulant', apixaban: 'anticoagulant', rivaroxaban: 'anticoagulant', dabigatran: 'anticoagulant', heparin: 'anticoagulant',
@@ -75,10 +90,13 @@ export const DRUG_CLASS = {
   // Antibiotics / other common allergen classes. Out-of-vocabulary names must
   // resolve, otherwise "allergic to penicillin" can never match a penicillin ask.
   penicillin: 'penicillin', amoxicillin: 'penicillin', ampicillin: 'penicillin',
-  cephalexin: 'cephalosporin', cefuroxime: 'cephalosporin', ceftriaxone: 'cephalosporin',
+  cephalexin: 'cephalosporin', cefalexin: 'cephalosporin', cefuroxime: 'cephalosporin', ceftriaxone: 'cephalosporin',
+  cefixime: 'cephalosporin', cefazolin: 'cephalosporin', ceftazidime: 'cephalosporin',
+  piperacillin: 'penicillin',
   sulfamethoxazole: 'sulfonamide', sulfadiazine: 'sulfonamide',
   ciprofloxacin: 'quinolone', levofloxacin: 'quinolone',
   codeine: 'opioid', morphine: 'opioid', oxycodone: 'opioid', tramadol: 'opioid', hydrocodone: 'opioid',
+  fentanyl: 'opioid', hydromorphone: 'opioid', methadone: 'opioid', buprenorphine: 'opioid',
   latex: 'latex',
   lisinopril: 'ace', enalapril: 'ace', ramipril: 'ace', perindopril: 'ace', captopril: 'ace',
   spironolactone: 'potassium-sparing', amiloride: 'potassium-sparing', triamterene: 'potassium-sparing',
@@ -90,7 +108,7 @@ export const DRUG_CLASS = {
 export const BRAND_SYNONYMS = new Map(Object.entries({
   advil: 'ibuprofen', motrin: 'ibuprofen', nurofen: 'ibuprofen', brufen: 'ibuprofen',
   aleve: 'naproxen', naprosyn: 'naproxen',
-  excedrin: 'aspirin',
+  excedrin: 'aspirin', // + paracetamol via BRAND_MULTI below
   disprin: 'aspirin', ecotrin: 'aspirin', bayer: 'aspirin',
   voltaren: 'diclofenac', cataflam: 'diclofenac',
   tylenol: 'paracetamol', panadol: 'paracetamol', calpol: 'paracetamol', acetaminophen: 'paracetamol',
@@ -105,6 +123,9 @@ export const BRAND_SYNONYMS = new Map(Object.entries({
   bactrim: 'sulfamethoxazole', septrin: 'sulfamethoxazole', cotrimoxazole: 'sulfamethoxazole',
   zithromax: 'azithromycin',
 }));
+// Multi-ingredient brands map to ALL actives so a paracetamol allergy blocks
+// Excedrin (aspirin + paracetamol), not just the first component.
+export const BRAND_MULTI = { excedrin: ['aspirin', 'paracetamol'] };
 const KNOWN_DRUG_WORDS = [...new Set([...Object.keys(DRUG_CLASS), ...BRAND_SYNONYMS.keys()])];
 const DRUG_ALT = KNOWN_DRUG_WORDS.join('|');
 const NO_DRUG_RE = new RegExp(`\\bno\\s+(?:more\\s+)?(?:${DRUG_ALT})\\b`, 'i');
@@ -124,15 +145,17 @@ function resolveSubstance(word) {
 function substancesIn(text) {
   const out = new Set();
   for (const w of String(text || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/)) {
-    const s = resolveSubstance(w);
-    if (s) out.add(s);
+    const t = singular(w);
+    if (BRAND_MULTI[t]) { for (const m of BRAND_MULTI[t]) out.add(m); continue; }
+    const sd = resolveSubstance(w);
+    if (sd) out.add(sd);
   }
   return out;
 }
 // Words that must never become provisional allergens. This keeps exact-match
 // fallback for out-of-vocabulary drugs/foods while preventing common,
 // symptom, unit, time, family, and stock-out words from blocking.
-const NON_ALLERGEN_WORDS = new Set('a,an,the,and,or,but,for,with,from,about,against,after,before,during,under,over,again,once,daily,every,day,days,morning,night,evening,afternoon,routine,dinner,bedtime,breakfast,lunch,mom,dad,mother,father,daughter,son,doctor,pharmacy,emergency,contact,call,visit,priya,arjun,hindi,whatsapp,takes,take,taking,took,gives,give,gave,giving,should,can,could,would,will,shall,may,might,must,has,have,had,having,is,are,was,were,be,been,being,do,does,did,done,this,that,these,those,our,her,his,their,your,you,she,he,they,it,we,me,him,them,us,what,when,where,which,who,whom,how,why,whether,not,no,never,known,history,severe,severely,causes,cause,caused,causing,told,due,makes,make,made,sick,gets,get,got,reaction,reactions,rash,rashes,hives,swelling,swell,allergic,allergy,allergies,intolerance,intolerant,avoid,avoids,avoided,avoiding,fine,okay,ok,safe,anything,everything,something,all,any,except,food,water,meal,meals,more,left,need,needs,refill,last,first,also,still,now,today,please,mg,mcg,ml,iu,units,unit,tablet,tablets,pill,pills,dose,doses,dosage'.split(','));
+const NON_ALLERGEN_WORDS = new Set('a,an,the,and,or,but,for,with,from,about,against,after,before,during,under,over,again,once,daily,every,day,days,morning,night,evening,afternoon,routine,dinner,bedtime,breakfast,lunch,mom,dad,mother,father,daughter,son,doctor,pharmacy,emergency,contact,call,visit,priya,arjun,hindi,whatsapp,takes,take,taking,took,gives,give,gave,giving,should,can,could,would,will,shall,may,might,must,has,have,had,having,is,are,was,were,be,been,being,do,does,did,done,this,that,these,those,our,her,his,their,your,you,she,he,they,it,we,me,him,them,us,what,when,where,which,who,whom,how,why,whether,not,no,never,known,history,severe,severely,causes,cause,caused,causing,told,due,makes,make,made,sick,gets,get,got,reaction,reactions,rash,rashes,hives,swelling,swell,allergic,allergy,allergies,intolerance,intolerant,avoid,avoids,avoided,avoiding,fine,okay,ok,safe,anything,everything,something,all,any,except,food,water,meal,meals,more,left,need,needs,refill,last,first,also,still,now,today,please,mg,mcg,ml,iu,units,unit,tablet,tablets,pill,pills,dose,doses,dosage,drug,drugs,medicine,medicines,medication,medications,prescription,prescriptions'.split(','));
 function unresolvedAllergenTokens(phrase) {
   const out = new Set();
   for (const w of String(phrase || '').toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/)) {
@@ -320,7 +343,7 @@ export function shouldRemember(text) {
   if (/\?\s*$/.test(t)) return false; // questions are never facts
   // Never persist instruction-shaped text: a stored fact must not be a prompt
   // injection vector into the system prompt.
-  if (/\b(?:ignore|disregard|forget|override|bypass)\b[^.]{0,60}\b(?:previous|prior|above|all|earlier|instructions?|guidance|disclaimer|doctor|prompt|rules?)\b|\bgoing\s+forward\b|\bfrom\s+now\s+on\b|\bnew\s+instructions?\b|\bsystem\s*:|\byou\s+must\b|\bas\s+an\s+ai\b|\bjailbreak\b/i.test(t)) return false;
+  if (/\b(?:ignore|disregard|forget|override|bypass)\b[^.]{0,60}\b(?:previous|prior|above|all|earlier|instructions?|guidance|disclaimer|doctor|prompt|rules?)\b|\bgoing\s+forward\b|\bfrom\s+now\s+on\b|\bnew\s+instructions?\b|\bsystem\s*:|\byou\s+must\b|\bas\s+an\s+ai\b|\bjailbreak\b|\b(?:always|never)\s+(?:say|state|answer|claim|mention|warn|tell|recommend|prescribe)\b|\b(?:recommend|prescribe)\b[^.]{0,40}\b(?:safe|give|take)\b|\bimportant\s*:\s*always\s+say\b/i.test(t)) return false;
   // Durable safety/care facts — ONE shared definition also used by the guards,
   // so every saved allergy phrasing is readable by the conflict/interaction net.
   if (hasAllergySignal(t)) return true;
@@ -345,7 +368,7 @@ export function shouldRemember(text) {
 // "Should I avoid giving her ibuprofen?" still blocks. Shared by both guards.
 // Administration verbs/units: their presence means the message is an ORDER or
 // ask to actually give the drug, not a lesson, so it must reach the guard.
-const ADMIN_VERB_RE = /\b(?:give|gives|gave|giving|take|takes|took|taking|administer|administered|administering|dose|dosed|dosing|inject|injected|injecting|injection|tablet|tablets|pill|pills)\b|\d\s?(?:mg|mcg|ml|units?|iu)\b|\bmgs?\b|\bswitch(?:ed|es|ing)?\s+\w+\s+to\b/i;
+const ADMIN_VERB_RE = /\b(?:give|gives|gave|giving|take|takes|took|taking|administer|administered|administering|dose|dosed|dosing|inject|injected|injecting|injection|tablet|tablets|pill|pills|buy|bought|buying|order|ordered|ordering|prescribe|prescribed|prescribing|try|tried|trying)\b|\d\s?(?:mg|mcg|ml|units?|iu)\b|\bmgs?\b|\bswitch(?:ed|es|ing)?\s+\w+\s+to\b/i;
 const TEACHING_SIGNAL_RE = /\ballerg|intoleran|\bavoid(?:s|ed|ing)?\b|\bcan(?:no|'?t|not)\s+(?:have|take)\b|\breaction\s+to\b|\bhad\s+a\s+reaction\b|\bmakes?\b[^.;,]{0,30}\bsick\b/i;
 export function isTeachingStatement(message) {
   const m = String(message ?? '');
@@ -361,6 +384,9 @@ export function findConflict(message, recalled) {
   const msgTokens = messageWordTokens(message);
   if (!msgSubs.size && !msgNamed.size && !msgTokens.size) return null;
   if (isTeachingStatement(message)) return null;
+  // Informational allergy-status questions ("Is she allergic to ibuprofen?") are
+  // answered from memory, not STOP-blocked. Administration asks still block.
+  if (/\?\s*$/.test(String(message).trim()) && /\ballerg/i.test(message) && /\b(is|was|are|were|what|which|list|show|tell|do)\b/i.test(message) && !/(can she (take|have)|should i|should we|give her|can i give|should she take)/i.test(message)) return null;
   for (const r of recalled) {
     if (!r || typeof r.text !== 'string') continue;
     // Consider any recalled fact that is an ACTIVE allergy fact by the shared
@@ -422,6 +448,7 @@ export const INTERACTIONS = [
   { a: 'nitrate', b: 'pde5', severity: 'high', reason: 'severe hypotension (nitrate + PDE5 inhibitor)' },
   { a: 'statin', b: 'macrolide', severity: 'high', reason: 'rhabdomyolysis risk (statin + macrolide)' },
   { a: 'ace', b: 'potassium-sparing', severity: 'moderate', reason: 'hyperkalemia (ACE inhibitor + potassium-sparing diuretic)' },
+  { a: 'antiplatelet', b: 'nsaid', severity: 'high', reason: 'increased bleeding risk (antiplatelet + NSAID)' },
   { a: 'antiplatelet', b: 'ppi', severity: 'moderate', reason: 'omeprazole can reduce clopidogrel effectiveness' },
   { a: 'methotrexate', b: 'nsaid', severity: 'high', reason: 'methotrexate toxicity (methotrexate + NSAID)' },
   { a: 'lithium', b: 'nsaid', severity: 'moderate', reason: 'raised lithium levels (lithium + NSAID)' },
@@ -601,6 +628,7 @@ export async function safeRecall(client, params, tries = 2, timeoutMs = 10_000) 
 // the dedicated query are surfaced even if their distance is higher, and are
 // force-kept inside the final cap so the STOP path can fire.
 const ALLERGY_QUERY = 'allergies drug reactions avoid intolerance';
+const MED_QUERY = 'takes taking dose mg prescription daily medication';
 
 export async function recallRelevantMeta(client, query, limit = 5) {
   let n = Number(limit);
@@ -608,36 +636,52 @@ export async function recallRelevantMeta(client, query, limit = 5) {
   n = Math.max(0, Math.floor(n));
   if (n === 0) return { facts: [], degraded: false };
 
-  // Independent recalls run concurrently (was sequential → up to 2× the budget).
-  const [main, safety] = await Promise.all([
+  // Independent recalls run concurrently. Allergy AND med facts are hard safety
+  // requirements: the message query may not rank them (warfarin fact vs an
+  // ibuprofen question), so dedicated recalls surface them past the 0.7 filter
+  // for BOTH guards — not just the allergy guard.
+  const [main, safety, meds] = await Promise.all([
     safeRecall(client, { query, limit: n }),
     safeRecall(client, { query: ALLERGY_QUERY, limit: Math.max(n, 10) }).catch(() => ({ results: [], degraded: true })),
+    safeRecall(client, { query: MED_QUERY, limit: Math.max(n, 10) }).catch(() => ({ results: [], degraded: true })),
   ]);
+  const needSafetyEarly = looksLikeMedicationQuestion(query) || mentionsDrug(query);
   const results = main.results;
-  const safetyResults = safety.results;
+  // Chit-chat precision: dedicated safety/med recalls only merge for
+  // medication-related messages; otherwise 'weather?' would inherit med facts
+  // that match the MED_QUERY angle but not the user's query.
+  const safetyResults = needSafetyEarly ? safety.results : [];
+  const medResults = needSafetyEarly ? meds.results : [];
 
+  // Safety-net bypass applies ONLY when the message is medication-related —
+  // otherwise chit-chat ('weather?') would drag med/allergy facts into context.
+  // Medication questions still get distance-proof recall for BOTH guards.
+  const needSafety = needSafetyEarly;
   // Merge by normalized text, dedup keeping the best (lowest) distance.
   const byText = new Map();
-  const consider = (r, fromSafety) => {
+  const consider = (r, fromSafety, fromMed) => {
     if (!r || typeof r.text !== 'string' || !r.text.trim()) return;
     const key = r.text.trim().toLowerCase();
     const dist = r.distance ?? 1;
-    const safetyFact = fromSafety && hasAllergySignal(r.text);
-    if (!safetyFact && dist >= MAX_DISTANCE) return; // normal filter stays
+    const safetyFact = needSafety && fromSafety && hasAllergySignal(r.text);
+    const medFact = needSafety && fromMed && (isMedFact(r.text) || substancesIn(r.text).size > 0);
+    if (!safetyFact && !medFact && dist >= MAX_DISTANCE) return; // normal filter stays
     const prev = byText.get(key);
     if (!prev || dist < (prev.distance ?? 1)) byText.set(key, { ...r, distance: dist });
   };
-  for (const r of results || []) consider(r, false);
-  for (const r of safetyResults || []) consider(r, true);
+  for (const r of results || []) consider(r, false, false);
+  for (const r of safetyResults || []) consider(r, true, false);
+  for (const r of medResults || []) consider(r, false, true);
 
   const ordered = [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
   const out = ordered.slice(0, n);
-  const degraded = main.degraded || safety.degraded;
-  // Force-include allergy facts that fell past the cap. Prefer evicting the
-  // worst entry that is NEITHER an allergy NOR a medication fact, so the
+  const degraded = main.degraded || safety.degraded || meds.degraded;
+  // Force-include allergy AND med facts that fell past the cap. Prefer evicting
+  // the worst entry that is NEITHER an allergy NOR a medication fact, so the
   // interaction guard still sees the med fact it needs. Only evict a med fact
   // when there is genuinely no other choice.
-  const missing = ordered.filter((r) => hasAllergySignal(r.text) && !out.includes(r));
+  const isGuardFact = (r) => hasAllergySignal(r.text) || isMedFact(r.text) || substancesIn(r.text).size > 0;
+  const missing = ordered.filter((r) => isGuardFact(r) && !out.includes(r));
   if (missing.length) {
     const res = out.slice();
     for (const m of missing) {

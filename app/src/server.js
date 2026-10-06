@@ -1,6 +1,6 @@
 // DoseDaughter web widget — Express chatbot endpoint.
 // GET / → chat UI. GET /memory?user=ID → public memory-visible page.
-// GET /demo?persona=day1|day7 → before/after harness (empty vs seeded namespace).
+// GET /demo → before/after harness (empty demo-day1 vs seeded demo-day7/demo-mom).
 // POST /api/chat { userId, message } → recall → LLM → auto-remember facts.
 // GET /api/summary?user=ID → doctor-visit summary compiled from recall only.
 // Memory backend: MEMWAL_MODE=mainnet (real Walrus Memory, needs keys) or local (default,
@@ -15,18 +15,18 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
-import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage } from './page.js';
+import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage, esc } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser, registryStatus } from './userRegistry.js';
 import { limiter, clientKey } from './rateLimit.js';
+import { encryptionEnabled } from './cryptoUtils.js';
 import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-// Escape anything echoed into an HTML error page (never reflect raw upstream text).
-const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// esc (HTML escaping) lives in page.js — single definition, no drift.
 // Map an error to a status. Client-state errors carry `status` (e.g. 409 from
 // onboarding); everything else is a real 500 and is logged, never echoed raw.
 function fail(res, e) {
@@ -109,8 +109,8 @@ else if (/^(?:0|false|off|no)$/i.test(tp)) trustProxy = false;
 else if (/^\d+$/.test(tp)) trustProxy = Number(tp);
 else { console.warn(`TRUST_PROXY="${tp}" not understood — defaulting to false (client headers NOT trusted)`); trustProxy = false; }
 app.set('trust proxy', trustProxy);
-// Security headers on every response. CSP allows inline scripts (the UI is
-// server-rendered, no build step) but blocks every external origin.
+// Security headers on every response. CSP blocks inline scripts AND every
+// external origin (UI JS is served from /assets; only inline styles allowed).
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
@@ -148,6 +148,7 @@ const chatLimiter = limiter({ keyFn: (req) => `chat:${clientKey(req)}`, limit: L
 const readLimiter = limiter({ keyFn: (req) => `read:${clientKey(req)}`, limit: L('DD_READ_LIMIT', 60), windowMs: 60_000 });
 // Nonce minting is cheap but unbounded; cap it (the nonce Map would otherwise grow).
 const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientKey(req)}`, limit: L('DD_NONCE_LIMIT', 30), windowMs: 60_000 });
+const logoutLimiter = limiter({ keyFn: (req) => `logout:${clientKey(req)}`, limit: L('DD_LOGOUT_LIMIT', 30), windowMs: 60_000 });
 
 // Bounded per-namespace conversation transcript so the model sees recent turns,
 // not just recalled facts (facts are durable; this is ephemeral context).
@@ -317,7 +318,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           // truncated allergy is silent amnesia.
           const stored = truncateFact(`${label}: ${message}`);
           const lostSignal = (hasAllergySignalExport(message) || mentionsDrug(message)) && !(hasAllergySignalExport(stored) || mentionsDrug(stored));
-          if (lostSignal) { memoryPersisted = false; console.error('write skipped: fact truncated past its safety signal'); }
+          if (lostSignal) {
+            memoryPersisted = false;
+            console.error('write skipped: fact truncated past its safety signal');
+            reply += ' (Note: that was too long to save — please resend the allergy/medication in one short sentence.)';
+          }
           else { saved = await withTimeout(rememberAndWait(client, stored), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; }
         }
       } catch { memoryPersisted = false; /* surfaced to the client below */ }
@@ -389,7 +394,7 @@ app.get('/memory', readLimiter, async (req, res) => {
 
 app.get('/', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.send(chatPage({ mode: MODE, model: process.env.LLM_MODEL || 'google/gemini-2.5-flash' }));
+  res.send(chatPage({ mode: MODE }));
 });
 
 app.get('/demo', readLimiter, async (req, res) => {
@@ -449,7 +454,10 @@ async function namespaceView(req, res) {
   // Last-known-good cache: on an outage, serve the most recent successful read
   // (labelled stale) rather than a blank card — a safety product should show
   // stale-but-labelled allergies, not "UNKNOWN".
-  if (!ra.degraded && ra.facts.length) lastGood.set(userId, { facts: ra.facts, at: Date.now() });
+  if (!ra.degraded && ra.facts.length) {
+    lastGood.set(userId, { facts: ra.facts, at: Date.now() });
+    while (lastGood.size > 1000) lastGood.delete(lastGood.keys().next().value);
+  }
   let facts = ra.facts;
   if (ra.degraded) {
     const lg = lastGood.get(userId);
@@ -563,7 +571,11 @@ app.post('/api/nudge', readLimiter, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const hour = Number(req.body?.hour);
     const requested = Array.isArray(req.body?.users) ? req.body.users.map(String) : null;
-    const targets = requested ? requested.filter((u) => u && !isReservedNs(u)) : null;
+    // Abuse-bound: unauthenticated fan-out must be small. Normalize BEFORE the
+    // reserved check (same normaliser as the write/read paths) so junk prefixes
+    // cannot slip past the guard.
+    if (requested && requested.length > 5) return res.status(413).json({ error: 'too many users (max 5)' });
+    const targets = requested ? requested.map((u) => normalizeUser(u)).filter((u) => u && !isReservedNs(u)) : null;
     const out = [];
     for (const u of targets || []) {
       const { client } = clientFor(u);
@@ -619,7 +631,7 @@ app.post('/api/auth/verify', authLimiter, async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-app.post('/api/auth/logout', (req, res) => {
+app.post('/api/auth/logout', logoutLimiter, (req, res) => {
   const secure = req.secure || (app.get('trust proxy') && req.headers['x-forwarded-proto'] === 'https');
   const sess = sessionFromReq(req);
   if (sess?.jti) revokeSession(sess.jti); // server-side revocation, not just cookie clear
@@ -642,6 +654,12 @@ app.post('/api/wallet/onboard/create', onboardLimiter, async (req, res) => {
   try {
     const sess = sessionFromReq(req);
     if (!sess) return res.status(401).json({ error: 'sign in first' });
+    // Fail closed: without SESSION_SECRET delegate keys would persist in
+    // plaintext. Refuse to mint onboarding material outside local dev.
+    if (!encryptionEnabled() && process.env.MEMWAL_MODE === 'mainnet') {
+      const e = new Error('server misconfigured: SESSION_SECRET is required for wallet onboarding');
+      e.status = 501; e.expose = true; throw e;
+    }
     res.json(await prepareCreateAccount(sess.address));
   } catch (e) { fail(res, e); }
 });
@@ -651,6 +669,10 @@ app.post('/api/wallet/onboard/link', onboardLimiter, async (req, res) => {
   try {
     const sess = sessionFromReq(req);
     if (!sess) return res.status(401).json({ error: 'sign in first' });
+    if (!encryptionEnabled() && process.env.MEMWAL_MODE === 'mainnet') {
+      const e = new Error('server misconfigured: SESSION_SECRET is required for wallet onboarding');
+      e.status = 501; e.expose = true; throw e;
+    }
     res.json(await prepareLinkDelegate(sess.address));
   } catch (e) { fail(res, e); }
 });
@@ -692,7 +714,8 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   if (err?.type === 'entity.too.large' || code === 413) return res.status(413).json({ error: 'request body too large' });
   if (err instanceof SyntaxError && 'body' in err) return res.status(400).json({ error: 'malformed JSON' });
   if (code >= 500) console.error('unhandled error:', String(err?.message || err).slice(0, 200));
-  res.status(code >= 400 && code < 600 ? code : 500).json({ error: code >= 500 ? 'Internal error' : String(err?.message || err) });
+  const expose = err?.expose === true;
+  res.status(code >= 400 && code < 600 ? code : 500).json({ error: code >= 500 ? 'Internal error' : (expose ? String(err?.message || err) : 'request failed') });
 });
 
 const port = process.env.PORT || 3001;
