@@ -94,7 +94,10 @@ export default function App() {
   const [sameOriginMode, setSameOriginMode] = React.useState<'local' | 'mainnet' | null>(null);
   const [envChoice, setEnvChoice] = React.useState<'demo' | 'mainnet'>(() => (getApiBase() ? 'mainnet' : 'demo'));
   const [envError, setEnvError] = React.useState<string | null>(null);
-  const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase());
+  // Ephemeral public demo backend (Cloudflare Quick Tunnel, no login). Dies with the
+// sandbox that hosts it — replace with the Railway URL once deployed.
+const DEFAULT_MAINNET_URL = 'https://hamilton-raymond-norm-money.trycloudflare.com';
+const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT_MAINNET_URL);
   const [urlTest, setUrlTest] = React.useState<string | null>(null);
   const [urlBusy, setUrlBusy] = React.useState(false);
   // dAppKit wallet connection (client-side) vs server session (signed-in):
@@ -592,6 +595,7 @@ export default function App() {
           <FieldHint>Memory namespace: user-{draftId.trim() || userId}. Chats are per browser + user.</FieldHint>
           <Separator />
           <FieldLabel htmlFor="acct-url">Mainnet server URL</FieldLabel>
+          <FieldHint>Prefilled with the live demo backend — Test it, then Save.</FieldHint>
           <div className="uid-row">
             <Input
               id="acct-url"

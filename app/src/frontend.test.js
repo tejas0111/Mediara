@@ -157,3 +157,8 @@ test('SPA wallet page is a clean flow, machinery hidden', () => {
   assert.ok(!w.includes('stale session'), 'no stale-session badge clutter');
   assert.ok(w.includes('Sign in as ') && w.includes('Check your wallet'), 'one-click sign-in with wallet prompt');
 });
+
+test('SPA prefills the live demo backend URL', () => {
+  const app = wread('src/App.tsx');
+  assert.ok(app.includes('DEFAULT_MAINNET_URL') && app.includes('trycloudflare.com'), 'demo backend prefilled, one Test+Save away');
+});
