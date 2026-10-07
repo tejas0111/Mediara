@@ -23,8 +23,6 @@ import type { WalletStatus } from './api';
 import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, FieldHint, IconCheck, Input, FieldLabel, Skeleton } from './ui';
 import './WalletView.css';
 
-const SUI_ADDR_RE = /^0x[0-9a-fA-F]{64}$/;
-
 function errText(e: unknown): string {
   if (e instanceof ApiError) return `Server error (${e.status}): ${e.message}`;
   if (e instanceof Error) return e.message;
@@ -53,10 +51,6 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
   const noWalletInstalled = wallets.length === 0;
 
   // sign-in state
-  const [nonce, setNonce] = React.useState<string | null>(null);
-  const [message, setMessage] = React.useState<string | null>(null);
-  const [addr, setAddr] = React.useState('');
-  const [sig, setSig] = React.useState('');
   const [authBusy, setAuthBusy] = React.useState(false);
   const [authError, setAuthError] = React.useState<string | null>(null);
 
@@ -87,22 +81,6 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
     void refresh();
   }, [refresh]);
 
-  // Fetch a fresh server challenge without signing (used by the manual
-  // fallback; nonces are single-use so every attempt needs a fresh one).
-  async function fetchChallenge() {
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      const { nonce: n, message: m } = await authMessage();
-      setNonce(n);
-      setMessage(m);
-    } catch (e) {
-      setAuthError(errText(e));
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
   // Sign-in with the connected Sui wallet. The EXACT server message bytes are
   // signed (TextEncoder, no prefix tampering) and the wallet returns a base64
   // Sui personal-message signature — the format the server verifies with
@@ -117,51 +95,11 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
     setAuthError(null);
     try {
       const { nonce: n, message: m } = await authMessage();
-      setNonce(n);
-      setMessage(m);
       const { signature } = await signPersonalMessage.mutateAsync({
         message: new TextEncoder().encode(m),
       });
       const res = await authVerify(account.address, signature, n);
       if (!res.ok) throw new Error('Server did not confirm sign-in.');
-      setNonce(null);
-      setMessage(null);
-      setSig('');
-      await refresh();
-      onAuth();
-    } catch (e) {
-      setAuthError(errText(e));
-    } finally {
-      setAuthBusy(false);
-    }
-  }
-
-  // Manual fallback: accepts ONLY Sui-format credentials (0x{64} address +
-  // base64 Sui personal-message signature over the message above). There is no
-  // Ethereum path — an eth signature can never verify server-side.
-  async function manualVerify() {
-    if (!nonce) {
-      setAuthError('Get a sign-in message first — nonces are single-use.');
-      return;
-    }
-    const a = addr.trim();
-    const s = sig.trim();
-    if (!SUI_ADDR_RE.test(a)) {
-      setAuthError('That is not a Sui address (expected 0x followed by 64 hex chars).');
-      return;
-    }
-    if (s.length < 50) {
-      setAuthError('That signature is too short to be a Sui signature (expected base64).');
-      return;
-    }
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      const res = await authVerify(a, s, nonce);
-      if (!res.ok) throw new Error('Server did not confirm sign-in.');
-      setNonce(null);
-      setMessage(null);
-      setSig('');
       await refresh();
       onAuth();
     } catch (e) {
@@ -414,27 +352,6 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
                 </div>
               )}
               {authError ? <Alert variant="danger">{authError}</Alert> : null}
-              <details className="adv">
-                <summary>Advanced: manual signature</summary>
-                <div className="stack">
-                  <FieldHint>Only for wallets that cannot sign through the button above. Paste a Sui-format (base64) signature — nothing else verifies.</FieldHint>
-                  <div className="btn-row">
-                    <Button size="sm" onClick={() => void fetchChallenge()} disabled={authBusy}>
-                      {message ? 'Retry with fresh message' : 'Get sign-in message'}
-                    </Button>
-                  </div>
-                  {message ? <p className="mono msg">{message}</p> : null}
-                  <FieldLabel htmlFor="w-addr">Sui wallet address</FieldLabel>
-                  <Input id="w-addr" value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="0x… (64 hex chars)" />
-                  <FieldLabel htmlFor="w-sig">Sui signature (base64)</FieldLabel>
-                  <Input id="w-sig" value={sig} onChange={(e) => setSig(e.target.value)} placeholder="Base64 Sui personal-message signature" />
-                  <div className="btn-row">
-                    <Button onClick={() => void manualVerify()} disabled={authBusy || !nonce || !addr.trim() || !sig.trim()}>
-                      Verify signature
-                    </Button>
-                  </div>
-                </div>
-              </details>
             </div>
           )}
         </CardContent>

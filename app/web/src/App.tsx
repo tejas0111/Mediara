@@ -25,6 +25,7 @@ import { authLogout, checkHealth, getApiBase, setApiBase, walletStatus } from '.
 import type { WalletStatus } from './api';
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 import {
+  Alert,
   Badge,
   Button,
   Dialog,
@@ -94,12 +95,13 @@ export default function App() {
   const [sameOriginMode, setSameOriginMode] = React.useState<'local' | 'mainnet' | null>(null);
   const [envChoice, setEnvChoice] = React.useState<'demo' | 'mainnet'>(() => (getApiBase() ? 'mainnet' : 'demo'));
   const [envError, setEnvError] = React.useState<string | null>(null);
-  // Ephemeral public demo backend (Cloudflare Quick Tunnel, no login). Dies with the
-// sandbox that hosts it — replace with the Railway URL once deployed.
-const DEFAULT_MAINNET_URL = 'https://hamilton-raymond-norm-money.trycloudflare.com';
-const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT_MAINNET_URL);
-  const [urlTest, setUrlTest] = React.useState<string | null>(null);
-  const [urlBusy, setUrlBusy] = React.useState(false);
+  // Mainnet candidate backends, first reachable wins. The tunnel URL is
+  // ephemeral (dies with its sandbox); the saved base persists per browser.
+  // Nothing here is user-editable — no URL prompt anywhere in the UI.
+  const DEFAULT_MAINNET_URL = 'https://hamilton-raymond-norm-money.trycloudflare.com';
+  const [mainnetLive, setMainnetLive] = React.useState(false);
+  const [comingOpen, setComingOpen] = React.useState(false);
+  const [comingNote, setComingNote] = React.useState<string | null>(null);
   // dAppKit wallet connection (client-side) vs server session (signed-in):
   // no wallet = ConnectButton opens the chooser modal directly,
   // wallet-but-no-session = "Sign in" navigates to #/wallet,
@@ -130,7 +132,8 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
   React.useEffect(() => {
     void refreshWallet();
     // Initial backend state: same-origin mode decides toggle visibility;
-    // active-base health decides the badge. Both run on mount.
+    // active-base health decides the badge. A saved base is re-verified;
+    // otherwise the default candidate is probed (never auto-switched).
     void (async () => {
       try {
         const same = await checkHealth('');
@@ -139,9 +142,16 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
         /* offline dev — toggle stays hidden until ChatView reports local */
       }
       const active = getApiBase();
-      setMainnetUrl(active);
       setEnvChoice(active ? 'mainnet' : 'demo');
-      await refreshEffectiveMode(active);
+      if (active) {
+        const h = await checkHealth(active);
+        setMainnetLive(h.ok);
+        if (!h.ok) setApiBase('');
+      } else {
+        const h = await checkHealth(DEFAULT_MAINNET_URL);
+        setMainnetLive(h.ok);
+      }
+      await refreshEffectiveMode(getApiBase());
     })();
   }, [refreshWallet, refreshEffectiveMode]);
 
@@ -252,71 +262,37 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
   }
 
   // --- Demo|Mainnet environment switch (same-origin local server only) ---
+  // Mainnet is selectable only while a candidate backend is reachable.
+  // Otherwise it opens the Coming-soon panel — never a URL prompt.
   function switchToDemo() {
     setApiBase('');
-    setMainnetUrl('');
     setEnvChoice('demo');
     setEnvError(null);
-    setUrlTest(null);
+    setComingOpen(false);
     void refreshEffectiveMode('');
     void refreshWallet();
   }
 
+  function mainnetCandidate(): string | null {
+    const saved = getApiBase().trim();
+    return saved || DEFAULT_MAINNET_URL;
+  }
+
   async function switchToMainnet() {
-    const url = getApiBase().trim();
-    if (!url) {
-      // No URL configured — open the Account dialog URL section with an
-      // honest error. Never silently switch.
-      setEnvError('No Mainnet server URL set — paste one below, Test it, then Save.');
-      setAcctOpen(true);
-      return;
-    }
     setEnvError(null);
-    const h = await checkHealth(url);
+    const h = await checkHealth(mainnetCandidate() ?? '');
     if (h.ok && h.mode) {
+      const url = getApiBase().trim() || DEFAULT_MAINNET_URL;
+      setApiBase(url);
+      setMainnetLive(true);
+      setComingOpen(false);
       setEnvChoice('mainnet');
       setMode(h.mode);
       void refreshWallet();
     } else {
-      setEnvError(`Mainnet server unreachable (${h.error ?? 'no response'}) — staying on Demo. Open Account to fix the URL.`);
-      setAcctOpen(true);
-    }
-  }
-
-  async function testMainnetUrl() {
-    setUrlBusy(true);
-    setUrlTest(null);
-    try {
-      const h = await checkHealth(mainnetUrl.trim());
-      setUrlTest(h.ok ? `OK — server mode: ${h.mode}` : `Failed: ${h.error ?? 'no response'}`);
-    } finally {
-      setUrlBusy(false);
-    }
-  }
-
-  async function saveMainnetUrl() {
-    const v = mainnetUrl.trim();
-    if (!v) {
-      // Empty URL = back to Demo; instant.
-      switchToDemo();
-      return;
-    }
-    setUrlBusy(true);
-    try {
-      const h = await checkHealth(v);
-      if (h.ok && h.mode) {
-        setApiBase(v);
-        setEnvChoice('mainnet');
-        setMode(h.mode);
-        setUrlTest(`OK — server mode: ${h.mode}. Saved.`);
-        setEnvError(null);
-        void refreshWallet();
-      } else {
-        // Persist ONLY on ok — keep the old base untouched.
-        setUrlTest(`Failed: ${h.error ?? 'no response'} — not saved.`);
-      }
-    } finally {
-      setUrlBusy(false);
+      setMainnetLive(false);
+      setComingNote('The Mainnet backend is unreachable right now — staying on Demo.');
+      setComingOpen(true);
     }
   }
 
@@ -350,6 +326,7 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
           </Button>
         </div>
 
+        <div className="side-scroll">
         <nav className="side-sec" aria-label="Features">
           <p className="side-h">Features</p>
           <ul className="nav-list">
@@ -447,6 +424,7 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
           ) : null}
         </div>
 
+        </div>
         <div className="side-foot">
           <button type="button" className="acct" onClick={() => setAcctOpen(true)} aria-haspopup="dialog">
             <span className="avatar" aria-hidden="true">{userId.slice(0, 1).toUpperCase()}</span>
@@ -504,6 +482,7 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
                   onClick={() => void switchToMainnet()}
                 >
                   Mainnet
+                  {mainnetLive ? null : <span className="soon-pill">Soon</span>}
                 </button>
               </div>
             ) : null}
@@ -571,6 +550,22 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
           )}
         </main>
       </div>
+      {comingOpen ? (
+        <Dialog title="Mainnet" onClose={() => setComingOpen(false)}>
+          <p className="eyebrow">Coming soon</p>
+          <p className="soon-copy">
+            The shared Mainnet backend — real Walrus memory, wallet vaults, and
+            an always-on server — is not live yet. This demo runs on a local
+            stand-in, and everything you see works fully against it.
+          </p>
+          {comingNote ? <Alert variant="warn">{comingNote}</Alert> : null}
+          <div className="btn-row">
+            <Button variant="primary" onClick={switchToDemo}>
+              Back to Demo
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
       {acctOpen ? (
         <Dialog title="Account" onClose={() => setAcctOpen(false)}>
           <FieldLabel htmlFor="acct-uid">User ID</FieldLabel>
@@ -585,24 +580,27 @@ const [mainnetUrl, setMainnetUrl] = React.useState(() => getApiBase() || DEFAULT
           </div>
           <FieldHint>Memory namespace: user-{draftId.trim() || userId}. Chats are per browser + user.</FieldHint>
           <Separator />
-          <FieldLabel htmlFor="acct-url">Mainnet server URL</FieldLabel>
-          <FieldHint>Prefilled with the live demo backend — Test it, then Save.</FieldHint>
-          <div className="uid-row">
-            <Input
-              id="acct-url"
-              value={mainnetUrl}
-              onChange={(e) => { setMainnetUrl(e.target.value); setUrlTest(null); }}
-              placeholder="https://… (empty = Demo)"
-              inputMode="url"
-            />
-            <Button size="sm" onClick={() => void testMainnetUrl()} disabled={urlBusy}>
-              {urlBusy ? 'Testing…' : 'Test'}
-            </Button>
-            <Button size="sm" variant="primary" onClick={() => void saveMainnetUrl()} disabled={urlBusy}>
-              Save
-            </Button>
+          <FieldLabel>Environment</FieldLabel>
+          <div className="foot-row">
+            <Badge variant={envChoice === 'demo' ? 'local' : 'mainnet'}>
+              {envChoice === 'demo' ? 'Demo (this server)' : 'Mainnet'}
+            </Badge>
+            {envChoice === 'demo' ? (
+              mainnetLive ? (
+                <Button size="sm" onClick={() => { setAcctOpen(false); void switchToMainnet(); }}>
+                  Switch to Mainnet
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => { setAcctOpen(false); setComingNote(null); setComingOpen(true); }}>
+                  About Mainnet
+                </Button>
+              )
+            ) : (
+              <Button size="sm" onClick={switchToDemo}>
+                Back to Demo
+              </Button>
+            )}
           </div>
-          {urlTest ? <FieldHint>{urlTest}</FieldHint> : null}
           {envError ? <FieldHint>{envError}</FieldHint> : null}
           <Separator />
           <div className="foot-row">

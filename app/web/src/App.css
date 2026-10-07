@@ -477,3 +477,18 @@
 }
 .more[open] > .more-sum::after { transform: rotate(225deg); }
 .more-list { margin-top: 2px; border-left: 1px solid var(--border-soft); margin-left: 12px; padding-left: 6px; }
+
+/* middle scrolls (nav + history), account stays pinned */
+.side-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.side-scroll::-webkit-scrollbar { width: 8px; }
+.side-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+.side-scroll::-webkit-scrollbar-track { background: transparent; }
+.side-scroll .side-grow { flex: none; }
+.side-scroll .sess-list { overflow: visible; }
+/* environment */
+.soon-pill {
+  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--border); color: var(--muted);
+  margin-left: 6px; white-space: nowrap;
+}
+.soon-copy { font-size: 14.5px; line-height: 1.65; color: var(--text-2); margin: 8px 0 16px; }

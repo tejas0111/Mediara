@@ -148,12 +148,13 @@ test('SPA views share one aligned scroll column + env toggle wiring', () => {
   const api = wread('src/api.ts');
   assert.ok(api.includes('getApiBase') && api.includes('setApiBase') && api.includes('checkHealth'), 'api base routing exists');
   const app = wread('src/App.tsx');
-  assert.ok(app.includes('Mainnet server URL') && app.includes('Environment'), 'Demo/Mainnet toggle + URL setting exist');
+  assert.ok(app.includes('Coming soon') && app.includes('Environment'), 'Demo/Mainnet toggle + Coming-soon gate exist');
+  assert.ok(!app.includes('Mainnet server URL'), 'no dev-demo URL prompt anywhere');
 });
 
 test('SPA wallet page is a clean flow, machinery hidden', () => {
   const w = wread('src/WalletView.tsx');
-  assert.ok(w.includes('Advanced: manual signature'), 'manual path buried in a disclosure');
+  assert.ok(!w.includes('Advanced: manual signature'), 'no advanced disclosure clutter');
   assert.ok(!w.includes('stale session'), 'no stale-session badge clutter');
   assert.ok(w.includes('Sign in as ') && w.includes('Check your wallet'), 'one-click sign-in with wallet prompt');
 });
