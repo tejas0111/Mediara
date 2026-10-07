@@ -352,7 +352,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       return res.status(400).json({ error: 'message must be 1-500 chars' });
     }
     if (typeof userId !== 'string') return res.status(400).json({ error: 'userId must be a string' });
-    if (userId.length > 64) return res.status(400).json({ error: 'userId too long' });
+    // A signed-in owner with an untouched default id chats as the session
+    // address (SPEC §3.3: 0x{64} = 66 chars). The vault itself resolves from
+    // the session cookie, never from this string — it only steers past the
+    // demo branch. Every other id keeps the 64-char bound.
+    const isSessionAddr = /^0x[0-9a-fA-F]{64}$/.test(userId);
+    if (userId.length > (isSessionAddr ? 66 : 64)) return res.status(400).json({ error: 'userId too long' });
     // Strip control chars/newlines before the id is used as a namespace or a
     // stored fact label — otherwise it is a stored-prompt-injection primitive.
     const safeUser = normalizeUser(userId, 'anon');

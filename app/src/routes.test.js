@@ -28,6 +28,9 @@ process.env.DD_NONCE_LIMIT = '10000';
 process.env.DD_AUTH_LIMIT = '10000';
 process.env.DD_DAY_LIMIT_ANON = '10000';
 process.env.DD_DAY_LIMIT_WALLET = '10000';
+// Registry isolation: vault-scope tests must never read/write the repo's real
+// wallet registry (judge-facing state). Temp file only.
+process.env.DD_REGISTRY_PATH = TMP + '.registry.json';
 
 const { default: app } = await import('./server.js');
 
@@ -513,4 +516,71 @@ test('/api/usage markdown redacts other users blob texts', async () => {
   const md = await (await get(`/api/usage?format=md`)).text();
   assert.ok(!/calcium/i.test(md), 'no other-user health text in markdown');
   assert.ok(/\[redacted/.test(md), 'redaction is explicit, not silent');
+});
+
+// ------------------------------------------------- SPEC §4 matrix ---
+// Vault-scope cells: a real session + a temp-registry vault row (local-mode
+// stand-in, so scope/budget/identity assertions hold without chain reads).
+
+test('SPEC §3.3: vault owner chatting as the session address gets the vault (never demo scope)', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const { upsertUser } = await import('./userRegistry.js');
+  const addr = '0x' + 'f1'.repeat(32);
+  upsertUser({ address: addr, accountId: 'obj-MATRIX-1', delegatePrivateKey: '11'.repeat(32), delegatePublicKey: '22'.repeat(64), delegateAddress: '0x' + '33'.repeat(32), pendingPhase: null, pendingTxBytes: null });
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  // The full 66-char Sui address must be accepted as userId (the client sends
+  // the session address for untouched-default personal chat).
+  const r = await post('/api/chat', { userId: addr, message: 'She takes calcium at 9am' }, h);
+  assert.equal(r.status, 200, 'a session-address userId must not be rejected as too long');
+  const j = await r.json();
+  assert.equal(j.identity, 'wallet-owner', 'vault identity, not shared-anon');
+  assert.match(j.memoryScope, /^user-vault-/, 'vault namespace, never the demo namespace');
+  assert.equal(j.budget.cap, Number(process.env.DD_DAY_LIMIT_WALLET), 'wallet budget, not demo/guest budget');
+  assert.ok(j.savedBlob, 'personal vault teaches persist');
+  assert.ok(!/sign in/i.test(j.reply), 'no sign-in nag while signed in');
+});
+
+test('SPEC §4/B: signed-in without a vault gets 409 on personal chat (never shared fallback)', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const addr = '0x' + 'f2'.repeat(32); // no registry row
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  const r = await post('/api/chat', { userId: addr, message: 'hello there friend' }, h);
+  assert.equal(r.status, 409, 'unlinked vault fails loud, never silently shared');
+  const j = await r.json();
+  assert.ok(!('memoryScope' in j) || !String(j.memoryScope || '').startsWith('user-demo-'), 'no demo scope leaked');
+});
+
+test('SPEC §4/C: vault dashboard shows vault numbers + wallet budget; explicit demo stays demo', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const { upsertUser } = await import('./userRegistry.js');
+  const addr = '0x' + 'f3'.repeat(32);
+  upsertUser({ address: addr, accountId: 'obj-MATRIX-3', delegatePrivateKey: '44'.repeat(32), delegatePublicKey: '55'.repeat(64), delegateAddress: '0x' + '66'.repeat(32), pendingPhase: null, pendingTxBytes: null });
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  const v = await (await get('/api/dashboard', h)).json();
+  assert.match(v.user, /^vault-/, 'default dashboard is the vault, not demo-mom');
+  assert.equal(v.personal.budget.cap, Number(process.env.DD_DAY_LIMIT_WALLET), 'vault wallet budget');
+  assert.equal(v.vault.signedIn, true);
+  assert.equal(v.vault.onboarded, true);
+  const d = await (await get('/api/dashboard?user=demo-mom', h)).json();
+  assert.equal(d.user, 'demo-mom', 'explicit demo request bypasses the vault');
+  assert.equal(d.personal.budget.cap, 10, 'banner/demo source is the demo cap, never the wallet cap');
+});
+
+test('SPEC §4/C+D: vault memory/replay/print default to vault, honor explicit demo, 401 when expired', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const { upsertUser } = await import('./userRegistry.js');
+  const addr = '0x' + 'f4'.repeat(32);
+  upsertUser({ address: addr, accountId: 'obj-MATRIX-4', delegatePrivateKey: '77'.repeat(32), delegatePublicKey: '88'.repeat(64), delegateAddress: '0x' + '99'.repeat(32), pendingPhase: null, pendingTxBytes: null });
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  const x = { Cookie: 'dd_session=garbage.token' };
+  assert.match((await (await get('/api/summary', h)).json()).user, /^vault-/, 'summary defaults to vault');
+  assert.equal((await (await get('/api/summary?user=demo-mom', h)).json()).user, 'demo-mom', 'explicit demo honored');
+  assert.equal((await get('/replay', h)).status, 200, 'replay defaults to vault');
+  assert.equal((await get('/replay?user=demo-mom', h)).status, 200, 'explicit demo replay served');
+  assert.equal((await get('/print', h)).status, 200, 'print defaults to vault');
+  assert.equal((await get('/print?user=demo-mom', h)).status, 200, 'explicit demo print served');
+  assert.equal((await get('/api/dashboard', x)).status, 401, 'expired dashboard never leaks');
+  assert.equal((await get('/api/summary', x)).status, 401, 'expired summary never leaks');
+  assert.equal((await get('/replay', x)).status, 401, 'expired replay never leaks');
+  assert.equal((await get('/print', x)).status, 401, 'expired print never leaks');
 });

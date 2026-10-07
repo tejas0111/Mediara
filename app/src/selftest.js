@@ -190,6 +190,7 @@ ok(shouldRemember('i have adhd') === true, 'write gate saves neurodevelopmental 
 ok(shouldRemember("i'm anxious") === true, 'write gate saves stated states');
 ok(shouldRemember('she is autistic') === true, 'write gate saves neurodivergence');
 ok(shouldRemember('i am fine') === false, 'write gate skips stateless "i am"');
+ok(shouldRemember('i have hyper activenes disorder') === true, 'write gate saves disorder statements (typo-tolerant)');
 ok(shouldRemember('I have a meeting at 5') === false, 'write gate skips non-health "have"');
 ok(shouldRemember('save money for the trip') === false, 'write gate skips non-save "save"');
 ok(shouldRemember('dinner was nice') === false, 'regression: write gate skips "dinner was nice"');

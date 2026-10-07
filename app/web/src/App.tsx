@@ -150,7 +150,21 @@ export default function App() {
   // Demo chat is locked to the shared demo namespace: the sidebar user
   // editor is ignored while on it, so guests always read premade memory.
   const DEMO_USER = 'demo-mom';
-  const chatUser = view === 'demo' ? DEMO_USER : userId;
+  // SPEC §3.3: personal Chat defaults to the vault for signed-in owners.
+  // An untouched default id + a signed-in session => send the session address
+  // (the server resolves the vault from the session; an unlinked vault 409s
+  // with a re-link action). When the vault state is unknown client-side we
+  // still default on signed-in and let the server 409 — never silently use
+  // demo scope (demo budget + "sign in" nag) for a signed-in user.
+  const DEFAULT_USER = 'demo-mom';
+  const personalUserId =
+    userId === DEFAULT_USER && wallet?.signedIn && wallet.address ? wallet.address : userId;
+  // Dashboard/memory/replay/print follow the vault only when it is usable
+  // (onboarded): otherwise they keep the requested id, so a signed-in user
+  // with no vault still sees demo readiness (matrix B) instead of a 409 wall.
+  const vaultUserId =
+    userId === DEFAULT_USER && wallet?.onboarded && wallet.address ? wallet.address : userId;
+  const chatUser = view === 'demo' ? DEMO_USER : personalUserId;
 
   const refreshWallet = React.useCallback(async () => {
     try {
@@ -433,9 +447,9 @@ export default function App() {
         </div>
         <div className="side-foot">
           <button type="button" className="acct" onClick={() => setAcctOpen(true)} aria-haspopup="dialog">
-            <span className="avatar" aria-hidden="true">{userId.slice(0, 1).toUpperCase()}</span>
+            <span className="avatar" aria-hidden="true">{personalUserId.slice(0, 1).toUpperCase()}</span>
             <span className="acct-meta">
-              <span className="acct-id">{userId}</span>
+              <span className="acct-id">{personalUserId}</span>
               <span className="acct-sub">
                 {wallet?.signedIn
                   ? `Wallet ${wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'connected'}`
@@ -528,7 +542,7 @@ export default function App() {
         <main id="main" className="main" tabIndex={-1}>
           {view === 'chat' ? (
             <ChatView
-              userId={userId}
+              userId={chatUser}
               memoryOn={memoryOn}
               sessions={sessions}
               active={active}
@@ -559,21 +573,23 @@ export default function App() {
               onSignIn={() => setWmodal(true)}
             />
           ) : view === 'dashboard' ? (
-            <DashboardView userId={userId} />
+            <DashboardView userId={vaultUserId} />
           ) : view === 'wallet' ? (
-            <WalletView userId={userId} onAuth={() => void refreshWallet()} />
+            <WalletView userId={vaultUserId} onAuth={() => void refreshWallet()} />
           ) : view === 'memory' ? (
-            <MemoryView userId={userId} />
+            <MemoryView userId={vaultUserId} />
           ) : view === 'replay' ? (
-            <ReplayView userId={userId} />
+            <ReplayView userId={vaultUserId} />
           ) : view === 'compare' ? (
+            // Compare has no vault branch server-side (anonymous isolation
+            // proof): it keeps the typed id, defaulting to the demo pair.
             <CompareView userId={userId} />
           ) : view === 'proof' ? (
-            <ProofView userId={userId} />
+            <ProofView userId={vaultUserId} />
           ) : view === 'stats' ? (
-            <StatsView userId={userId} />
+            <StatsView userId={vaultUserId} />
           ) : (
-            <PrintView userId={userId} />
+            <PrintView userId={vaultUserId} />
           )}
         </main>
       </div>

@@ -89,7 +89,7 @@ ok(built && typeof built === 'object', 'createDelegateClient with values constru
   const cu = await import('./cryptoUtils.js');
   process.env.SESSION_SECRET = 'test-secret-123';
   const enc = cu.encryptSecret('deadbeef00');
-  ok(enc.enc === true && /\/.+\//.test(enc.v.split('.')[2] || '') === false && enc.v.split('.').length === 3, 'encryptSecret emits iv.tag.ct');
+  ok(enc.enc === true && enc.v.split('.').length === 3 && enc.v.split('.').every((p) => p.length > 0), 'encryptSecret emits iv.tag.ct');
   ok(enc.kdf === 'scrypt' && typeof enc.salt === 'string' && enc.salt.length > 0, 'encryptSecret uses scrypt with a stored per-value salt');
   ok(!JSON.stringify(enc).includes('deadbeef00'), 'ciphertext does not contain plaintext');
   ok(cu.decryptSecret(enc) === 'deadbeef00', 'decryptSecret roundtrip');

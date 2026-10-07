@@ -110,7 +110,7 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 386/386 offline checks pass (210 core + 71 wallet + 49 route + 12 stats + 7 db + 11 window + 26 frontend) | `npm test` — run it yourself |
+| 393/393 offline checks pass (211 core + 71 wallet + 53 route + 12 stats + 7 db + 11 window + 28 frontend) | `npm test` — run it yourself |
 | **Real-use requirement (≥3 users × ≥10 memories) — judged from Walrus, not vibes** | `npm run stats` (`--live` reads the relayer; every blob id links to walruscan) · [`/api/usage`](app/README.md) |
 | **Every STOP/CAUTION is public and tamper-evident** | [`/guard-proof`](app/src/page.js) — append-only hash-chain ledger; `/api/guard-proof` includes a chain verification |
 | **Memory that reaches out** | morning med brief + nightly interaction cross-check over the whole namespace — `/api/proactive` (on demand), `/api/nudge` (per-user tick), 6-hourly scheduler in dev |

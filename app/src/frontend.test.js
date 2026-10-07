@@ -238,3 +238,25 @@ test('SPA wallet modal guides connect -> sign -> vault -> chat', () => {
   const app = wread('src/App.tsx');
   assert.ok(app.includes('setWmodal(true)'), 'topbar/account/login-card open the modal, not a page hop');
 });
+
+test('SPEC §3.3: personal chat defaults to the vault for signed-in owners (demo view keeps demo-mom)', () => {
+  const app = wread('src/App.tsx');
+  // Untouched default id + signed-in session address => personal surfaces send
+  // the session address (server resolves the vault; unlinked 409s fail loud).
+  assert.ok(app.includes('demo-mom'), 'demo-mom default still exists');
+  assert.ok(app.includes('wallet') && app.includes('signedIn'), 'vault default is gated on the wallet session');
+  assert.ok(app.includes('wallet.address') || app.includes('wallet?.address'), 'session address becomes the personal id');
+  // Demo chat stays locked to the shared demo namespace for everyone.
+  assert.ok(app.includes("view === 'demo' ? DEMO_USER : ") || app.includes('view === "demo" ? DEMO_USER :'), 'demo view ignores the personal id');
+  const chatUsers = (app.match(/userId=\{(?:chatUser|effectiveUserId|personalUserId)\}/g) || []).length;
+  assert.ok(chatUsers >= 1, 'personal ChatView receives the vault-defaulted id');
+  // Data views follow the vault only when usable (matrix B keeps demo
+  // readiness instead of a 409 wall; matrix C shows vault numbers).
+  assert.ok(app.includes('onboarded'), 'vault default for data views is gated on the onboarded flag');
+});
+
+test('SPEC §4/B: personal chat surfaces an unlinked-vault 409 with a vault setup action', () => {
+  const c = wread('src/ChatView.tsx');
+  assert.ok(c.includes('409'), 'chat handles the vault-not-linked 409, not just needsRelink');
+  assert.ok(c.includes('Set up vault'), 'unlinked vault offers an explicit setup action, never a dead end');
+});

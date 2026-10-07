@@ -179,6 +179,10 @@ export default function ChatView(props: ChatViewProps) {
   const [error, setError] = React.useState<string | null>(null);
   const [needLogin, setNeedLogin] = React.useState<string | null>(null);
   const [needRelink, setNeedRelink] = React.useState<string | null>(null);
+  // Signed-in but vault not linked (SPEC §4/B): the server 409s without a
+  // needsRelink flag (no dead key, just no vault row). Offer vault setup
+  // instead of a dead-end error — never a "sign in" nag while signed in.
+  const [needVault, setNeedVault] = React.useState<string | null>(null);
   const [lastFailed, setLastFailed] = React.useState<string | null>(null);
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
   // Rolling chat budget from the last reply (subtle note only when low) and
@@ -202,6 +206,7 @@ export default function ChatView(props: ChatViewProps) {
     setLastFailed(null);
     setBudget(null);
     setLimitReset(null);
+    setNeedVault(null);
     setInput('');
   }, [active?.id, userId]);
 
@@ -249,6 +254,7 @@ export default function ChatView(props: ChatViewProps) {
       setBudget(res.budget ?? null);
       setLimitReset(null);
       setNeedLogin(null);
+      setNeedVault(null);
       setLastFailed(null);
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
@@ -263,6 +269,7 @@ export default function ChatView(props: ChatViewProps) {
         }
         : null);
       setNeedRelink(e instanceof ApiError && e.status === 409 && (e as ApiError).data?.needsRelink === true ? msg : null);
+      setNeedVault(e instanceof ApiError && e.status === 409 && (e as ApiError).data?.needsRelink !== true ? msg : null);
       const cleanMsg = msg.replace(/[.\u2026\s]+$/, '');
       setError(status === 503
         ? `Server is degraded right now: ${cleanMsg}. Your message was not answered.`
@@ -404,7 +411,15 @@ export default function ChatView(props: ChatViewProps) {
           </span>
         </Alert>
       ) : null}
-      {error && !needLogin && !needRelink ? (
+      {needVault ? (
+        <Alert variant="warn" className="send-error" role="alert">
+          <span><strong>Vault setup needed.</strong> {needVault}</span>
+          <span className="btn-row">
+            <Button size="sm" variant="primary" onClick={() => { setNeedVault(null); window.location.hash = '#/wallet'; }}>Set up vault</Button>
+          </span>
+        </Alert>
+      ) : null}
+      {error && !needLogin && !needRelink && !needVault ? (
         <Alert variant="danger" className="send-error">
           <span>{error} Nothing was saved for this turn — you can retry safely.</span>
           {lastFailed ? (
