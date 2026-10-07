@@ -151,6 +151,7 @@ export default function ChatView(props: ChatViewProps) {
         savedBlob: res.savedBlob,
         memoryPersisted: res.memoryPersisted,
         recalled: (res.recalledMeta ?? []).map((m) => ({ text: m.text, blob_id: m.blob_id })),
+        thinking: res.thinking ?? [],
         ts: Date.now(),
       };
       props.pushMsg(target, asst);
@@ -215,6 +216,18 @@ export default function ChatView(props: ChatViewProps) {
               <div key={m.id} className="row row-asst">
                 <div className="asst-card">
                   <AssistantBody msg={m} mode={mode} />
+                  {m.thinking && m.thinking.length > 0 ? (
+                    <details className="think">
+                      <summary>How I decided ({m.thinking.length} steps)</summary>
+                      <ol>
+                        {m.thinking.map((t, i) => (
+                          <li key={i}>
+                            <strong>{t.label}.</strong> <span>{t.detail}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  ) : null}
                   {m.recalled && m.recalled.length > 0 ? (
                     <details className="recalled">
                       <summary>Recalled sources ({m.recalled.length})</summary>

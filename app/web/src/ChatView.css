@@ -204,3 +204,13 @@
 @media (pointer: coarse) {
   .chip { padding: 10px 16px; }
 }
+
+/* visible reasoning trace — real server-computed steps, DeepSeek-style */
+.think { margin-top: 10px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-soft); padding: 8px 12px; }
+.think > summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); list-style: none; display: flex; align-items: center; gap: 6px; }
+.think > summary::-webkit-details-marker { display: none; }
+.think > summary::before { content: "+"; font-weight: 700; }
+.think[open] > summary::before { content: "\2013"; }
+.think ol { margin: 8px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.think li strong { font-weight: 650; }
+.think li span { color: var(--text-2); overflow-wrap: anywhere; }

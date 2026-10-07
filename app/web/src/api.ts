@@ -91,8 +91,13 @@ export interface RecalledMeta {
   blob_id: string | null;
   distance: number | null;
 }
+export interface ThinkStep {
+  label: string;
+  detail: string;
+}
 export interface ChatResponse {
   reply: string;
+  thinking: ThinkStep[];
   recalled: string[];
   recalledMeta: RecalledMeta[];
   memoryScope: string;

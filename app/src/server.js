@@ -269,6 +269,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const rr = memoryOff ? { facts: [], degraded: false } : await recallRelevantMeta(client, message, 25);
     const guardFacts = rr.facts;
     let recalled = rr.facts.slice(0, 5);
+    // Visible reasoning trace (DeepSeek-style "thinking", but real): every
+    // step below is data this request actually computed — nothing inferred.
+    const thinking = [];
+    thinking.push(memoryOff
+      ? { label: 'Recall', detail: 'Memory is OFF for this turn (before/after demo) — recall and both guards skipped.' }
+      : { label: 'Recall', detail: `${guardFacts.length} candidate facts considered for the guards, top ${recalled.length} shown${rr.degraded ? ' (memory degraded — stale read)' : ''}.` });
     // "What do you remember?" must return the WHOLE namespace, not a query subset.
     if (/\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message)) {
       try { const full = await recallAllMeta(client, ALL_QUERIES, 25); if (full.facts.length) recalled = full.facts; } catch { /* keep the query recall */ }
@@ -282,16 +288,30 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     //   1) allergy conflict (hard block)  2) curated drug–drug interaction.
     const conflict = memoryOff ? null : findConflict(message, guardFacts);
     const interaction = (memoryOff || conflict) ? null : findInteraction(message, guardFacts);
+    if (memoryOff) {
+      thinking.push({ label: 'Allergy guard', detail: 'Skipped (memory off).' });
+      thinking.push({ label: 'Interaction guard', detail: 'Skipped (memory off).' });
+    } else if (conflict) {
+      thinking.push({ label: 'Allergy guard', detail: `MATCH on “${conflict.substance}” from recalled fact${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''} — STOP issued before any LLM output.` });
+      thinking.push({ label: 'Interaction guard', detail: 'Skipped (allergy guard already fired).' });
+    } else {
+      thinking.push({ label: 'Allergy guard', detail: `No match across ${guardFacts.length} recalled facts.` });
+      thinking.push(interaction
+        ? { label: 'Interaction guard', detail: `MATCH: ${interaction.substance} × ${interaction.withSubstance} (${interaction.severity})${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''} — ${interaction.reason}.` }
+        : { label: 'Interaction guard', detail: `No match across ${guardFacts.length} recalled facts.` });
+    }
     // Public proof: every fired guard is appended to the tamper-evident ledger
     // (/guard-proof) with the exact recalled fact + blob id behind the decision.
     if (conflict) guardProof.record({ userId: safeUser, kind: 'conflict', substance: conflict.substance, severity: 'high', reason: 'recalled allergy', fact: conflict.fact, blobId: conflict.blob_id, message });
     if (interaction) guardProof.record({ userId: safeUser, kind: 'interaction', substance: interaction.substance, withSubstance: interaction.withSubstance, severity: interaction.severity, reason: interaction.reason, fact: interaction.fact, blobId: interaction.blob_id, message });
-    let reply;
+    let reply, answerSource = 'guard';
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. Confirm with your doctor — this is not medical advice.`;
+      thinking.push({ label: 'Answer', detail: 'Deterministic guard template — no LLM involved in a STOP.' });
     } else if (interaction) {
       const lead = interaction.severity === 'high' ? 'STOP' : 'CAUTION';
       reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. Confirm with your doctor — this is not medical advice.`;
+      thinking.push({ label: 'Answer', detail: 'Deterministic guard template — no LLM involved in a STOP/CAUTION.' });
     } else {
       const system = buildSystemPrompt(recalled);
       reply = await callLLM(system, message, history);
@@ -299,6 +319,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       // answer FROM MEMORY instead of leaking a debug stub.
       if (reply === '__NO_LLM__' || reply.startsWith('[LLM unavailable') || reply.startsWith('[no LLM key')) {
         reply = memoryAnswer(recalled);
+        answerSource = 'memory-fallback';
+        thinking.push({ label: 'Answer', detail: `No LLM reachable — answered from the ${recalled.length} recalled facts above.` });
+      } else {
+        answerSource = 'llm';
+        thinking.push({ label: 'Answer', detail: `${process.env.LLM_MODEL || 'google/gemini-2.5-flash'} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
       }
     }
     rememberTurn(nsKey, 'user', message);
@@ -306,6 +331,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Auto-save AFTER generation only, and NEVER when a safety guard fired: a
     // blocked administration order must not be persisted as a durable fact.
     let saved = null, memoryPersisted = null;
+    if (memoryOff) {
+      thinking.push({ label: 'Memory write', detail: 'Skipped (memory off for this turn).' });
+    } else if (conflict || interaction) {
+      thinking.push({ label: 'Memory write', detail: 'Skipped — a fired guard means this turn is never stored as a fact.' });
+    } else if (!shouldRemember(message)) {
+      thinking.push({ label: 'Memory write', detail: 'Skipped — not a durable fact (chit-chat, question, or no save signal).' });
+    }
     if (!memoryOff && !conflict && !interaction && shouldRemember(message)) {
       memoryPersisted = false;
       try {
@@ -317,7 +349,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         const near = nearMeta.degraded ? [] : nearMeta.facts; // no dedup against a broken relayer
         const a = normText(message), b = near.length ? normText(near[0].text) : '';
         const isDup = near.length && (near[0].distance ?? 1) < 0.15 && (a === b || a.includes(b) || b.includes(a));
-        if (isDup) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; }
+        if (isDup) { saved = { blob_id: near[0].blob_id, deduped: true }; memoryPersisted = true; thinking.push({ label: 'Memory write', detail: `Skipped — near-identical fact already stored${near[0].blob_id ? ` (blob ${near[0].blob_id})` : ''}.` }); }
         else {
           // Never store a fact that lost its safety signal to truncation — a
           // truncated allergy is silent amnesia.
@@ -326,11 +358,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           if (lostSignal) {
             memoryPersisted = false;
             console.error('write skipped: fact truncated past its safety signal');
+            thinking.push({ label: 'Memory write', detail: 'Skipped — the message was too long and truncation cut its safety signal.' });
             reply += ' (Note: that was too long to save — please resend the allergy/medication in one short sentence.)';
           }
-          else { saved = await withTimeout(rememberAndWait(client, stored), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; }
+          else { saved = await withTimeout(rememberAndWait(client, stored), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; thinking.push({ label: 'Memory write', detail: saved?.blob_id ? `Saved to Walrus (blob ${saved.blob_id}).` : 'Write attempted but no blob returned.' }); }
         }
-      } catch { memoryPersisted = false; /* surfaced to the client below */ }
+      } catch { memoryPersisted = false; thinking.push({ label: 'Memory write', detail: 'Skipped — the write failed and was surfaced, not silently kept.' }); /* surfaced to the client below */ }
     }
     // Never deny memory we just stored: if the (keyless) reply says we know
     // nothing but a fact was saved this turn, acknowledge it.
@@ -351,6 +384,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       savedBlob: saved?.blob_id || null,
       memoryPersisted,
       memoryOff,
+      thinking,
       mode: MODE,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
     });

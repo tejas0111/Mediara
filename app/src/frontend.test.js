@@ -163,3 +163,9 @@ test('SPA prefills the live demo backend URL', () => {
   const app = wread('src/App.tsx');
   assert.ok(app.includes('DEFAULT_MAINNET_URL') && app.includes('trycloudflare.com'), 'demo backend prefilled, one Test+Save away');
 });
+
+test('SPA renders the reasoning trace per reply', () => {
+  const c = wread('src/ChatView.tsx');
+  assert.ok(c.includes('How I decided') && c.includes('m.thinking'), 'assistant cards show the trace');
+  assert.ok(wread('src/api.ts').includes('thinking: ThinkStep[]'), 'typed trace in the client');
+});

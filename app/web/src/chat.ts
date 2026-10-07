@@ -6,6 +6,10 @@ export interface RecalledRef {
   blob_id: string | null;
 }
 
+export interface ThinkStep {
+  label: string;
+  detail: string;
+}
 export interface ChatMsg {
   id: string;
   role: 'user' | 'assistant';
@@ -13,6 +17,7 @@ export interface ChatMsg {
   savedBlob?: string | null;
   memoryPersisted?: boolean | null;
   recalled?: RecalledRef[];
+  thinking?: ThinkStep[];
   ts: number;
 }
 

@@ -337,3 +337,15 @@ test('degraded memory: emergency card fails closed and drug questions 503', asyn
 });
 
 
+
+test('/api/chat exposes a real reasoning trace (recall -> guards -> write)', async () => {
+  const u = `rt-think-${Date.now()}`;
+  const t = await chat(u, 'She is allergic to ibuprofen, causes rash');
+  const labels = (t.thinking || []).map((s) => s.label);
+  assert.ok(labels.includes('Recall') && labels.includes('Memory write'), 'teach turn traces recall + write');
+  assert.ok((t.thinking || []).some((s) => /blob local-/.test(s.detail)), 'teach trace cites the saved blob');
+  const b = await chat(u, 'Can she take ibuprofen?');
+  const bl = (b.thinking || []).map((s) => s.label);
+  assert.deepEqual(bl, ['Recall', 'Allergy guard', 'Interaction guard', 'Answer', 'Memory write'], 'blocked turn traces the full pipeline');
+  assert.ok((b.thinking || []).some((s) => s.label === 'Allergy guard' && /MATCH/.test(s.detail)), 'guard step names the match');
+});
