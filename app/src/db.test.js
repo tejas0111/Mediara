@@ -92,13 +92,25 @@ test('SQLite usage: snapshot counts turns + memories', () => {
 
 // ---- routes on the SQLite store ----
 test('SQLite path: /api/usage redacts blob texts for anonymous callers', async () => {
+  // NOTE (G3-FIX B): the `user-` prefix strips during normalisation, so this
+  // teach lands in the canonical `a` row (SQLite enumerates seen ids, so the
+  // row surfaces with counts public + texts redacted — same intent as before).
   await chat('user-a', 'User-a takes Metformin 500mg at 8pm');
   const j = await (await get('/api/usage')).json();
   assert.ok(j.requirement, 'requirement stays public');
-  const me = j.users.find((u) => u.userId === 'user-a');
+  const me = j.users.find((u) => u.userId === 'a');
   assert.ok(me && me.memories >= 1, 'counts stay public');
   assert.ok(me.blobs[0].blobId, 'blob ids stay public');
   for (const b of me.blobs) assert.equal(b.text, null, 'text redacted for anon');
+  // REDACTION PIN (G2): the explicit `[redacted]` marker mechanism at HTTP
+  // level — redacted for anon (marker present, fact text absent). The owner
+  // half (marker absent, own text visible) is pinned at unit level
+  // (stats.test.js redactUser false-branch): no HTTP session can own the
+  // `a` namespace (vault ownership is vault-ns only), so it is unobservable
+  // over the route by design.
+  const md = await (await get('/api/usage?format=md')).text();
+  assert.ok(/\[redacted/.test(md), 'redaction is explicit, not silent');
+  assert.ok(!/metformin/i.test(md), 'redacted texts hidden in markdown for anon');
 });
 
 test('SQLite path: demo namespaces hit the 10/rolling-24h cap even with high DD_DAY_LIMIT_ANON', async () => {

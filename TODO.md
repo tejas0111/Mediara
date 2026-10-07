@@ -7,10 +7,11 @@ ports + temp env paths. Agents never commit; owner reviews dirty trees.
 ## Task list (backend only)
 
 - [x] T1: budget-identity unification (canonical wallet key + read-time union healing) — implemented, red-green proven, REVIEW: Changes-requested (dashboard guard-union omits trunc keys; mixed-case legacy gap; doc drift; comment/test fragility notes). FIX QUEUED behind T2 (same files) — will dispatch fix+re-review on the settled tree.
-- [ ] T2: SSE streaming chat (think→act→answer unchanged; stream LLM tokens live; STOP/CAUTION stay instant JSON; keyless/memory-fallback streams too; additive endpoint, old contract untouched) — IMPLEMENTED, red-green proven, awaiting integration review
-- [ ] T1-FIX: review findings (dashboard guard-union trunc keys, mixed-case legacy, doc drift, comment precision, slice comment, parity-test determinism) — RUNNING (ses_ee7dbf187ffeCkfnKZLXfbBYyA)
-- [ ] T2: SSE streaming chat (think→act→answer unchanged; stream LLM tokens live; STOP/CAUTION stay instant JSON; keyless/memory-fallback streams too; additive endpoint, old contract untouched)
-- [ ] T3: lose-list P0s (LLM 402/max_tokens+order, census landing pills, TTL census cache, device-keyed limiters, guard snapshot) — RUNNING (ses_ee7cf95b1ffeMNPqvwL3ctZc5N)
+- [ ] T1: budget-identity unification — implemented + reviewed Changes-requested + findings fixed, awaiting re-review (DO NOT mark done until gates pass)
+- [x] T2: SSE streaming chat — implemented, red-green proven
+- [x] T3: lose-list P0s (LLM 402/max_tokens+order, census pills, TTL cache, device-keyed limiters, guard snapshot) — done, committed 03edfd2 (418/418 + eval 30/30, my gate)
+- [x] GATE WAVE 2: G1 PASS + G2 Approved + G3 2 exploits fixed — CLOSED by wave-3 gates
+- [ ] GATE WAVE 5: G1 + G2 + G3 re-gate (439 frozen, hygiene landed) — RUNNING (G2 done: behavior ✅, ledger staleness only)
 - [ ] T4: `eval.js` hardcoded store-path wart (same class as the fixed selftest one)
 - [ ] T5: budget edge cases (window prune cap, `resetAt` clock skew, concurrent touch atomicity)
 - [ ] T6: log hygiene (single-line request errors, no blob text/PII, no stack leaks)
@@ -31,7 +32,7 @@ Gates: mainnet memory ✅ / 3×10 usage 🔴FAIL (1 persona) / live deploy ⚠�
 - [ ] S5: promo post third-party community — OWNER-GATED
 - [ ] S6: throttle-math paragraph (delegate-key throughput + keyless guards under 429) for article/resilience story
 - Press: coded pre-LLM STOPs, A/B 12/12 + 0/5 FP, hash-chained ledger, Sui vaults, proactive cross-checks, gradeable honesty infra
-- Number freeze: ONE truth (393/393 + eval 30/30) everywhere — README, SPEC-FULL, app/README, article, form. Re-sweep before submit, never reword after.
+- Number freeze: ONE truth (439/439 + eval 30/30) everywhere — README, SPEC-FULL, app/README, article, form. Re-sweep before submit, never reword after.
 - Judge-start-here block at README top: agent id, `user-demo-mom`, one STOP-receipt walruscan link, `/guard-proof` URL (owner/UI)
 - `submission/` mirror pack: form answers, ~700w article (compress, keep blob ids), X kit + timeline, demo script, bug tickets #966-968, 5-entry judge QA (owner)
 - S7 lessons: no live-edit number drift; 3 REAL users × 10 (family teaches on mainnet + CHAT-LOGS, not just seeded personas); human tail (URL, video, article, users) is the whole game — code already beats S7 winners

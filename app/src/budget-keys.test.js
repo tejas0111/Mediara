@@ -1,10 +1,14 @@
 // Budget-key unification tests (SPEC §3 rule 6: ONE canonical budget key per
 // identity shared by the chat enforcement path and the dashboard readout).
 //
-// Truth table (verified 2026-10-07 against app/src/server.js):
-//   wallet vault owner → chat turns under truncated `safeUser` (48-char prefix
-//     of `0x…`), dashboard reads `vault-<sha32>` → SPLIT (turns, memories,
-//     guard hits all disagree).
+// HISTORICAL CONTEXT (pre-unification bug, fixed 2026-10-07): wallet vault
+// owners used to split spend across two keys — chat turns under the truncated
+// `safeUser` (48-char prefix of `0x…`) while the dashboard read
+// `vault-<sha32>` — so turns, memories, and guard hits disagreed between the
+// two paths. The table below records that split as the bug it was, not as
+// current behavior.
+//   wallet vault owner → WAS split (chat trunc vs dashboard vault-hash),
+//     NOW unified on the lowercase session address everywhere;
 //   guest anon → turns agree on `guest:<hash12>` both paths; memories are
 //     namespace-keyed (recordMemory(safeUser)) so dashboard shows 0 →
 //     intentionally UNCHANGED (namespace evidence, see report).
@@ -153,7 +157,7 @@ test('guest: turns still agree on the guest key (unchanged)', async () => {  con
 });
 
 // ---- store-level: union healing on BOTH impls ----
-test('union: JSON + SQLite heal legacy keys without loss', async () => {
+test('unit: union heals legacy keys without loss (JSON + SQLite stores)', async () => {
   const { __budgetKeysForTest: BK } = await import('./server.js');
   assert.ok(BK, 'server exports its budget-key helpers for test');
   const { SqliteUsage } = await import('./db.js');
@@ -181,7 +185,7 @@ test('union: JSON + SQLite heal legacy keys without loss', async () => {
 });
 
 // ---- store-level: mixed-case legacy heals case-insensitively, both impls ----
-test('union: mixed-case legacy keys heal case-insensitively on both impls', async () => {
+test('unit: union heals mixed-case legacy keys case-insensitively (both stores)', async () => {
   const { __budgetKeysForTest: BK } = await import('./server.js');
   const { SqliteUsage, SqliteGuards } = await import('./db.js');
   const { GuardProof } = await import('./usage.js');
@@ -203,6 +207,115 @@ test('union: mixed-case legacy keys heal case-insensitively on both impls', asyn
     gp.record({ userId: mixedTrunc, kind: 'conflict', substance: 'penicillin', severity: 'high', reason: 'r', fact: 'f', blobId: null, message: 'm' });
     assert.equal(BK.unionGuardCount(gp, [canon, canon.slice(0, 48)]), 1, `${name}: mixed-case receipt heals`);
   }
+});
+// ---- F1 (RED): caller-typed legacy rows heal on BOTH paths (same keyset) ----
+// Pre-unification wallet turns were recorded under the caller-typed safeUser
+// (not the address). Chat heals them via safeUser in its keyset; the dashboard
+// must agree when given the same caller-typed id.
+test('wallet: caller-typed legacy rows heal on chat AND dashboard (same keyset)', async () => {
+  const dir = path.join(TMP, 'f1');
+  fs.mkdirSync(dir, { recursive: true });
+  const ul = path.join(dir, 'usage.json');
+  const gp = path.join(dir, 'gp.json');
+  const CALLER = `caller-acme-mom-${Date.now() % 100000}`;
+  {
+    const seed = new UsageTracker({ persistPath: ul });
+    seed.touchUser(CALLER, { turn: true });
+    seed.touchUser(CALLER, { turn: true });
+    seed.recordMemory(CALLER, { blobId: 'local-f1-1', text: 'f1 take' });
+    const sg = new GuardProof({ persistPath: gp });
+    sg.record({ userId: CALLER, kind: 'conflict', substance: 'penicillin', severity: 'high', reason: 'recalled allergy', fact: 'allergic to penicillin', blobId: null, message: 'is penicillin ok?' });
+  }
+  const prevU = process.env.DD_USAGE_LEDGER, prevG = process.env.DD_GUARD_PROOF, prevL = process.env.DD_LOCAL_STORE;
+  process.env.DD_USAGE_LEDGER = ul;
+  process.env.DD_GUARD_PROOF = gp;
+  process.env.DD_LOCAL_STORE = path.join(dir, 'local-memory.json');
+  const { default: f1app } = await import('./server.js?f1=caller-typed');
+  process.env.DD_USAGE_LEDGER = prevU;
+  process.env.DD_GUARD_PROOF = prevG;
+  process.env.DD_LOCAL_STORE = prevL;
+  const s = f1app.listen(0);
+  await new Promise((r) => s.once('listening', r));
+  try {
+    const b = `http://127.0.0.1:${s.address().port}`;
+    const addr = '0x' + 'c1'.repeat(32);
+    mkVault(addr, 'f1');
+    const h = { Cookie: `dd_session=${issueSession(addr)}`, 'Content-Type': 'application/json' };
+    const cj = await (await fetch(b + '/api/chat', { method: 'POST', headers: h, body: JSON.stringify({ userId: CALLER, message: 'takes calcium at 9am fresh' }) })).json();
+    assert.equal(cj.budget.used, 3, 'chat enforces legacy caller-typed turns + fresh turn together');
+    const dj = await (await fetch(b + `/api/dashboard?user=${encodeURIComponent(CALLER)}`, { headers: { Cookie: h.Cookie } })).json();
+    assert.equal(dj.personal.budget.used, 3, 'dashboard shows the same caller-typed spend as chat (same keyset)');
+    assert.equal(dj.personal.turns, 3, 'dashboard turns agree with chat turns');
+    assert.ok(dj.personal.memories >= 1, 'caller-typed memory still attributed');
+    assert.ok(dj.personal.guardHits >= 1, 'dashboard counts the caller-typed guard receipt');
+  } finally {
+    try { s.close(); } catch {}
+  }
+});
+
+// ---- F2 (RED): the 66->64 truncation is explicit in the union keyset ----
+test('unit: 66-char canonical key carries its explicit 64-slice in the union keyset (both stores)', async () => {
+  const { __budgetKeysForTest: BK } = await import('./server.js');
+  const { SqliteUsage } = await import('./db.js');
+  const canon = '0x' + 'e7'.repeat(32); // 66 chars
+  assert.equal(canon.length, 66);
+  const keys = BK.walletKeySet({ canonical: canon, safeUser: canon.slice(0, 48), vaultId: 'vault-abc123' });
+  assert.ok(keys.includes(canon.slice(0, 64)), 'keyset carries the explicit store-level 64-slice');
+  for (const [name, store] of [
+    ['json', new UsageTracker({})],
+    ['sqlite', new SqliteUsage({ dbPath: ':memory:' })],
+  ]) {
+    store.touchUser(canon, { turn: true });
+    const chk = BK.unionCheck(store, keys, 200, { mode: 'daily' });
+    assert.equal(chk.used, 1, `${name}: 66-char canonical hits its own row`);
+    const snap = BK.unionSnapshot(store, keys, canon);
+    assert.equal(snap.turns, 1, `${name}: snapshot hits its own row`);
+  }
+});
+
+// ---- M3c (RED): unionCheck reset/resetAt/resetInHrs come from the SAME key ----
+test('unit: unionCheck reset/resetAt/resetInHrs come from the same key (no mixed-source snapshot)', async () => {
+  const { __budgetKeysForTest: BK } = await import('./server.js');
+  const triples = {
+    'key-a': { ok: true, used: 1, remaining: 9, reset: '2026-01-01', resetAt: '2026-10-08T00:00:00.000Z', resetInHrs: 5 },
+    'key-b': { ok: true, used: 2, remaining: 8, reset: '2026-02-02', resetAt: '2026-10-07T00:00:00.000Z', resetInHrs: 3 },
+  };
+  const stub = { checkDay: (k) => triples[k] || { ok: true, used: 0, remaining: 10, reset: '2026-03-03', resetAt: null, resetInHrs: null } };
+  const out = BK.unionCheck(stub, ['key-a', 'key-b'], 10);
+  assert.equal(out.used, 3);
+  assert.deepEqual(
+    [out.reset, out.resetAt, out.resetInHrs],
+    ['2026-02-02', '2026-10-07T00:00:00.000Z', 3],
+    'all three fields come from the min-resetAt key',
+  );
+});
+
+// ---- M5: union resolution reads each store row once, keeps case variants ----
+test('unit: union resolution dedupes store-equivalent keys, keeps case variants', async () => {
+  const { __budgetKeysForTest: BK } = await import('./server.js');
+  const canon = '0x' + 'f7'.repeat(32); // 66 chars
+  const mixed48 = '0x' + 'F7'.repeat(23); // same letters as the 48-slice, other case
+  // Transparent store holding the 64-prefix row plus a mixed-case 48-row.
+  const stored = [canon.slice(0, 64), mixed48];
+  const out = BK.resolveUnionKeys([canon, canon.slice(0, 64), canon.slice(0, 48)], stored);
+  const n64 = out.filter((k) => String(k).slice(0, 64) === canon.slice(0, 64));
+  assert.equal(n64.length, 1, 'one read per store row, never two');
+  assert.ok(out.includes(mixed48), 'mixed-case stored variant still covered');
+  // Opaque impls (storedIds null): exact + lowercase, nothing dropped.
+  assert.deepEqual(BK.resolveUnionKeys(['AbC'], null), ['AbC', 'abc']);
+});
+
+// ---- M3a (RED): reserved ids fail fast with 400 even on an exhausted budget ----
+test('reserved ids fail fast: 400 even with an exhausted budget (never 429)', async () => {
+  const dev = `m3a-dev-${Date.now()}`;
+  const h = { 'X-Device-Id': dev, 'Content-Type': 'application/json' };
+  const u = `m3a-u-${Date.now()}`;
+  for (let i = 0; i < 20; i++) {
+    const r = await post('/api/chat', { userId: u, message: `hello number ${i}` }, h);
+    assert.equal(r.status, 200, `warmup turn ${i} spends guest budget`);
+  }
+  const bad = await post('/api/chat', { userId: 'w-0xabc', message: 'my mom takes Metformin 500mg at 8pm' }, h);
+  assert.equal(bad.status, 400, 'reserved id fails fast with 400, not 429, on an exhausted budget');
 });
 // ---- route-level parity on the SQLite impl ----
 test('wallet: chat/dashboard agree on the SQLite store too', async () => {

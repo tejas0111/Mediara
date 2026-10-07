@@ -21,7 +21,7 @@ import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionF
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting, resetVault } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser, registryStatus } from './userRegistry.js';
-import { limiter, clientKey, deviceKey } from './rateLimit.js';
+import { limiter, clientKey, deviceKey, deviceId } from './rateLimit.js';
 import { encryptionEnabled } from './cryptoUtils.js';
 import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
 import { createStores, DEFAULT_DB_PATH } from './db.js';
@@ -48,13 +48,44 @@ const hasSessionCookie = (req) => /(?:^|;\s*)dd_session=/.test(req.headers.cooki
 // ONE user-id normaliser shared by the write and read paths: strip control
 // chars, collapse whitespace, bound length. Applied BEFORE the reserved-prefix
 // check so junk prefixes ('!!vault-…', '..w-…') can't slip past the guard.
-const normalizeUser = (v, fallback = 'demo-mom') => {
+// Resolves nested leading `user-` (case-insensitive) to a FIXPOINT — the strip
+// loops until stable — BEFORE the length bound and before ANY scope decision
+// (demo/reserved/budget/namespace): a caller-typed `user-<id>` reaches the SAME
+// namespace as the bare `<id>` at EVERY depth. A single strip left
+// `user-user-demo-mom` resolving to `user-demo-mom` (a writable shadow that
+// dodged the demo read-only/cap rules) and `user-user-user-vault-abc` dodging
+// the reserved guard entirely. Stripping before the slice matters: the 48-char
+// bound applies to the canonical id, never cuts its tail first. The fixpoint
+// is deterministic: every depth of one id maps to one canonical id on reads
+// AND writes (no split-brain, no collisions beyond the intended collapse).
+const stripUserPrefix = (s) => {
+  let out = String(s ?? '');
+  while (/^user-/i.test(out)) out = out.slice(5);
+  return out;
+};
+const normalizeUser = (v, fallback = 'demo-mom', maxLen = 48) => {
   const s = Array.isArray(v) ? v[0] : v;
-  return String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48) || fallback;
+  let out = String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  out = stripUserPrefix(out).slice(0, maxLen);
+  return out || fallback;
 };
 // Namespaces derived from a credential (wallet vault) or a private channel must
-// never be addressable anonymously. Check the NORMALISED namespace.
-const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
+// never be addressable anonymously. The strip + membership checks loop to a
+// fixpoint (each pass shortens the string, so it always terminates): the
+// raw-id test and the derived-namespace test each run at EVERY nesting level,
+// so `user-user-user-vault-abc` (any case) matches exactly like the canonical
+// `vault-abc`. The raw-id test closes the `user-`-prefixed shadow
+// (`user-vault-x` must not need namespace derivation to be recognised), the
+// namespace test closes junk-prefixed spellings after normalisation.
+const isReservedNs = (id) => {
+  let cur = String(id);
+  for (;;) {
+    if (/^user-(?:w-|vault-|tg-)/i.test(cur) || /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(cur))) return true;
+    const nxt = cur.replace(/^user-/i, '');
+    if (nxt === cur) return false;
+    cur = nxt;
+  }
+};
 
 // Guests (no wallet, no forced wall) get personal memory keyed to IP+device.
 // The client sends X-Device-Id (persisted UUID in localStorage); the server
@@ -68,15 +99,10 @@ const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
 // other anonymous caller is budgeted under their `guest:<hash12>`. The device
 // id is client-rotatable (never a security boundary); the IP limiter below it
 // still applies. Demo namespaces are unaffected by device rotation by design.
-function deviceIdFor(req) {
-  const v = req.headers['x-device-id'];
-  const s = Array.isArray(v) ? v[0] : v;
-  const t = String(s == null ? '' : s).trim();
-  return /^[A-Za-z0-9_-]{8,64}$/.test(t) ? t : 'anon';
-}
+// Device-id validation lives in exactly ONE place (rateLimit.js deviceId).
 function guestKeyFor(req) {
   const ip = clientKey(req);
-  return 'guest:' + crypto.createHash('sha256').update(`${ip}|${deviceIdFor(req)}`).digest('hex').slice(0, 12);
+  return 'guest:' + crypto.createHash('sha256').update(`${ip}|${deviceId(req)}`).digest('hex').slice(0, 12);
 }
 
 // Canonical budget identity (SPEC §3 rule 6): ONE key per identity, shared by
@@ -97,11 +123,30 @@ function walletCanonical(sess) { return String(sess.address).toLowerCase(); }
 // Every key shape a wallet identity may already own rows under. safeUser is
 // the caller-typed (possibly mixed-case) 48-char prefix; the canonical slice
 // covers lowercase history; vaultId covers the dashboard-side namespace key.
+// ONE construction site for BOTH paths: the chat enforcement path and the
+// dashboard readout path MUST call this with the same keyset (F1) — the
+// dashboard derives its safeUser from the session address plus the ?user
+// query exactly as the chat path derives it from the request body, so a
+// pre-unification row keyed by a non-address caller-typed id heals on both.
+// safeUser accepts one id or several (dashboard threads query + address).
+// The 64-slice is explicit (F2): both stores persist keys sliced to 64
+// (usage.js touchUser/recordMemory/checkDay, db.js #ensure/checkDay), so a
+// 66-char canonical address is STORED under its 64-char prefix — carrying
+// that slice in the keyset makes the truncation explicit instead of relying
+// on store-internal normalisation. Behaviour is unchanged (extra keys with no
+// rows read as empty, never double-counted: each turn lives under one key).
 function walletKeySet({ canonical, safeUser = null, vaultId = null }) {
   const keys = [];
-  for (const k of [canonical, safeUser, String(safeUser == null ? '' : safeUser).toLowerCase(), String(canonical).slice(0, 48), vaultId]) {
-    if (k && !keys.includes(k)) keys.push(k);
+  const safes = Array.isArray(safeUser) ? safeUser : [safeUser];
+  const push = (k) => { if (k && !keys.includes(k)) keys.push(k); };
+  push(canonical);
+  for (const s of safes) {
+    push(s);
+    push(String(s == null ? '' : s).toLowerCase());
   }
+  push(String(canonical).slice(0, 48));
+  push(String(canonical).slice(0, 64));
+  push(vaultId);
   return keys;
 }
 // Union reads over primary + legacy keys. Each turn was recorded under exactly
@@ -138,30 +183,68 @@ function storedGuardIds(guardProof) {
 }
 // Merge requested keys with any stored case-variant of them (exact-deduped:
 // a stored id already present exactly is never read twice).
+// M5: the storedIds==null fallback (exact keys + lowercase variants + the
+// 64-slice and its lowercase) is for OPAQUE store impls only. Both
+// production impls always enumerate: the JSON UsageTracker keeps
+// `this.users = new Map()` (usage.js:51) and GuardProof keeps
+// `this.entries = []` (usage.js:299), while SqliteUsage always holds an open
+// handle (`this.db = db || openDb(...)`, db.js:98) with a `usage` table and
+// SqliteGuards exposes `get entries()` (db.js:312) — so storedUsageIds /
+// storedGuardIds return a real id list, never null, on both stores.
 function resolveUnionKeys(keys, storedIds) {
   const out = [];
   for (const k of keys) if (k && !out.includes(k)) out.push(k);
   if (!storedIds) {
     for (const k of keys.map(lowerUnionKey)) if (k && !out.includes(k)) out.push(k);
-    return out;
+    // Opaque impls cannot be scanned, so also cover the store-level 64-slice
+    // explicitly (same truncation the stores apply on write): a 66-char key
+    // must hit its 64-prefix row even here.
+    for (const k of keys) {
+      const s64 = String(k).slice(0, 64);
+      if (s64 && !out.includes(s64)) out.push(s64);
+      const l64 = s64.toLowerCase();
+      if (l64 && !out.includes(l64)) out.push(l64);
+    }
+  } else {
+    const want = new Set(keys.map(lowerUnionKey));
+    for (const id of storedIds) {
+      if (want.has(lowerUnionKey(id)) && !out.includes(id)) out.push(id);
+    }
   }
-  const want = new Set(keys.map(lowerUnionKey));
-  for (const id of storedIds) {
-    if (want.has(lowerUnionKey(id)) && !out.includes(id)) out.push(id);
-  }
-  return out;
+  // Store-level dedupe (F2 companion): both production stores slice keys to
+  // 64 on write AND read, so two keys sharing a 64-prefix address the SAME
+  // row — read it once, never twice (an explicit 64-slice next to its 66-char
+  // parent must not double-count). Case still distinguishes: stores never
+  // case-fold, so case-variants remain distinct rows healed by the scan above.
+  const seen64 = new Set();
+  return out.filter((k) => {
+    const n = String(k).slice(0, 64);
+    if (seen64.has(n)) return false;
+    seen64.add(n);
+    return true;
+  });
 }
 function unionCheck(usage, keys, cap, mode) {
   const resolved = resolveUnionKeys(keys, storedUsageIds(usage));
-  let used = 0, reset = null, resetAt = null, resetInHrs = null;
+  // reset/resetAt/resetInHrs ALWAYS come from the same per-key snapshot (M3c):
+  // the key whose window expires soonest (min resetAt; keys with no live
+  // turns sort last, so an empty-first key order can never pair one key's
+  // day-string with another key's expiry). used still sums every key — each
+  // turn was recorded under exactly one key, so the sum never double-counts.
+  let used = 0, best = null;
   for (const k of resolved) {
     let c;
     try { c = usage.checkDay(k, cap, mode); } catch { continue; }
     used += Number(c.used || 0);
-    reset = reset || c.reset || null;
-    if (c.resetAt && (!resetAt || c.resetAt < resetAt)) { resetAt = c.resetAt; resetInHrs = c.resetInHrs ?? null; }
+    if (!best) best = c;
+    else if (c.resetAt && (!best.resetAt || c.resetAt < best.resetAt)) best = c;
   }
-  if (!reset) reset = new Date().toISOString().slice(0, 10);
+  const reset = best ? best.reset : new Date().toISOString().slice(0, 10);
+  const resetAt = best ? best.resetAt : null;
+  const resetInHrs = best ? best.resetInHrs ?? null : null;
+  if (!reset) return used < cap
+    ? { ok: true, used, remaining: cap - used, reset: new Date().toISOString().slice(0, 10), resetAt, resetInHrs }
+    : { ok: false, used, remaining: 0, reset: new Date().toISOString().slice(0, 10), resetAt, resetInHrs };
   return used < cap
     ? { ok: true, used, remaining: cap - used, reset, resetAt, resetInHrs }
     : { ok: false, used, remaining: 0, reset, resetAt, resetInHrs };
@@ -202,7 +285,7 @@ function unionGuardCount(guardProof, keys) {
   return list.filter((e) => set.has(e.userId)).length;
 }
 // Exported for tests only: the union math must hold on both store impls.
-export const __budgetKeysForTest = { walletCanonical, walletKeySet, unionCheck, unionSnapshot, unionGuardCount };
+export const __budgetKeysForTest = { walletCanonical, walletKeySet, resolveUnionKeys, unionCheck, unionSnapshot, unionGuardCount };
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 
@@ -493,7 +576,7 @@ async function streamLLM(system, userMessage, history = [], modelOverride, onTok
       if (!res.ok || !res.body) continue;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buf = '', text = '', sawDone = false;
+      let buf = '', text = '';
       for (;;) {
         const { value, done: rd } = await reader.read();
         if (value?.length) buf += decoder.decode(value, { stream: true });
@@ -501,14 +584,13 @@ async function streamLLM(system, userMessage, history = [], modelOverride, onTok
         const parsed = parseSSEBuffer(buf);
         buf = parsed.rest;
         for (const t of parsed.tokens) { text += t; try { onToken(t); } catch { /* client gone */ } }
-        if (parsed.done) { sawDone = true; break; }
+        if (parsed.done) break;
       }
       buf += decoder.decode(); // flush the decoder, then drain any full lines
       const tail = parseSSEBuffer(buf + '\n');
       for (const t of tail.tokens) { text += t; try { onToken(t); } catch { /* client gone */ } }
       try { await reader.cancel(); } catch { /* already closed */ }
       if (text) return { text, model: m, streamed: true };
-      void sawDone;
       // Zero usable tokens: fall through to the next model.
     } catch (e) {
       console.error(`LLM-stream ${m} failed: ${String((e && e.message) || e).slice(0, 120)}`);
@@ -592,6 +674,31 @@ const CLAIMS_SAVED_RE = /\bnoted?(?: that)? down\b|(?:i'll|i will) remember\b|re
 // and signed-in demo views both ask for demo-mom by name).
 const DEMO_PUBLIC = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
 
+// Case-insensitive demo membership: namespaceFor lowercases, so `DEMO-MOM`
+// and `demo-mom` share ONE namespace — every demo/reserved decision (chat
+// gate, caps, budgetKey, dashboard, namespaceView) must compare lowercased
+// too, or a case variant writes poison into the real shared demo and dodges
+// the demo cap. Returns the canonical lowercase id, or null. The strip +
+// membership checks loop to a fixpoint (each pass shortens the string, so it
+// always terminates): `user-user-demo-mom` at ANY depth or case resolves to
+// the canonical demo id (read-only, demo cap), never a writable shadow.
+const demoIdOf = (id) => {
+  let cur = String(id == null ? '' : id);
+  for (;;) {
+    const l = cur.toLowerCase();
+    if (DEMO_PUBLIC.has(l)) return l;
+    // Unifying principle: scope derives from the canonical namespace the data
+    // will actually land in (namespaceFor output minus one `user-`), never the
+    // raw caller string — junk (`!`, `.`, `/`, space, U+0085) collapses there
+    // and must not fork a writable shadow of the shared demo.
+    const nsBare = namespaceFor(cur).replace(/^user-/i, '').toLowerCase();
+    if (DEMO_PUBLIC.has(nsBare)) return nsBare;
+    const nxt = cur.replace(/^user-/i, '');
+    if (nxt === cur) return null;
+    cur = nxt;
+  }
+};
+
 // Deterministic, keyless, LLM-free answer built from recalled facts — used when
 // there is no key or every model failed, so the demo ALWAYS shows memory working.
 function memoryAnswer(recalled) {
@@ -623,21 +730,35 @@ async function handleChat(req, res, streaming) {
       return sendError(res, streaming, 400, { error: 'message must be 1-500 chars' });
     }
     if (typeof userId !== 'string') return sendError(res, streaming, 400, { error: 'userId must be a string' });
+    // Generous raw sanity bound (DoS guard): the 16KB JSON body cap still
+    // applies above; anything longer is abuse, rejected before any
+    // normalisation work (fast, no algorithmic blowup).
+    if (userId.length > 256) return sendError(res, streaming, 400, { error: 'userId too long' });
+    // SPEC §8: an explicitly empty/whitespace userId is 400 validation, never
+    // a silent default — otherwise '' chats as user-anon and its facts are
+    // unattributable. A MISSING userId still defaults to 'anon' (existing
+    // contract, unchanged).
+    // The length bound applies to the NORMALIZED id (after the `user-`
+    // fixpoint strip), never the raw caller string: `user-`×12+`demo-mom`
+    // and the 71-char `user-`+session-address flow resolve instead of 400ing.
+    const unbounded = normalizeUser(userId, '', Infinity);
+    if (unbounded === '') return sendError(res, streaming, 400, { error: 'userId must be a non-empty string' });
     // A signed-in owner with an untouched default id chats as the session
     // address (SPEC §3.3: 0x{64} = 66 chars). The vault itself resolves from
     // the session cookie, never from this string — it only steers past the
     // demo branch. Every other id keeps the 64-char bound.
-    const isSessionAddr = /^0x[0-9a-fA-F]{64}$/.test(userId);
-    if (userId.length > (isSessionAddr ? 66 : 64)) return sendError(res, streaming, 400, { error: 'userId too long' });
+    const isSessionAddr = /^0x[0-9a-fA-F]{64}$/.test(unbounded);
+    if (unbounded.length > (isSessionAddr ? 66 : 64)) return sendError(res, streaming, 400, { error: 'userId too long' });
     // Strip control chars/newlines before the id is used as a namespace or a
     // stored fact label — otherwise it is a stored-prompt-injection primitive.
-    const safeUser = normalizeUser(userId, 'anon');
+    const safeUser = unbounded.slice(0, 48) || 'anon';
     // Demo chat is ALWAYS the shared demo namespace: anyone asking in demo-mom
     // reads premade memory. A signed-in vault owner is NOT switched to their
     // vault here (that hijack answered demo questions from an empty vault),
     // and NOBODY writes into the shared demo — teachings belong in personal
     // Chat, which is the only writer. Budget identity below is unchanged.
-    const demoShared = DEMO_PUBLIC.has(safeUser);
+    const demoId = demoIdOf(safeUser);
+    const demoShared = demoId != null;
     // Identity: signed-in onboarded wallet user → their OWN MemWal account
     // (delegate client). Everyone else, plus every demo turn, → the shared
     // anonymous channel (agent account on mainnet / local stand-in in dev).
@@ -655,10 +776,17 @@ async function handleChat(req, res, streaming) {
     if (sess && !walletClient && !demoShared) {
       return sendError(res, streaming, 409, { error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
     }
+    // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
+    // must never be able to name one. Reserve the prefix for wallet sessions.
+    // This runs BEFORE the budget gate so a bad id fails fast (400) without
+    // burning budget — an exhausted budget must never mask it as a 429.
+    if (!walletClient && isReservedNs(safeUser)) {
+      return sendError(res, streaming, 400, { error: 'that userId is reserved' });
+    }
     // Shared demo namespaces are READ-ONLY for everyone: anyone may ask
     // (recall + guards run on premade memory), but nobody writes into the
     // premade demo — personal Chat is the only writer.
-    const demoReadonly = DEMO_PUBLIC.has(safeUser);
+    const demoReadonly = demoId != null;
     // Rolling budget gate: DEMO + ANON channels roll on a 24h sliding window
     // (per-key turn timestamps, last 50 kept) so one user cannot burn the
     // shared OpenRouter/Walrus budget (free tiers are rate-limited upstream).
@@ -674,7 +802,7 @@ async function handleChat(req, res, streaming) {
     const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
     const cap = walletClient
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
-      : (DEMO_PUBLIC.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
+      : (demoId != null ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
     // Budget identity (SPEC §3 rule 6 — ONE canonical key per identity):
     // wallet owners spend as their lowercase session address, demo namespaces
     // spend as the shared demo id (existing demo rules), everyone else spends
@@ -682,7 +810,7 @@ async function handleChat(req, res, streaming) {
     // budgetKeys unions the canonical key with pre-unification wallet rows so
     // legacy spend still enforces (never silently orphaned); single-key for
     // demo/guest, where chat and dashboard already agreed.
-    const budgetKey = walletClient ? walletCanonical(sess) : (DEMO_PUBLIC.has(safeUser) ? safeUser : guestKeyFor(req));
+    const budgetKey = walletClient ? walletCanonical(sess) : (demoId != null ? demoId : guestKeyFor(req));
     const budgetKeys = walletClient
       ? walletKeySet({ canonical: budgetKey, safeUser, vaultId: String(walletClient.ns || '').replace(/^user-/, '') })
       : [budgetKey];
@@ -691,7 +819,7 @@ async function handleChat(req, res, streaming) {
     const memoryKey = walletClient ? budgetKey : safeUser;
     // Guard receipts: wallet rows move to the canonical key (dashboard counts
     // the union, so pre-unification receipts still count).
-    const guardUserId = walletClient ? budgetKey : safeUser;
+    const guardUserId = walletClient ? budgetKey : (demoId != null ? demoId : safeUser);
     // Wallet stays on the UTC-day bucket; demo + anon roll on the 24h window.
     const budgetMode = walletClient ? { mode: 'daily' } : undefined;
     const nextUtcMidnightIso = () => {
@@ -708,7 +836,7 @@ async function handleChat(req, res, streaming) {
       return sendError(res, streaming, 429, {
         error: walletClient
           ? `You've used your ${cap} daily messages — limit resets at UTC midnight.`
-          : DEMO_PUBLIC.has(safeUser)
+          : demoId != null
             ? `You've used your ${cap} demo messages — sign in with your Sui wallet for a bigger budget and your own vault.`
             : `You've used your ${cap} guest messages — sign in with your Sui wallet for a bigger budget and your own vault.`,
         loginRequired: !walletClient,
@@ -718,11 +846,6 @@ async function handleChat(req, res, streaming) {
         resetAt: walletClient ? walletResetAt : (chk.resetAt || null),
         resetInHrs: walletClient ? Math.max(1, Math.ceil((Date.parse(walletResetAt) - Date.now()) / 3_600_000)) : (chk.resetInHrs ?? null),
       });
-    }
-    // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
-    // must never be able to name one. Reserve the prefix for wallet sessions.
-    if (!walletClient && isReservedNs(safeUser)) {
-      return sendError(res, streaming, 400, { error: 'that userId is reserved' });
     }
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
     const client = walletClient ? walletClient.client : clientFor(safeUser).client;
@@ -1176,15 +1299,19 @@ async function demoReadinessBlobs() {
   } catch { return null; }
 }
 
-async function namespaceView(req, res) {
+async function namespaceView(req, res, opts = {}) {
   const sess = sessionFromReq(req);
   if (!sess && hasSessionCookie(req)) { res.status(401).json({ error: 'Your session expired — sign in again.' }); return null; }
   // Explicit public-demo requests bypass the vault branch: a signed-in owner
   // asking for demo-mom gets the shared demo, not their vault (the banner and
   // signed-in demo views ask by name; vaults stay credential-scoped).
-  const explicitDemo = req.query.user != null && DEMO_PUBLIC.has(normalizeUser(req.query.user));
+  const explicitDemo = req.query.user != null && demoIdOf(normalizeUser(req.query.user)) != null;
   const mine = (sess && !explicitDemo) ? userClientFor(sess.address) : null;
-  if (sess && !mine && !explicitDemo) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
+  // SPEC §4/B dashboard: a signed-in-but-vaultless reader is served the
+  // requested namespace as a guest (demo readiness + vault-not-onboarded),
+  // never a 409 — dashboard only (pass unlinkedAsGuest). Every other surface
+  // keeps the loud 409, and chat keeps its own 409 in handleChat.
+  if (sess && !mine && !explicitDemo && opts.unlinkedAsGuest !== true) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
   const userId = mine ? mine.ns.replace(/^user-/, '') : normalizeUser(req.query.user);
   // A wallet vault is credential-scoped: refuse to resolve it anonymously. The
   // namespace id is derivable from a public address, so it is not a secret.
@@ -1292,35 +1419,67 @@ app.get('/api/usage', readLimiter, (req, res) => {
 app.get('/api/dashboard', readLimiter, async (req, res) => {
   // Per-user dashboard: demo readiness + personal budget/memories + vault state.
   // Same auth/namespace rules as /api/summary (shared namespaceView: expired
-  // sessions 401, unlinked vaults 409, anonymous vault peeks 403).
+  // sessions 401, anonymous vault peeks 403) EXCEPT SPEC §4 cell B: a
+  // signed-in-but-vaultless reader is served as a guest of the requested
+  // namespace (unlinkedAsGuest), never a 409.
   try {
     res.setHeader('Cache-Control', 'no-store');
-    const view = await namespaceView(req, res);
+    const view = await namespaceView(req, res, { unlinkedAsGuest: true });
     if (!view) return;
     const { userId, mode } = view;
     const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
-    const isDemoNs = ['demo-mom', 'demo-day7', 'demo-day1'].includes(userId);
+    // Case-insensitive like every other demo decision: namespaceFor
+    // lowercases, so DEMO-MOM lives in the demo namespace and gets the demo cap.
+    const demoNsId = demoIdOf(userId);
+    const isDemoNs = demoNsId != null;
     const cap = view.isVault
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
       : (isDemoNs ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
     // Same canonical budget identity as /api/chat (SPEC §3 rule 6): a vault
     // owner's readout follows the lowercase session address — the SAME key
-    // chat enforces — with pre-unification rows (truncated id, vault-hash)
-    // unioned in, never dropped. Demo namespaces read the shared demo id; a
-    // guest sees their own per-browser guest key. Blob evidence stays keyed
-    // by namespace for guests (recordMemory uses safeUser, so /api/usage +
-    // stats attribution is unchanged).
+    // chat enforces — with pre-unification rows (truncated id, caller-typed
+    // safeUser, vault-hash) unioned in, never dropped. Demo namespaces read
+    // the shared demo id; a guest sees their own per-browser guest key. Blob
+    // evidence stays keyed by namespace for guests (recordMemory uses
+    // safeUser, so /api/usage + stats attribution is unchanged).
     // Wallet reads the UTC-day bucket; demo + anon read the 24h window.
     const dashSess = sessionFromReq(req);
-    const budgetKey = (view.isVault && dashSess) ? walletCanonical(dashSess) : ((view.isVault || isDemoNs) ? userId : guestKeyFor(req));
+    // Demo namespaces read the shared canonical demo id (lowercased — case
+    // variants share one budget row, matching the chat path); a guest reads
+    // their own per-browser guest key.
+    const budgetKey = (view.isVault && dashSess) ? walletCanonical(dashSess) : (demoNsId || guestKeyFor(req));
+    // SAME keyset as the chat path (F1): the dashboard threads safeUser too.
+    // The chat path derives it from the request-body userId; here the
+    // equivalents are the ?user query (a caller-typed id the wallet owner may
+    // have chatted under pre-unification) plus the session address itself
+    // (the SPEC §3.3 default flow, where the client sends the session address
+    // as userId). Either one heals its legacy rows on both paths.
+    const dashSafeUsers = [];
+    if (dashSess) {
+      const q = req.query.user != null ? normalizeUser(req.query.user, '') : '';
+      if (q) dashSafeUsers.push(q);
+      const a = normalizeUser(dashSess.address, '');
+      if (a && !dashSafeUsers.includes(a)) dashSafeUsers.push(a);
+    }
     const budgetKeys = (view.isVault && dashSess)
-      ? walletKeySet({ canonical: budgetKey, vaultId: userId })
+      ? walletKeySet({ canonical: budgetKey, safeUser: dashSafeUsers, vaultId: userId })
       : [budgetKey];
     const budgetMode = view.isVault ? { mode: 'daily' } : undefined;
     let chk = { ok: true, used: 0, remaining: cap, reset: null, resetAt: null, resetInHrs: null };
     try { chk = unionCheck(usage, budgetKeys, cap, budgetMode); } catch { /* fail open — budget unknown, not fatal */ }
     let snap;
-    try { snap = unionSnapshot(usage, budgetKeys, budgetKey); }
+    // Guest readout (deliberate T1 split, unified here): chat records TURNS
+    // under the per-browser guestKey but MEMORIES under the typed namespace id
+    // (recordMemory uses safeUser, which /api/usage + stats attribution rely
+    // on — those stay byte-identical, keys untouched). A snapshot over the
+    // guest key alone would report 0 memories while the namespace holds facts,
+    // so the dashboard unions the READOUT over [budgetKey, userId] (turns live
+    // under exactly one of them; memories union by blob id, never double-
+    // counted). Budget enforcement above still uses [budgetKey] only.
+    const snapKeys = (view.isVault && dashSess)
+      ? budgetKeys
+      : (budgetKey === userId ? [budgetKey] : [budgetKey, userId]);
+    try { snap = unionSnapshot(usage, snapKeys, budgetKey); }
     catch { snap = { memories: 0, turns: 0 }; }
     // guardHits works on both store impls and unions the canonical key with
     // pre-unification wallet receipt ids (truncated id + vault-hash, via the

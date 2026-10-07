@@ -14,10 +14,10 @@ export function clientKey(req) {
 
 // Device-aware key for the chat/read limiters ONLY: one NAT room (judging day)
 // shares a single IP, so IP-only buckets throttle innocent neighbours. The
-// device id is validated exactly like server.js deviceIdFor (client-rotatable,
-// so this key is fairness, not a security boundary — the auth/onboard/nonce/
-// logout limiters stay IP-only above for that reason).
-function deviceId(req) {
+// device id below is the SINGLE definition (server.js guestKeyFor imports it —
+// client-rotatable, so this key is fairness, not a security boundary; the
+// auth/onboard/nonce/logout limiters stay IP-only above for that reason).
+export function deviceId(req) {
   const v = req.headers?.['x-device-id'];
   const s = Array.isArray(v) ? v[0] : v;
   const t = String(s == null ? '' : s).trim();

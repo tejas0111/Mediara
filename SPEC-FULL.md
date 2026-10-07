@@ -93,7 +93,7 @@ namespace.
   thinking, savedBlob, memoryPersisted, budget, mode, disclaimer}`.
   Errors: 400 validation/model, 401 expired, 403 reserved/vault-peek, 409
   vault-unlinked/dead-delegate/retired (+ `needsRelink`/`retiredDeployment`
-  flags), 429 budget (+ `resetAt/resetInHrs/loginRequired/demoUser`), 503
+  flags), 429 budget (+ `resetsAt` (date, compat) + `resetAt` (ISO)/`resetInHrs`/`loginRequired`/`demoUser`), 503
   shared outage (retryable).
 - Reads (`/api/summary|/export|/dashboard|/usage|/proactive|/nudge|
   /api/guard-proof|/api/seed-status`): `namespaceView` auth everywhere;
@@ -116,8 +116,8 @@ namespace.
 
 ## 10. Testing gates (all must be green, always)
 
-`npm test` = selftest + wallet + routes + stream + stats + db + window + budget-keys + frontend
-(currently 408); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
+`npm test` = selftest + wallet + routes + stream + stats + db + window + budget-keys + frontend + t3
+(currently 439); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
 boot smoke `:3001` + `:3114`-class scratch. Rules: TDD red-green for new
 behavior; extend-never-weaken; temp env paths in tests; no chain writes;
 no secrets in git/logs.

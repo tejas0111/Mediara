@@ -511,11 +511,112 @@ test('poisoned cached client recovers once on 401, never loops', async () => {
   assert.equal(plainMakes, 1, 'non-auth errors never trigger a rebuild');
 });
 
-test('/api/usage markdown redacts other users blob texts', async () => {
+test('/api/usage markdown never leaks other-user blob texts (no shadow rows)', async () => {
   await chat('user-a', 'She takes calcium at 9am');
   const md = await (await get(`/api/usage?format=md`)).text();
   assert.ok(!/calcium/i.test(md), 'no other-user health text in markdown');
-  assert.ok(/\[redacted/.test(md), 'redaction is explicit, not silent');
+  // NOTE (G3-FIX B): `user-` prefixes strip during normalisation, so this
+  // teach lands in the canonical `a` row — which the fixed JSON USERS list
+  // (demo-mom/user-a/user-b) does not track. No shadow `user-a` row may be
+  // fabricated for it. The explicit `[redacted]` marker mechanism is covered
+  // at unit level (stats.test.js) and end-to-end on SQLite (db.test.js).
+  const j = await (await get('/api/usage')).json();
+  assert.equal(j.users.find((u) => u.userId === 'user-a').memories, 0, 'no shadow usage row fabricated for the prefixed id');
+});
+
+// ------------------------------------------------- G3-FIX wave ---
+// Case-variant demo bypass (guard poisoning), `user-` shadow namespaces,
+// guest-memory readout, B-state dashboard, empty-userId validation. Each test
+// is a hunter/judge repro locked in as a route test.
+
+test('G3-FIX A: case-variant demo ids are read-only (no guard poisoning)', async () => {
+  const drug = `zarithromycin-${Date.now()}`;
+  const r = await post('/api/chat', { userId: 'DEMO-MOM', message: `She is allergic to ${drug}, causes hives` });
+  assert.equal(r.status, 200, 'reads still answer');
+  const j = await r.json();
+  assert.equal(j.savedBlob, null, 'case-variant demo write refused (read-only like demo-mom)');
+  assert.ok(/read-only/i.test(j.reply) && /personal Chat/.test(j.reply), 'teach redirects, never silently writes');
+  // No shadow write: the real shared demo namespace must not hold the plant.
+  const s = await (await get('/api/summary?user=demo-mom')).json();
+  assert.ok(!JSON.stringify(s).toLowerCase().includes(drug.toLowerCase()), 'planted allergy must not land in the shared demo namespace');
+  const trap = await chat('demo-mom', `Can she take ${drug} for her infection?`);
+  assert.ok(!/^STOP\b/.test(trap.reply), 'planted allergy must not fire a STOP on the real demo');
+});
+
+test('G3-FIX A: case-variant demo ids get the demo cap (chat + dashboard)', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '7';
+  try {
+    const r = await post('/api/chat', { userId: 'Demo-Mom', message: 'hello there friend' });
+    assert.equal(r.status, 200);
+    const j = await r.json();
+    assert.equal(j.budget.cap, 7, 'case-variant demo chats under the demo cap, not the anon cap');
+    const d = await (await get('/api/dashboard?user=DEMO-MOM')).json();
+    assert.equal(d.personal.budget.cap, 7, 'dashboard shows the demo cap for case-variant demo');
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
+test('G3-FIX B: user- prefixed ids reach the real namespace (no writable shadow)', async () => {
+  // Reserved shapes stay reserved with the prefix on.
+  assert.equal((await post('/api/chat', { userId: 'user-vault-abc', message: 'She takes Metformin 500mg at 8pm' })).status, 400, 'chat user-vault-abc reserved');
+  assert.equal((await post('/api/chat', { userId: 'user-tg-777', message: 'hello there friend' })).status, 400, 'chat user-tg-777 reserved');
+  assert.equal((await get('/api/summary?user=' + encodeURIComponent('user-vault-abc'))).status, 403, 'summary user-vault-abc forbidden');
+  assert.equal((await get('/api/summary?user=' + encodeURIComponent('user-w-0xabc'))).status, 403, 'summary user-w-0xabc forbidden');
+  assert.equal((await get('/memory?user=' + encodeURIComponent('user-vault-abc'))).status, 403, 'memory user-vault-abc forbidden');
+  assert.equal((await get('/print?user=' + encodeURIComponent('user-vault-abc'))).status, 403, 'print user-vault-abc forbidden');
+  assert.equal((await get('/api/dashboard?user=' + encodeURIComponent('user-vault-abc'))).status, 403, 'dashboard user-vault-abc forbidden');
+  // Bare and prefixed forms share one namespace: teach bare, read prefixed.
+  const u = `g3fix-bare-${Date.now()}`;
+  const taught = await chat(u, 'She takes g3fixmed 5mg at 9pm every night');
+  assert.ok(taught.savedBlob, 'bare teach persists');
+  const s = await (await get('/api/summary?user=' + encodeURIComponent('user-' + u))).json();
+  assert.ok(JSON.stringify(s).toLowerCase().includes('g3fixmed'), 'user- prefixed read reaches the same namespace');
+  // user-demo-mom IS demo-mom: read-only with the demo cap, never an empty shadow.
+  const w = await post('/api/chat', { userId: 'user-demo-mom', message: 'She takes calcium at 9am' });
+  assert.equal(w.status, 200);
+  assert.equal((await w.json()).savedBlob, null, 'user-demo-mom never writes');
+  const d = await (await get('/api/dashboard?user=user-demo-mom')).json();
+  assert.equal(d.user, 'demo-mom', 'prefixed demo resolves to the canonical demo id');
+  assert.equal(d.personal.budget.cap, 10, 'prefixed demo shows the demo cap, not the anon cap');
+});
+
+test('G3-FIX C: guest dashboard personal memories reflect the namespace facts', async () => {
+  const u = `g3fix-guest-${Date.now()}`;
+  const taught = await chat(u, 'She takes Metformin 500mg at 8pm every night');
+  assert.ok(taught.savedBlob, 'guest teach persists');
+  const d = await (await get('/api/dashboard?user=' + encodeURIComponent(u))).json();
+  assert.ok((d.personal.memories || 0) >= 1, 'dashboard personal memories reflect the namespace facts for the requested user');
+  // /api/usage + stats attribution unchanged by the readout union: no new
+  // rows, no moved rows, and the taught fact text leaks nowhere.
+  const usage = await (await get('/api/usage')).json();
+  assert.equal(usage.users.length, 3, 'tracked usage rows unchanged (fixed JSON list)');
+  assert.ok(!JSON.stringify(usage).toLowerCase().includes('metformin'), 'taught fact text leaks nowhere in usage JSON');
+  const md = await (await get('/api/usage?format=md')).text();
+  assert.ok(!/metformin/i.test(md), 'taught fact text leaks nowhere in usage markdown');
+});
+
+test('G3-FIX D: B-state dashboard serves demo readiness + vault-not-onboarded (chat still 409)', async () => {
+  const { issueSession } = await import('./walletAuth.js');
+  const addr = '0x' + 'b7'.repeat(32); // signed in, no registry row = no vault
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  const u = `g3fix-b-${Date.now()}`;
+  const r = await get('/api/dashboard?user=' + encodeURIComponent(u), h);
+  assert.equal(r.status, 200, 'B-state dashboard serves per the matrix, never 409');
+  const d = await r.json();
+  assert.equal(d.vault.signedIn, true, 'vault reports signed in');
+  assert.equal(d.vault.onboarded, false, 'vault reports not onboarded');
+  assert.ok(d.demo && typeof d.demo.ready === 'boolean' && typeof d.demo.blobCount === 'number', 'demo readiness present');
+  assert.equal(d.personal.budget.cap, Number(process.env.DD_DAY_LIMIT_ANON), 'personal budget under the anon cap');
+  const c = await post('/api/chat', { userId: u, message: 'hello there friend' }, h);
+  assert.equal(c.status, 409, 'B-state personal chat still 409s (never shared fallback)');
+});
+
+test('G3-FIX E: empty userId is 400 validation (missing still defaults)', async () => {
+  assert.equal((await post('/api/chat', { userId: '', message: 'hello there friend' })).status, 400, 'empty userId rejected');
+  assert.equal((await post('/api/chat', { userId: '   ', message: 'hello there friend' })).status, 400, 'whitespace userId rejected');
+  const missing = await post('/api/chat', { message: 'hello there friend' });
+  assert.equal(missing.status, 200, 'missing userId still defaults (existing contract)');
 });
 
 // ------------------------------------------------- SPEC §4 matrix ---
@@ -583,4 +684,192 @@ test('SPEC §4/C+D: vault memory/replay/print default to vault, honor explicit d
   assert.equal((await get('/api/summary', x)).status, 401, 'expired summary never leaks');
   assert.equal((await get('/replay', x)).status, 401, 'expired replay never leaks');
   assert.equal((await get('/print', x)).status, 401, 'expired print never leaks');
+});
+
+// ------------------------------------------------- G3-FIX2 ---
+// Nested `user-` fixpoint: normalisation resolves nested `user-` to the
+// canonical id BEFORE any scope decision, so every depth maps to the same
+// demo read-only + demo cap (chat + stream + dashboard) and every depth of a
+// reserved shape stays reserved on all 5 read surfaces + chat/stream.
+
+test('G3-FIX2: nested user- demo ids resolve to the canonical demo (read-only, demo cap, depths 1-4)', async () => {
+  // Cap 100 (not the default 10): the shared demo budget accumulates across
+  // every demo test in this file, so a small cap would 429 on prior spend.
+  // 100 stays distinct from the anon cap (10000) — routing proof either way.
+  process.env.DD_DAY_LIMIT_DEMO = '100';
+  try {
+    const ids = [
+      'user-demo-mom',
+      'user-user-demo-mom',
+      'user-user-user-demo-mom',
+      'user-user-user-user-demo-mom',
+      'USER-USER-DEMO-MOM',
+      'User-User-User-Demo-Mom',
+      'uSeR-UsEr-uSeR-uSeR-dEmO-mOm',
+      'user-user-demo-day7',
+      'USER-USER-DEMO-DAY1',
+    ];
+    for (const id of ids) {
+      const r = await post('/api/chat', { userId: id, message: 'She takes calcium at 9am' });
+      assert.equal(r.status, 200, `chat ${id} answers`);
+      const j = await r.json();
+      assert.equal(j.savedBlob, null, `chat ${id} never writes (read-only)`);
+      assert.ok(/read-only/i.test(j.reply), `chat ${id} redirects instead of vanishing`);
+      assert.equal(j.budget.cap, 100, `chat ${id} under the demo cap, not the anon cap`);
+      assert.match(j.memoryScope, /^user-demo-/, `chat ${id} reads the canonical shared demo namespace`);
+      const d = await (await get('/api/dashboard?user=' + encodeURIComponent(id))).json();
+      assert.equal(d.personal.budget.cap, 100, `dashboard ${id} shows the demo cap`);
+    }
+    const d2 = await (await get('/api/dashboard?user=user-user-demo-mom')).json();
+    assert.equal(d2.user, 'demo-mom', 'nested demo resolves to the canonical demo id');
+    const d3 = await (await get('/api/dashboard?user=user-user-user-user-demo-mom')).json();
+    assert.equal(d3.user, 'demo-mom', 'depth-4 nested demo resolves to the canonical demo id');
+    const d4 = await (await get('/api/dashboard?user=USER-USER-DEMO-DAY1')).json();
+    assert.equal(String(d4.user).toLowerCase(), 'demo-day1', 'case-variant nested demo-day1 resolves canonically (label case aside, scope/cap/budget are canonical)');
+    // No writable shadow: the nested plant must not land anywhere readable.
+    const drug = `g3fix2shadow-${Date.now()}`;
+    await post('/api/chat', { userId: 'user-user-demo-mom', message: `She is allergic to ${drug}, causes hives` });
+    const s = await (await get('/api/summary?user=demo-mom')).json();
+    assert.ok(!JSON.stringify(s).toLowerCase().includes(drug.toLowerCase()), 'nested teach must not plant a fact in the shared demo');
+    const trap = await chat('demo-mom', `Can she take ${drug} for her infection?`);
+    assert.ok(!/^STOP\b/.test(trap.reply), 'nested plant must not fire a STOP on the real demo');
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
+test('G3-FIX2: triple-nested reserved ids stay reserved on all 5 read surfaces + chat', async () => {
+  const ids = [
+    'user-user-user-vault-abc',
+    'User-User-User-Vault-Abc',
+    'USER-USER-USER-VAULT-ABC',
+    'user-user-user-w-0xabc',
+    'USER-user-USER-tg-777',
+    'user-user-user-user-vault-abc',
+    'user-user-user-user-tg-777',
+  ];
+  const surfaces = [
+    '/api/summary?user=',
+    '/memory?user=',
+    '/print?user=',
+    '/replay?user=',
+    '/api/dashboard?user=',
+  ];
+  for (const id of ids) {
+    const r = await post('/api/chat', { userId: id, message: 'She takes Metformin 500mg at 8pm' });
+    assert.equal(r.status, 400, `chat ${id} reserved`);
+    for (const surf of surfaces) {
+      const g = await get(surf + encodeURIComponent(id));
+      assert.equal(g.status, 403, `${surf.split('?')[0]} ${id} forbidden`);
+    }
+  }
+});
+
+test('G3-FIX2 guard: legit ids, bare user-, determinism, no split-brain', async () => {
+  // user-x ≡ x on the write AND read paths (one shared normaliser).
+  const u = `g3fix2-legit-${Date.now()}`;
+  const taught = await chat(u, 'She takes g3fix2med 5mg at 9pm every night');
+  assert.ok(taught.savedBlob, 'bare teach persists');
+  const pre = await chat('user-' + u, 'hello there friend');
+  assert.equal(pre.memoryScope, taught.memoryScope, 'user- prefixed chat shares the bare scope');
+  const deep = await chat('user-user-' + u, 'hello there friend');
+  assert.equal(deep.memoryScope, taught.memoryScope, 'doubly-prefixed chat shares the bare scope (fixpoint determinism)');
+  const s = await (await get('/api/summary?user=' + encodeURIComponent('user-user-' + u))).json();
+  assert.ok(JSON.stringify(s).toLowerCase().includes('g3fix2med'), 'doubly-prefixed read reaches the same namespace (no split-brain)');
+  // Teach nested, read bare: same row both directions.
+  const v = `g3fix2-rev-${Date.now()}`;
+  const t2 = await chat('user-user-' + v, 'She takes g3fix2revmed 5mg at 9pm every night');
+  assert.ok(t2.savedBlob, 'nested teach persists');
+  const s2 = await (await get('/api/summary?user=' + encodeURIComponent(v))).json();
+  assert.ok(JSON.stringify(s2).toLowerCase().includes('g3fix2revmed'), 'bare read reaches the nested-taught row (no split-brain)');
+  // Bare user- is 400 validation, never a silent default.
+  assert.equal((await post('/api/chat', { userId: 'user-', message: 'hello there friend' })).status, 400, 'bare user- rejected');
+  assert.equal((await post('/api/chat', { userId: 'USER-', message: 'hello there friend' })).status, 400, 'case-variant bare user- rejected');
+  assert.equal((await post('/api/chat', { userId: 'user-user-', message: 'hello there friend' })).status, 400, 'nested bare user- rejected');
+});
+
+// ------------------------------------------------- G3-WAVE3 ---
+// Namespace-collapsing demo writes: junk around `demo-mom` (`!`, `.`, `/`,
+// space, U+0085, `user- `) is stripped by namespaceFor, so the fact lands in
+// the REAL shared demo — but demoIdOf tested the raw string and missed it,
+// leaving the write allowed under the guest budget (guard-poisoning
+// primitive). Scope must derive from the canonical namespace, never raw.
+
+test('G3-WAVE3: junk-prefixed demo ids are read-only with the demo cap (chat + dashboard)', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '101';
+  try {
+    const ids = [
+      'demo-mom.',
+      '!demo-mom',
+      'd!emo-mom',
+      'user- demo-mom',
+      'demo-mom ',
+      'user-!demo-mom',
+      '.demo-mom',
+      '/demo-mom',
+      ' demo-mom',
+    ];
+    for (const id of ids) {
+      const r = await post('/api/chat', { userId: id, message: 'She takes calcium at 9am' });
+      assert.equal(r.status, 200, `chat ${JSON.stringify(id)} answers`);
+      const j = await r.json();
+      assert.equal(j.savedBlob, null, `chat ${JSON.stringify(id)} never writes (read-only)`);
+      assert.ok(/read-only/i.test(j.reply), `chat ${JSON.stringify(id)} redirects instead of vanishing`);
+      assert.equal(j.budget.cap, 101, `chat ${JSON.stringify(id)} under the demo cap, not the anon cap`);
+      assert.equal(j.memoryScope, 'user-demo-mom', `chat ${JSON.stringify(id)} reads the canonical shared demo namespace`);
+      const d = await (await get('/api/dashboard?user=' + encodeURIComponent(id))).json();
+      assert.equal(d.personal.budget.cap, 101, `dashboard ${JSON.stringify(id)} shows the demo cap`);
+    }
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
+test('G3-WAVE3: junk-prefix plant cannot poison the shared demo guard', async () => {
+  // High cap: the shared demo budget accumulates across every demo test in
+  // this file, so the default cap would 429 (masking the refusal under test).
+  process.env.DD_DAY_LIMIT_DEMO = '1000';
+  try {
+  const drug = `w3poison-${Date.now()}`;
+  const r = await post('/api/chat', { userId: '!demo-mom', message: `She is allergic to ${drug}, causes hives` });
+  assert.equal(r.status, 200, 'plant attempt answers');
+  assert.equal((await r.json()).savedBlob, null, 'junk-prefix demo write refused');
+  const s = await (await get('/api/summary?user=demo-mom')).json();
+  assert.ok(!JSON.stringify(s).toLowerCase().includes(drug.toLowerCase()), 'planted allergy must not land in the shared demo namespace');
+  const trap = await chat('demo-mom', `Can she take ${drug} for her infection?`);
+  assert.ok(!/^STOP\b/.test(trap.reply), 'planted allergy must not fire a STOP on the real demo');
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
+test('G3-WAVE3 length gate: deep nesting resolves to demo, session flow reaches vault, huge id 400s fast', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '102';
+  try {
+    const deep = 'user-'.repeat(12) + 'demo-mom';
+    const r = await post('/api/chat', { userId: deep, message: 'She takes calcium at 9am' });
+    assert.equal(r.status, 200, 'depth-12 nesting answers instead of 400');
+    const j = await r.json();
+    assert.equal(j.savedBlob, null, 'depth-12 nesting never writes (read-only)');
+    assert.equal(j.budget.cap, 102, 'depth-12 nesting under the demo cap');
+    assert.equal(j.memoryScope, 'user-demo-mom', 'depth-12 nesting reads the canonical shared demo');
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+  // 71-char `user-` + session-address flow must reach vault logic, never a
+  // length 400: signed-in + onboarded owner chats as the vault.
+  const { issueSession } = await import('./walletAuth.js');
+  const { upsertUser } = await import('./userRegistry.js');
+  const addr = '0x' + 'e7'.repeat(32);
+  upsertUser({ address: addr, accountId: 'obj-W3-1', delegatePrivateKey: 'aa'.repeat(32), delegatePublicKey: 'bb'.repeat(64), delegateAddress: '0x' + 'cc'.repeat(32), pendingPhase: null, pendingTxBytes: null });
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  const prefixed = 'user-' + addr;
+  assert.equal(prefixed.length, 71, 'prefixed session flow is 71 chars');
+  const v = await post('/api/chat', { userId: prefixed, message: 'She takes calcium at 9am' }, h);
+  assert.equal(v.status, 200, 'prefixed session address reaches vault logic, never a length 400');
+  assert.equal((await v.json()).identity, 'wallet-owner', 'vault identity for the prefixed session flow');
+  // 10KB id rejects (status-only: wall-clock timing asserts are flaky by design).
+  const big = 'x'.repeat(10 * 1024);
+  const b = await post('/api/chat', { userId: big, message: 'hello there friend' });
+  assert.equal(b.status, 400, '10KB id rejected');
 });

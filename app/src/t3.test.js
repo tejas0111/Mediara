@@ -48,11 +48,11 @@ const get = (p, headers) => fetch(base + p, { headers: headers || {} });
 const FREE_SHAPE = (m) => /:free$/i.test(m) || /^openrouter\/free$/i.test(m);
 
 // ---- 1. LLM 402-dead ----
-test('LLM token bound fits the affordable budget (no 402 on the free key)', async () => {
+test('unit: LLM token bound fits the affordable budget (no 402 on the free key)', async () => {
   assert.equal(__llmForTest.LLM_MAX_TOKENS, 200, 'max_tokens pinned to the affordable bound');
 });
 
-test('freeModelChain is free-first even with a paid LLM_MODEL (paid never at 0)', async () => {
+test('unit: freeModelChain is free-first even with a paid LLM_MODEL (paid never at 0)', async () => {
   const prev = process.env.LLM_MODEL;
   try {
     process.env.LLM_MODEL = 'google/gemini-2.5-flash'; // paid: no :free suffix (prod value)
@@ -69,7 +69,7 @@ test('freeModelChain is free-first even with a paid LLM_MODEL (paid never at 0)'
 });
 
 // ---- 2. Landing pills ----
-test('landingPage signature stable: unknown renders em-dash, known renders numbers', async () => {
+test('unit: landingPage signature stable: unknown renders em-dash, known renders numbers', async () => {
   const unknown = landingPage({ mode: 'local', demoBlobs: null, guardCount: null });
   assert.ok(unknown.includes('— demo memories live') && unknown.includes('— guard stops on record'), 'unknown pills show an em-dash');
   assert.ok(!unknown.includes('0 demo memories') && !unknown.includes('0 guard stops'), 'unknown must never print 0');
@@ -87,7 +87,7 @@ test('GET / on a fresh ledger shows the honest unknown guard pill (never a 0 ref
 });
 
 // ---- 3. Census TTL cache ----
-test('census cache: bypassed when not cacheable (local/test behavior)', async () => {
+test('unit: census cache bypassed when not cacheable (local/test behavior)', async () => {
   let runs = 0;
   const loader = async () => { runs++; return { totalBlobs: 7 }; };
   assert.equal((await __censusForTest.cachedCensus('ns-a', loader, false)).totalBlobs, 7, 'loader value passes through');

@@ -122,7 +122,7 @@ test('demo read-only respected on the stream endpoint', async () => {
   assert.ok(/read-only/i.test(done.reply), 'teach redirects instead of vanishing');
 });
 
-test('SSE chunk parser: split lines, [DONE], malformed JSON skipped, multi-byte intact', async () => {
+test('unit: SSE chunk parser handles split lines, [DONE], malformed JSON, multi-byte intact', async () => {
   assert.ok(__sseForTest, 'parser helper is exported for tests');
   const { parseSSEBuffer } = __sseForTest;
   const tok = (content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
@@ -147,4 +147,67 @@ test('SSE chunk parser: split lines, [DONE], malformed JSON skipped, multi-byte 
   // Comment keep-alives are ignored.
   const r6 = parseSSEBuffer(': ping\n\n' + tok('hi'));
   assert.deepEqual(r6.tokens, ['hi']);
+});
+
+test('G3-FIX2 stream: nested user- demo ids are read-only with the demo cap', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '7';
+  try {
+    for (const id of ['user-user-demo-mom', 'user-user-user-demo-mom', 'USER-USER-DEMO-MOM']) {
+      const { res, events } = await streamPost({ userId: id, message: 'She takes calcium at 9am' });
+      assert.equal(res.status, 200, `stream ${id} answers`);
+      const done = events.find((e) => e.event === 'done').data;
+      assert.equal(done.savedBlob, null, `stream ${id} never writes`);
+      assert.ok(/read-only/i.test(done.reply), `stream ${id} redirects instead of vanishing`);
+      assert.equal(done.budget.cap, 7, `stream ${id} under the demo cap`);
+      assert.match(done.memoryScope, /^user-demo-/, `stream ${id} reads the canonical shared demo`);
+    }
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
+test('G3-FIX2 stream: triple-nested reserved ids are error events, never turns', async () => {
+  for (const id of ['user-user-user-vault-abc', 'User-User-User-Vault-Abc', 'user-user-user-tg-777']) {
+    const { res, events } = await streamPost({ userId: id, message: 'hello there friend' });
+    assert.equal(res.status, 400, `stream ${id} preserves the 400 status`);
+    const err = events.find((e) => e.event === 'error');
+    assert.ok(err, `stream ${id} emits an error event`);
+    assert.ok(!events.find((e) => e.event === 'done'), `stream ${id} never completes a turn`);
+  }
+});
+
+// ------------------------------------------------- G3-WAVE3 ---
+// Stream parity: the stream endpoint shares the chat pipeline, so every
+// namespace-collapsing demo decision holds there too.
+
+test('G3-WAVE3 stream: junk-prefixed demo ids are read-only with the demo cap', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '103';
+  try {
+    for (const id of ['!demo-mom', 'demo-mom.', 'user- demo-mom', '.demo-mom', '/demo-mom', 'user-!demo-mom']) {
+      const { res, events } = await streamPost({ userId: id, message: 'She takes calcium at 9am' });
+      assert.equal(res.status, 200, `stream ${JSON.stringify(id)} answers`);
+      const done = events.find((e) => e.event === 'done').data;
+      assert.equal(done.savedBlob, null, `stream ${JSON.stringify(id)} never writes`);
+      assert.ok(/read-only/i.test(done.reply), `stream ${JSON.stringify(id)} redirects instead of vanishing`);
+      assert.equal(done.budget.cap, 103, `stream ${JSON.stringify(id)} under the demo cap`);
+      assert.equal(done.memoryScope, 'user-demo-mom', `stream ${JSON.stringify(id)} reads the canonical shared demo`);
+    }
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
+test('G3-WAVE3 stream: depth-12 nesting resolves to the canonical demo', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '104';
+  try {
+    const deep = 'user-'.repeat(12) + 'demo-mom';
+    const { res, events } = await streamPost({ userId: deep, message: 'She takes calcium at 9am' });
+    assert.equal(res.status, 200, 'stream depth-12 answers instead of 400');
+    const done = events.find((e) => e.event === 'done').data;
+    assert.equal(done.savedBlob, null, 'stream depth-12 never writes');
+    assert.equal(done.budget.cap, 104, 'stream depth-12 under the demo cap');
+    assert.equal(done.memoryScope, 'user-demo-mom', 'stream depth-12 reads the canonical shared demo');
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
 });

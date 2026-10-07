@@ -56,6 +56,14 @@ test('UsageTracker: dedups by blob id, counts qualifying users, exports JSON + m
   t.recordMemory('carol', { blobId: 'blob-c0', text: 'x' });
   const partial = t.summary({ users: ['alice', 'bob', 'carol'] }).json;
   assert.equal(partial.totalMemories, 14);
+  // Redaction is explicit, not silent: a redactUser predicate hides texts
+  // behind a visible marker (route tests assert the predicate wiring).
+  const red = t.summary({ users: ['alice'], redactUser: () => true });
+  assert.match(red.md, /\[redacted/, 'redaction marker present in markdown');
+  assert.ok(!/fact 0/.test(red.md), 'redacted texts hidden in markdown');
+  assert.ok(red.json.users[0].blobs.length >= 1, 'counts + ids stay public under redaction');
+  const open = t.summary({ users: ['alice'], redactUser: () => false });
+  assert.ok(/fact 0/.test(open.md), 'owners still read their own texts');
 });
 
 test('UsageTracker: persists and reloads (server restart must not lose evidence)', () => {
@@ -188,10 +196,12 @@ test('/api/usage: anonymous callers get counts but redacted blob texts (privacy)
   const j = await (await get('/api/usage')).json();
   // Counts + requirement stay public.
   assert.ok(j.requirement, 'requirement stays public');
-  const me = j.users.find((u) => u.userId === 'user-a');
-  assert.ok(me && me.memories >= 1, 'counts stay public');
-  assert.ok(me.blobs.length >= 1 && me.blobs[0].blobId, 'blob ids + links stay public');
-  for (const b of me.blobs) {
-    assert.equal(b.text, null, 'anonymous callers must not read blob texts');
-  }
+  // NOTE (G3-FIX B): `user-` prefixes strip during normalisation, so this
+  // teach lands in the canonical `a` row — untracked by the fixed JSON USERS
+  // list. No shadow `user-a` row may be fabricated, and the fact text must
+  // leak nowhere (counts-public/texts-redacted for tracked rows is covered
+  // end-to-end on SQLite in db.test.js, where seen ids are enumerated).
+  const shadow = j.users.find((u) => u.userId === 'user-a');
+  assert.ok(shadow && shadow.memories === 0, 'no shadow usage row fabricated for the prefixed id');
+  assert.ok(!JSON.stringify(j).toLowerCase().includes('metformin'), 'untracked-namespace fact text leaks nowhere');
 });

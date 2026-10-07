@@ -26,6 +26,12 @@ A caregiver chatbot with durable memory. Three memory planes that NEVER mix:
   silent fallback to shared (that would leak private facts publicly).
 - **Expired session** (cookie present, unparseable) → 401 everywhere, never
   anonymous downgrade.
+- **Normalisation fixpoint**: every caller-typed id resolves nested leading
+  `user-` (any case, any depth) to the canonical id BEFORE ANY scope decision
+  (demo/reserved/budget/namespace) on every surface — reads and writes share
+  the one normaliser, so no depth or case variant can fork a shadow namespace.
+  Every scope decision derives from the canonical namespace the data will
+  actually land in (`namespaceFor` output), never from the raw caller string.
 
 ## 3. Scope rules (normative)
 
@@ -50,7 +56,7 @@ A caregiver chatbot with durable memory. Three memory planes that NEVER mix:
    pre-unification rows under the truncated id / vault-hash heal at read
    time — unioned, never dropped, never reset); demo namespaces →
    shared demo id (10 / rolling 24h); everyone else → own guest key
-   (20 / rolling 24h; memories stay namespace-keyed evidence). 429 bodies carry `remaining:0 + resetAt/resetInHrs`
+   (20 / rolling 24h; memories stay namespace-keyed evidence). 429 bodies carry `remaining:0 + resetsAt` (date, compat) + `resetAt` (ISO)/`resetInHrs`
    (+ `loginRequired`, `demoUser` for anon/demo).
 7. **Every reply carries `budget{used,cap,remaining,resetAt}`** (best-effort,
    never fails chat). UI whispers at ≤3 remaining, never nags the signed-in
@@ -78,7 +84,7 @@ D=expired session.
 No surface may show "sign in" to C, "vault ready" to B, wallet caps in the
 demo banner, or demo numbers as personal numbers.
 
-## 5. Test enforcement (`npm test` runs all nine)
+## 5. Test enforcement (`npm test` runs all ten)
 
 - `selftest.js`: classifier/gate units (save-intent, conditions, research,
   authFailure, census scope, chain-id pins).
@@ -86,13 +92,15 @@ demo banner, or demo numbers as personal numbers.
 - `routes.test.js`: demo-always-shared (anon AND signed-in session), demo
   read-only + redirect, vault-409 (never shared fallback), reserved-403,
   expired-401, budget caps + 429 shape, dashboard demo-vs-vault budgets.
-- `stream.test.js` (6): SSE streaming (guard instant-JSON, keyless
+- `stream.test.js` (10): SSE streaming (guard instant-JSON, keyless
   chunk-stream, budget-once, 429 error event, demo read-only, parser units).
 - `stats.test.js` (12): usage/proof (anon-redacted).
 - `db.test.js` (7): SQLite store parity.
 - `window.test.js` (11): rolling-window math both stores + route contract.
-- `budget-keys.test.js` (9): canonical budget-key union (legacy + mixed-case
+- `budget-keys.test.js` (14): canonical budget-key union (legacy + mixed-case
   healing, chat/dashboard agreement, both stores).
+- `t3.test.js` (10): lose-list P0s (token bound, free-first order, census
+  pills, TTL cache, device-keyed limiters).
 - `frontend.test.js`: no tunnel/URL prompt, no Coming-soon, no slang, no
   hardcoded caps, live-budget banner, reasoning block, re-link/fresh-start.
 - `eval` 30/30: guards + recall + A/B before/after.
