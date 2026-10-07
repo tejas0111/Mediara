@@ -349,3 +349,20 @@ test('/api/chat exposes a real reasoning trace (recall -> guards -> write)', asy
   assert.deepEqual(bl, ['Recall', 'Allergy guard', 'Interaction guard', 'Answer', 'Memory write'], 'blocked turn traces the full pipeline');
   assert.ok((b.thinking || []).some((s) => s.label === 'Allergy guard' && /MATCH/.test(s.detail)), 'guard step names the match');
 });
+
+test('/api/models lists free-only models with a safe default', async () => {
+  const j = await (await get('/api/models')).json();
+  assert.equal(j.freeOnly, true);
+  assert.ok(Array.isArray(j.models) && j.models.length >= 10, 'usable free list even keyless');
+  assert.ok(j.models.every((m) => !m.id.startsWith('openai/') && !m.id.startsWith('anthropic/')), 'beyond big two');
+  assert.ok(j.models.some((m) => m.id === j.default), 'default is in the list');
+});
+
+test('/api/chat rejects non-free models, accepts listed ones', async () => {
+  const bad = await post('/api/chat', { userId: 'rt-mdl', message: 'hello', model: 'openai/gpt-5' });
+  assert.equal(bad.status, 400);
+  const good = await post('/api/chat', { userId: `rt-mdl-${Date.now()}`, message: 'She takes Metformin 500mg at 8pm', model: 'google/gemma-4-31b-it:free' });
+  assert.equal(good.status, 200);
+  const j = await good.json();
+  assert.ok((j.thinking || []).some((s) => s.label === 'Memory write'), 'trace intact with model override');
+});

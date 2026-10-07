@@ -169,3 +169,10 @@ test('SPA renders the reasoning trace per reply', () => {
   assert.ok(c.includes('How I decided') && c.includes('m.thinking'), 'assistant cards show the trace');
   assert.ok(wread('src/api.ts').includes('thinking: ThinkStep[]'), 'typed trace in the client');
 });
+
+test('SPA model picker is free-only with persisted choice', () => {
+  const c = wread('src/ChatView.tsx');
+  assert.ok(c.includes('Answer model (free only)') && c.includes('free only'), 'picker labelled free-only');
+  assert.ok(c.includes('ddModel') || wread('src/api.ts').includes('ddModel'), 'choice persisted');
+  assert.ok(wread('src/api.ts').includes('/api/models'), 'list sourced from the server registry');
+});

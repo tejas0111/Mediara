@@ -179,16 +179,16 @@ function rememberTurn(ns, role, content) {
   while (transcripts.size > 5000) transcripts.delete(transcripts.keys().next().value);
 }
 
-async function callLLM(system, userMessage, history = []) {
-  // OpenRouter (Gemini Flash default — Beyond Big Two eligible). Falls back to echo if no key.
-  // Resilience: explicit max_tokens (default 65k exceeds free-tier credit), then free-model
-  // fallback chain on 402/429 so the demo NEVER dies mid-judge-test. Errors stay graceful.
+async function callLLM(system, userMessage, history = [], modelOverride) {
+  // OpenRouter free-tier default (verified against the live /models free list;
+  // all non-OpenAI/Anthropic, so Beyond-Big-Two eligible). Falls back to echo if no key.
+  // Resilience: explicit max_tokens, then free-model fallback chain on 402/429
+  // so the demo NEVER dies mid-judge-test. Errors stay graceful.
   const apiKey = process.env.OPENROUTER_API_KEY;
-  const model = process.env.LLM_MODEL || 'google/gemini-2.5-flash';
-  if (!apiKey) return '__NO_LLM__';
-  // Free-model fallback chain (verified against the OpenRouter free list; all
-  // non-OpenAI/Anthropic, so Beyond-Big-Two eligible). Pruned when models die.
-  const models = [model, 'google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'liquid/lfm-2.5-2.6b:free', 'openrouter/free'].filter((m, i, a) => a.indexOf(m) === i);
+  const model = modelOverride || process.env.LLM_MODEL || FREE_DEFAULT;
+  if (!apiKey) return { text: '__NO_LLM__', model: null };
+  // Free-model fallback chain (verified 2026-10-07 against the live free list).
+  const models = [model, 'google/gemma-4-31b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'google/gemma-4-26b-a4b-it:free', 'liquid/lfm-2.5-2.6b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'openrouter/free'].filter((m, i, a) => a.indexOf(m) === i);
   let lastErr = '';
   // Overall budget across the whole chain so one stalled provider can't run for
   // 6 × 15s; the socket timeout is 120s, so the handler must return well before.
@@ -208,12 +208,12 @@ async function callLLM(system, userMessage, history = []) {
       });
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content;
-      if (content) return content;
+      if (content) return { text: content, model: m };
       lastErr = data?.error?.message || JSON.stringify(data).slice(0, 200);
       console.error(`LLM ${m} failed: ${lastErr.slice(0, 120)}`);
     } catch (e) { lastErr = String(e.message || e); }
   }
-  return '__NO_LLM__'; // route falls back to a memory-grounded answer
+  return { text: '__NO_LLM__', model: null }; // route falls back to a memory-grounded answer
 }
 
 // Deterministic, keyless, LLM-free answer built from recalled facts — used when
@@ -226,7 +226,16 @@ function memoryAnswer(recalled) {
 app.post('/api/chat', chatLimiter, async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
-    const { userId = 'anon', message = '' } = req.body;
+    const { userId = 'anon', message = '', model: reqModel } = req.body;
+    // Free-only picker: unknown/paid models are rejected, never silently swapped.
+    let model = undefined;
+    if (reqModel !== undefined) {
+      if (!(await isFreeModel(reqModel))) {
+        return res.status(400).json({ error: 'unknown model — pick one from GET /api/models (free only)' });
+      }
+      model = reqModel;
+    }
+    const effectiveModel = model || process.env.LLM_MODEL || FREE_DEFAULT;
     // One-toggle amnesia: memory=off skips recall AND the guards, so the same bot
     // can be shown with and without memory — the rubric's before/after.
     const memoryOff = req.body.memory === false || req.body.memory === 'off' || req.query.memory === 'off';
@@ -314,7 +323,8 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       thinking.push({ label: 'Answer', detail: 'Deterministic guard template — no LLM involved in a STOP/CAUTION.' });
     } else {
       const system = buildSystemPrompt(recalled);
-      reply = await callLLM(system, message, history);
+      const llm = await callLLM(system, message, history, model);
+      reply = llm.text;
       // No key, or every model failed (dead free model, out of credits, stall):
       // answer FROM MEMORY instead of leaking a debug stub.
       if (reply === '__NO_LLM__' || reply.startsWith('[LLM unavailable') || reply.startsWith('[no LLM key')) {
@@ -323,7 +333,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         thinking.push({ label: 'Answer', detail: `No LLM reachable — answered from the ${recalled.length} recalled facts above.` });
       } else {
         answerSource = 'llm';
-        thinking.push({ label: 'Answer', detail: `${process.env.LLM_MODEL || 'google/gemini-2.5-flash'} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
+        thinking.push({ label: 'Answer', detail: `${llm.model || effectiveModel} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
       }
     }
     rememberTurn(nsKey, 'user', message);
@@ -649,6 +659,79 @@ app.get('/api/seed-status', readLimiter, async (req, res) => {
       meetsMinimum: census ? census.totalBlobs >= 10 : view.recalled.length >= 10,
       stale: view.degraded,
     });
+  } catch (e) { fail(res, e); }
+});
+
+// ---- OpenRouter free-model registry (the ONLY models the UI may pick) ----
+// Live list from OpenRouter (pricing.prompt/completion == 0), minus Big-Two
+// (openai/*, anthropic/* — Beyond-Big-Two rule) and non-chat endpoints.
+// Cached 1h; offline/keyless falls back to the verified static snapshot.
+const FREE_STATIC = [
+  'inclusionai/ling-3.1-flash',
+  'apodex/apodex-1.1-mini:free',
+  'inclusionai/ling-3.0-flash-sante:free',
+  'dots-studio/dots-3-note-preview:free',
+  'liquid/lfm-2.5-2.6b:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'thinkingmachines/inkling-small:free',
+  'poolside/laguna-s-2.1:free',
+  'thinkingmachines/inkling:free',
+  'poolside/laguna-xs-2.1:free',
+  'cohere/north-mini-code:free',
+  'nvidia/nemotron-3.5-content-safety:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'openrouter/free',
+];
+const FREE_DEFAULT = 'google/gemma-4-31b-it:free';
+let freeCache = { at: 0, models: [] };
+async function freeModels() {
+  if (Date.now() - freeCache.at < 3_600_000 && freeCache.models.length) {
+    return { models: freeCache.models, live: true };
+  }
+  try {
+    const key = process.env.OPENROUTER_API_KEY;
+    if (!key) throw new Error('no key');
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 10_000);
+    const r = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: ctl.signal,
+    });
+    clearTimeout(t);
+    if (!r.ok) throw new Error(`openrouter ${r.status}`);
+    const d = await r.json();
+    const ids = [];
+    for (const m of d?.data || []) {
+      const id = m?.id;
+      const pr = m?.pricing || {};
+      const free = (pr.prompt === 0 || pr.prompt === '0' || pr.prompt === '0.0') &&
+        (pr.completion === 0 || pr.completion === '0' || pr.completion === '0.0');
+      if (typeof id === 'string' && free && !id.startsWith('openai/') && !id.startsWith('anthropic/') && !id.includes('lyria')) {
+        ids.push(id);
+      }
+    }
+    if (!ids.length) throw new Error('empty free list');
+    freeCache = { at: Date.now(), models: ids };
+    return { models: ids, live: true };
+  } catch {
+    return { models: FREE_STATIC, live: false };
+  }
+}
+async function isFreeModel(id) {
+  if (typeof id !== 'string' || !/^[a-z0-9-]+\/[a-z0-9_.\-]+(:free)?$/i.test(id)) return false;
+  const { models } = await freeModels();
+  return models.includes(id);
+}
+
+app.get('/api/models', readLimiter, async (req, res) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    const { models, live } = await freeModels();
+    res.json({ models: models.map((id) => ({ id })), default: FREE_DEFAULT, live, freeOnly: true });
   } catch (e) { fail(res, e); }
 });
 

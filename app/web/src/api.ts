@@ -108,11 +108,36 @@ export interface ChatResponse {
   mode: 'local' | 'mainnet';
   disclaimer: string;
 }
-export const postChat = (userId: string, message: string, memory: boolean) =>
+export const postChat = (userId: string, message: string, memory: boolean, model?: string) =>
   req<ChatResponse>('/api/chat', {
     method: 'POST',
-    body: JSON.stringify({ userId, message, memory: memory ? true : 'off' }),
+    body: JSON.stringify({ userId, message, memory: memory ? true : 'off', ...(model ? { model } : {}) }),
   });
+export interface ModelInfo {
+  id: string;
+}
+export interface ModelsResponse {
+  models: ModelInfo[];
+  default: string;
+  live: boolean;
+  freeOnly: boolean;
+}
+export const MODEL_KEY = 'ddModel';
+export const getModels = () => req<ModelsResponse>('/api/models');
+export const loadModel = (): string | null => {
+  try {
+    return localStorage.getItem(MODEL_KEY);
+  } catch {
+    return null;
+  }
+};
+export const saveModel = (id: string) => {
+  try {
+    localStorage.setItem(MODEL_KEY, id);
+  } catch {
+    /* ignore */
+  }
+};
 
 // -------------------------------------------------------------- summary ---
 export interface SummaryResponse {

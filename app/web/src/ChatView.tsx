@@ -2,7 +2,10 @@ import React from 'react';
 import {
   ApiError,
   clean,
+  getModels,
+  loadModel,
   postChat,
+  saveModel,
   shortBlob,
   walruscan,
 } from './api';
@@ -98,6 +101,28 @@ function AssistantBody({ msg, mode }: { msg: ChatMsg; mode: 'local' | 'mainnet' 
 
 export default function ChatView(props: ChatViewProps) {
   const { userId, memoryOn, active } = props;
+  const [models, setModels] = React.useState<string[]>([]);
+  const [model, setModel] = React.useState<string>(() => loadModel() ?? '');
+  React.useEffect(() => {
+    let live = true;
+    void getModels()
+      .then((r) => {
+        if (!live) return;
+        const ids = r.models.map((m) => m.id);
+        setModels(ids);
+        const saved = loadModel();
+        if ((!saved || !ids.includes(saved)) && r.default) {
+          setModel(r.default);
+          saveModel(r.default);
+        }
+      })
+      .catch(() => {
+        if (live) setModels(['google/gemma-4-31b-it:free']);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
   const [input, setInput] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -143,7 +168,7 @@ export default function ChatView(props: ChatViewProps) {
     setPending(true);
     setError(null);
     try {
-      const res = await postChat(userId, text, memoryOn);
+      const res = await postChat(userId, text, memoryOn, model || undefined);
       const asst: ChatMsg = {
         id: msgId(),
         role: 'assistant',
@@ -183,6 +208,22 @@ export default function ChatView(props: ChatViewProps) {
           Memory is off — I will answer without saving or recalling. Turn memory on to keep facts for {userId}.
         </Alert>
       ) : null}
+      <div className="chat-bar">
+        <label className="model-pick">
+          <span>Model</span>
+          <select
+            value={model}
+            onChange={(e) => { setModel(e.target.value); saveModel(e.target.value); }}
+            aria-label="Answer model (free only)"
+          >
+            {models.length === 0 ? <option value="">Loading…</option> : null}
+            {models.map((m) => (
+              <option key={m} value={m}>{m.replace(':free', ' · free')}</option>
+            ))}
+          </select>
+        </label>
+        <span className="free-note">free only</span>
+      </div>
       <div className="chat-list" ref={listRef} role="log" aria-label="Conversation" aria-live="polite">
         {empty ? (
           <div className="greet">
