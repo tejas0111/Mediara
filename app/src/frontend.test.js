@@ -183,6 +183,7 @@ test('SPA rename is inline and Mainnet/demo copy is honest', () => {
 test('SPA renders the reasoning trace per reply', () => {
   const c = wread('src/ChatView.tsx');
   assert.ok(c.includes('How I decided') && c.includes('m.thinking'), 'assistant cards show the trace');
+  assert.ok(c.includes('Sources ({m.recalled.length})'), 'recalled sources live inside the reasoning block');
   assert.ok(wread('src/api.ts').includes('thinking: ThinkStep[]'), 'typed trace in the client');
 });
 

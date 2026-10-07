@@ -286,6 +286,17 @@ async function callLLM(system, userMessage, history = [], modelOverride) {
   return { text: '__NO_LLM__', model: null }; // route falls back to a memory-grounded answer
 }
 
+// Human-readable model name for user-visible reasoning (mirrors the client's
+// prettyModel; server can't import tsx). 'google/gemma-4-31b-it:free' -> 'Gemma 4 31B'.
+function prettyModelName(id) {
+  const s = String(id || '');
+  if (/^openrouter\/free$/i.test(s)) return 'Auto';
+  const base = (s.split('/').pop() || s).replace(/:free$/i, '');
+  return base.split('-').filter((p) => !/^(it|free|preview)$/i.test(p))
+    .map((p) => (/^[a-z]*\d/i.test(p) && /[a-z]/i.test(p)) || /^\d/i.test(p) ? p.toUpperCase() : p.charAt(0).toUpperCase() + p.slice(1))
+    .join(' ').replace(/\s+/g, ' ').trim() || s;
+}
+
 // Deterministic, keyless, LLM-free answer built from recalled facts — used when
 // there is no key or every model failed, so the demo ALWAYS shows memory working.
 function memoryAnswer(recalled) {
@@ -415,7 +426,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const thinking = [];
     thinking.push(memoryOff
       ? { label: 'Recall', detail: 'Memory is OFF for this turn (before/after demo) — recall and both guards skipped.' }
-      : { label: 'Recall', detail: `${guardFacts.length} candidate facts considered for the guards, top ${recalled.length} shown${rr.degraded ? ' (memory degraded — stale read)' : ''}.` });
+      : { label: 'Recall', detail: `3 query angles (your words + allergy sweep + medication sweep) → ${guardFacts.length} candidate facts for the guards, top ${recalled.length} shown${rr.degraded ? ' (memory degraded — stale read)' : ''}.` });
     // "What do you remember?" must return the WHOLE namespace, not a query subset.
     if (/\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message)) {
       try { const full = await recallAllMeta(client, ALL_QUERIES, 25); if (full.facts.length) recalled = full.facts; } catch { /* keep the query recall */ }
@@ -488,7 +499,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         thinking.push({ label: 'Answer', detail: `No LLM reachable — answered from the ${recalled.length} recalled facts above.` });
       } else {
         answerSource = 'llm';
-        thinking.push({ label: 'Answer', detail: `${llm.model || effectiveModel} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
+        thinking.push({ label: 'Answer', detail: `${prettyModelName(llm.model || effectiveModel)} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
       }
     }
     rememberTurn(nsKey, 'user', message);

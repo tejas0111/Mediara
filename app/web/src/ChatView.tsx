@@ -327,7 +327,10 @@ export default function ChatView(props: ChatViewProps) {
                 <div className="asst-card">
                   <AssistantBody msg={m} mode={mode} />
                   {m.thinking && m.thinking.length > 0 ? (
-                    <details className="think">
+                    <details
+                      className="think"
+                      open={(m.text.startsWith('STOP') || m.text.startsWith('CAUTION')) || undefined}
+                    >
                       <summary>How I decided ({m.thinking.length} steps)</summary>
                       <ol>
                         {m.thinking.map((t, i) => (
@@ -336,21 +339,21 @@ export default function ChatView(props: ChatViewProps) {
                           </li>
                         ))}
                       </ol>
-                    </details>
-                  ) : null}
-                  {m.recalled && m.recalled.length > 0 ? (
-                    <details className="recalled">
-                      <summary>Recalled sources ({m.recalled.length})</summary>
-                      <ul>
-                        {m.recalled.map((r, i) => (
-                          <li key={i}>
-                            <span>{clean(r.text)}</span>
-                            {r.blob_id ? (
-                              <span className="mono cite"> · blob {shortBlob(r.blob_id) ?? r.blob_id}</span>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
+                      {m.recalled && m.recalled.length > 0 ? (
+                        <>
+                          <p className="cite">Sources ({m.recalled.length})</p>
+                          <ul className="src">
+                            {m.recalled.map((r, i) => (
+                              <li key={i}>
+                                <span>{clean(r.text)}</span>
+                                {r.blob_id ? (
+                                  <span className="mono cite"> · blob {shortBlob(r.blob_id) ?? r.blob_id}</span>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      ) : null}
                     </details>
                   ) : null}
                   <p className={cn('saved', m.savedBlob ? 'saved-yes' : 'saved-no')}>

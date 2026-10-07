@@ -120,6 +120,9 @@
 .cite .mono { overflow-wrap: anywhere; }
 
 .recalled { margin-top: 10px; font-size: 13px; color: var(--text-2); min-width: 0; }
+.think .src { margin: 6px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.think .src li { overflow-wrap: anywhere; line-height: 1.5; }
+.think .src li span { color: var(--text-2); }
 .recalled summary { cursor: pointer; color: var(--muted); font-weight: 600; }
 .recalled summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .recalled ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
