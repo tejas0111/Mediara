@@ -103,7 +103,7 @@ export interface ChatResponse {
   memoryScope: string;
   identity: string;
   savedBlob: string | null;
-  memoryPersisted: boolean | null;
+  memoryPersisted: boolean | 'pending' | null;
   memoryOff: boolean;
   mode: 'local' | 'mainnet';
   disclaimer: string;

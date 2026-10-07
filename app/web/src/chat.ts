@@ -15,7 +15,7 @@ export interface ChatMsg {
   role: 'user' | 'assistant';
   text: string;
   savedBlob?: string | null;
-  memoryPersisted?: boolean | null;
+  memoryPersisted?: boolean | 'pending' | null;
   recalled?: RecalledRef[];
   thinking?: ThinkStep[];
   ts: number;

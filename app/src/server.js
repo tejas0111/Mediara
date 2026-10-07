@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, rememberWithReceipt, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage, esc } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
@@ -370,6 +370,24 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
             console.error('write skipped: fact truncated past its safety signal');
             thinking.push({ label: 'Memory write', detail: 'Skipped — the message was too long and truncation cut its safety signal.' });
             reply += ' (Note: that was too long to save — please resend the allergy/medication in one short sentence.)';
+          }
+          else if (MODE === 'mainnet') {
+            // Mainnet indexing (~50s) exceeds any sane chat budget: accept fast,
+            // wait bounded, and be honest about pending (never fake a blob).
+            const rec = await rememberWithReceipt(client, stored);
+            if (rec.status === 'saved') {
+              saved = { blob_id: rec.blob_id }; memoryPersisted = true;
+              thinking.push({ label: 'Memory write', detail: `Saved to Walrus (blob ${rec.blob_id}).` });
+            } else if (rec.status === 'pending') {
+              memoryPersisted = 'pending';
+              thinking.push({ label: 'Memory write', detail: 'Upload accepted — Walrus is still indexing, so no blob id yet. It will appear under Memory shortly.' });
+              reply += ' (Saving to memory — it will appear under Memory shortly.)';
+              // Record usage when the index lands (fire-and-forget, rejection-safe).
+              rec.done.then((b) => { if (b) usage.recordMemory(safeUser, { blobId: b, text: message }); }).catch(() => {});
+            } else {
+              memoryPersisted = false;
+              thinking.push({ label: 'Memory write', detail: `Write failed (${rec.error || 'upload rejected'}) — surfaced, not silently kept.` });
+            }
           }
           else { saved = await withTimeout(rememberAndWait(client, stored), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; thinking.push({ label: 'Memory write', detail: saved?.blob_id ? `Saved to Walrus (blob ${saved.blob_id}).` : 'Write attempted but no blob returned.' }); }
         }

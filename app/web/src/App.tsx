@@ -98,7 +98,7 @@ export default function App() {
   // Mainnet candidate backends, first reachable wins. The tunnel URL is
   // ephemeral (dies with its sandbox); the saved base persists per browser.
   // Nothing here is user-editable — no URL prompt anywhere in the UI.
-  const DEFAULT_MAINNET_URL = 'https://hamilton-raymond-norm-money.trycloudflare.com';
+  const DEFAULT_MAINNET_URL = 'https://cannon-followed-offers-chubby.trycloudflare.com';
   const [mainnetLive, setMainnetLive] = React.useState(false);
   const [comingOpen, setComingOpen] = React.useState(false);
   const [comingNote, setComingNote] = React.useState<string | null>(null);

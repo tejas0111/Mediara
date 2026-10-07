@@ -287,9 +287,11 @@ export default function ChatView(props: ChatViewProps) {
                   <p className={cn('saved', m.savedBlob ? 'saved-yes' : 'saved-no')}>
                     {m.savedBlob
                       ? `Saved to memory · blob ${shortBlob(m.savedBlob) ?? m.savedBlob}`
-                      : m.memoryPersisted === false || !memoryOn
-                        ? 'Not saved — memory off or nothing new to store'
-                        : 'Not saved — nothing new to store'}
+                      : m.memoryPersisted === 'pending'
+                        ? 'Saving to memory…'
+                        : m.memoryPersisted === false || !memoryOn
+                          ? 'Not saved — memory off or nothing new to store'
+                          : 'Not saved — nothing new to store'}
                   </p>
                 </div>
               </div>

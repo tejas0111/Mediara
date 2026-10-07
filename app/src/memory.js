@@ -545,6 +545,32 @@ export async function rememberAndWait(client, text) {
   return done; // { blob_id, owner, namespace }
 }
 
+// Mainnet-aware write with a chat-friendly budget. Accept is fast (~2s);
+// indexing (blob id) takes ~50s on mainnet. Returns:
+//   { status:'saved', blob_id }     indexed inside the budget
+//   { status:'pending', job_id, done } upload accepted, index still running
+//      (done resolves to blob_id|null — the caller may record usage when it
+//      lands; the in-flight wait is rejection-safe either way)
+//   { status:'failed', error }      upload itself failed
+export async function rememberWithReceipt(client, text, { acceptMs = 20_000, indexMs = 45_000 } = {}) {
+  let job;
+  try {
+    job = await withTimeout(client.remember(truncateFact(text)), acceptMs, 'remember-accept');
+  } catch (e) {
+    return { status: 'failed', error: String(e?.message || e).slice(0, 160) };
+  }
+  const done = client.waitForRememberJob(job.job_id).then(
+    (d) => (d && d.blob_id) || null,
+    () => null,
+  );
+  const winner = await Promise.race([
+    done.then((b) => ({ ready: true, blob: b })),
+    new Promise((res) => setTimeout(() => res({ ready: false }), indexMs)),
+  ]);
+  if (winner.ready && winner.blob) return { status: 'saved', blob_id: winner.blob };
+  return { status: 'pending', job_id: job.job_id, done };
+}
+
 export async function rememberBulkAndWait(client, texts) {
   const items = texts.map((t) => ({ text: truncateFact(t) }));
   // SDK bulk API name varies by version; fall back to sequential if missing.
