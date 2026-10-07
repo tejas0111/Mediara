@@ -1,6 +1,6 @@
 # Third-party notices
 
-The DoseDaughter web UI is **hand-written** (HTML/CSS/JS, no framework, no build
+The Mediara web UI is **hand-written** (HTML/CSS/JS, no framework, no build
 step) and vendors no UI library. There is therefore no bundled third-party
 front-end code to attribute.
 

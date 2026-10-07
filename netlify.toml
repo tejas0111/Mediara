@@ -1,4 +1,4 @@
-# Netlify deploy config for DoseDaughter (Express app -> serverless function).
+# Netlify deploy config for Mediara (Express app -> serverless function).
 # The app is Express + a React SPA (app/web); Netlify runs it through serverless-http.
 # NOTE: production MUST set MEMWAL_MODE=mainnet + keys, SESSION_SECRET, and
 # OPENROUTER_API_KEY in the Netlify UI (Site settings -> Environment variables).

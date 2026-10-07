@@ -319,8 +319,8 @@ export default function App() {
 
       <aside className={cn('sidebar', drawer && 'open')} aria-label="Sidebar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">D</span>
-          <span className="brand-name">DoseDaughter</span>
+          <span className="brand-mark" aria-hidden="true">M</span>
+          <span className="brand-name">Mediara</span>
           <button type="button" className="icon-btn only-mobile" aria-label="Close menu" onClick={() => setDrawer(false)}>
             <IconX />
           </button>

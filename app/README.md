@@ -1,4 +1,4 @@
-# DoseDaughter — caregiver chatbot that never re-asks a dose
+# Mediara — caregiver chatbot that never re-asks a dose
 
 Express chatbot + Telegram bot with long-term memory on Walrus Memory (`@mysten-incubation/memwal`).
 Remembers meds, allergies, routines across sessions; compiles doctor-visit summaries from recall only.
@@ -154,7 +154,7 @@ Per-chat namespace is `user-tg-<chatId>`; `/reset` clears local rows only (mainn
 - **Telegram won't start:** `Missing dependency: node-telegram-bot-api` → run `npm i node-telegram-bot-api` from `app/`; `Missing TELEGRAM_BOT_TOKEN` → add it to `.env`.
 - **LLM echo:** without `OPENROUTER_API_KEY` replies are `[no LLM key] …` echoes with memory-char counts — memory flow still works. Default model `google/gemini-2.5-flash` via `LLM_MODEL`.
 
-> Medical disclaimer: DoseDaughter reminds and flags only — never adjusts dosage. Always confirm with your doctor.
+> Medical disclaimer: Mediara reminds and flags only — never adjusts dosage. Always confirm with your doctor.
 
 ## React SPA (app/web) — the premium UI at `/`
 

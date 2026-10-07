@@ -1,4 +1,4 @@
-// User memory registry (DoseDaughter).
+// User memory registry (Mediara).
 // Persistent JSON store mapping wallet address → MemWal account + delegate key.
 // SERVICE metadata only — never memory content. All actual memory is
 // Seal-encrypted blobs on Walrus, owned by each user's own MemWalAccount.

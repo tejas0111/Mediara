@@ -1,4 +1,4 @@
-// DoseDaughter — RED-TEAM RUN: a re-runnable, keyless, deterministic eval.
+// Mediara — RED-TEAM RUN: a re-runnable, keyless, deterministic eval.
 // `npm run eval` prints a live score for the two claims that matter:
 //   1) the coded guard (allergy + drug–drug) fires on danger and stays silent
 //      on safe/negated/teaching inputs — no LLM, no network;

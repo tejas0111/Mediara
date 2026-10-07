@@ -1,4 +1,4 @@
-# Railway deploy (free trial) — DoseDaughter backend + SPA
+# Railway deploy (free trial) — Mediara backend + SPA
 
 One service, zero code changes: Express serves the API **and** the committed
 React bundle (`web/dist`) at `/`. Railway injects `PORT`; the server respects it.
@@ -16,7 +16,7 @@ npx @railway/cli login        # opens browser, creates account / free trial
 
 ```bash
 cd /home/tejas/Tejas/walrus-session8/app
-npx @railway/cli init         # name it dosedughter (creates project+service+env)
+npx @railway/cli init         # name it mediara (creates project+service+env)
 ```
 
 Prefer GitHub auto-deploys? Connect the repo in the dashboard instead and set

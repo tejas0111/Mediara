@@ -32,10 +32,10 @@ render architecture.png        1600,840 architecture.html
 
 ## Alt text (paste into Medium/Inkray image descriptions)
 
-- banner: `DoseDaughter — caregiver chatbot that never re-asks a dose. 13 blobs on Walrus Mainnet, allergy STOP-guard citing blob ids, 236/236 tests.`
+- banner: `Mediara — caregiver chatbot that never re-asks a dose. 13 blobs on Walrus Mainnet, allergy STOP-guard citing blob ids, 236/236 tests.`
 - before-after: `Day 1 vs Day 7: same question "can she take ibuprofen", same model — Day 1 hedges with 0 memories, Day 7 blocks with a blob receipt.`
 - stop-receipt: `Terminal receipt: STOP — do not give ibuprofen, recalled allergy with blob _7oVBL39o…, verifiable on walruscan.com. Brand name Advil triggers via generic-name map.`
-- architecture: `DoseDaughter loop: recall from Walrus Memory before generation, coded allergy guard before the LLM, write gate saves only durable facts as new blobs.`
+- architecture: `Mediara loop: recall from Walrus Memory before generation, coded allergy guard before the LLM, write gate saves only durable facts as new blobs.`
 
 ## Future images worth making (only if time permits)
 

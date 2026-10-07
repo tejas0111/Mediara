@@ -1,4 +1,4 @@
-// DoseDaughter web widget — Express chatbot endpoint.
+// Mediara web widget — Express chatbot endpoint.
 // GET / → chat UI. GET /memory?user=ID → public memory-visible page.
 // GET /demo → before/after harness (empty demo-day1 vs seeded demo-day7/demo-mom).
 // POST /api/chat { userId, message } → recall → LLM → auto-remember facts.
@@ -1023,7 +1023,7 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 
 const port = process.env.PORT || 3001;
 if (process.env.VERCEL !== '1' && import.meta.url === `file://${process.argv[1]}`) {
-  const server = app.listen(port, () => console.log(`DoseDaughter on :${port}`));
+  const server = app.listen(port, () => console.log(`Mediara on :${port}`));
   // Proactive loop: the memory reaches OUT on a schedule (every 6h) — morning
   // med plan + nightly interaction cross-check per tracked user. Off-switch:
   // DD_NUDGE=off. Runs only when the server actually listens (never under tests/Vercel).

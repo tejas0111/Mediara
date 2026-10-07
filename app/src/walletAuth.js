@@ -1,4 +1,4 @@
-// Wallet identity + session tokens (DoseDaughter).
+// Wallet identity + session tokens (Mediara).
 // The browser signs a short-lived, server-issued nonce message with the
 // visitor's Sui wallet; we verify the signature server-side (@mysten/sui/verify),
 // consume the nonce (single-use), and issue an HMAC-signed session cookie. No
@@ -10,7 +10,7 @@ import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 // Kept for backwards compatibility / UI copy. The signed message is no longer
 // this fixed string alone — it is authMessage(nonce), which embeds a fresh,
 // single-use nonce issued per sign-in attempt.
-export const AUTH_MESSAGE = 'DoseDaughter: sign in to your memory wallet.\nThis signature proves you own this address. No transaction, no fee.';
+export const AUTH_MESSAGE = 'Mediara: sign in to your memory wallet.\nThis signature proves you own this address. No transaction, no fee.';
 
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days

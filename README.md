@@ -1,12 +1,12 @@
-# DoseDaughter 🐘
+# Mediara 🐘
 
 **A caregiver chatbot that never re-asks a dose.** It remembers your mother's medications, allergies, and routines across conversations — permanently, on Walrus — and flags unsafe answers before the model replies.
 
-> **A chatbot that forgets is annoying. A chatbot that remembers the wrong dose is dangerous.** DoseDaughter is the one that proves it tells the difference — a measured before/after (`npm run eval`): memory **changes the outcome on 12/12** adverse probes, with **0 false positives** ([evidence/AB-RESULTS.md](evidence/AB-RESULTS.md)).
+> **A chatbot that forgets is annoying. A chatbot that remembers the wrong dose is dangerous.** Mediara is the one that proves it tells the difference — a measured before/after (`npm run eval`): memory **changes the outcome on 12/12** adverse probes, with **0 false positives** ([evidence/AB-RESULTS.md](evidence/AB-RESULTS.md)).
 
 Built for **Walrus Session 8: Chatbots That Remember** (Sept 18 – Oct 9, 2026).
 
-![DoseDaughter](docs/images/banner-dosedaughter.png)
+![Mediara](docs/images/banner-dosedaughter.png)
 
 ## The problem
 
@@ -14,7 +14,7 @@ Family caregivers manage a parent's medications from memory and scattered notes.
 
 ## The fix: memory that does the work
 
-DoseDaughter stores every fact the family teaches it as an **encrypted blob on Walrus Mainnet** via [Walrus Memory](https://www.walrus.xyz) — then recalls it at the right moment:
+Mediara stores every fact the family teaches it as an **encrypted blob on Walrus Mainnet** via [Walrus Memory](https://www.walrus.xyz) — then recalls it at the right moment:
 
 - **Teach once, remember forever.** *"Mom takes Metformin 500mg at 8pm after food"* → stored as a Walrus blob, recalled in every future session.
 - **Allergy STOP guard.** Ask *"Can she take ibuprofen for her headache?"* and a coded, rule-based guard runs **before the LLM** — blocking by drug class (Advil, Aleve and Excedrin all match an ibuprofen allergy), ignoring negated facts, and citing the exact blob that recorded it. It works with no LLM key, so safety doesn't hinge on the model behaving — though it does depend on recall returning the allergy fact (a dedicated allergy recall keeps it in context).
@@ -31,8 +31,8 @@ DoseDaughter stores every fact the family teaches it as an **encrypted blob on W
 ## Quickstart (2 minutes, no keys)
 
 ```bash
-git clone https://github.com/tejas0111/dosedaughter.git
-cd dosedaughter/app
+git clone https://github.com/tejas0111/mediara.git
+cd mediara/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
 npm test                    # 317 checks (180 core + 61 wallet + 43 route + 11 stats + 22 frontend), no network
@@ -136,7 +136,7 @@ The chat interface is **hand-written** (HTML/CSS/JS, no framework, no build step
 
 ## Medical disclaimer
 
-DoseDaughter reminds and flags only — it never adjusts dosages and is not medical advice. Always confirm with your doctor.
+Mediara reminds and flags only — it never adjusts dosages and is not medical advice. Always confirm with your doctor.
 
 ## License
 

@@ -1,4 +1,4 @@
-# DoseDaughter — architecture
+# Mediara — architecture
 
 A caregiver chatbot whose memory lives on Walrus Mainnet. This document describes
 how a message flows through the system, how memory is stored and recalled, and

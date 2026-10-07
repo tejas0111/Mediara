@@ -345,7 +345,7 @@ export default function ChatView(props: ChatViewProps) {
           maxLength={MAX_LEN}
           value={input}
           disabled={pending}
-          placeholder={memoryOn ? 'Message DoseDaughter…' : 'Message DoseDaughter… (memory off)'}
+          placeholder={memoryOn ? 'Message Mediara…' : 'Message Mediara… (memory off)'}
           aria-label="Message"
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

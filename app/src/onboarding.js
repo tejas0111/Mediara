@@ -1,4 +1,4 @@
-// Onboarding orchestrator (DoseDaughter).
+// Onboarding orchestrator (Mediara).
 // Flow — the visitor's wallet signs and PAYS every transaction (v1 relayer
 // model: users own and fund their memory; the bot holds NO wallet power):
 //   fresh user:  tx 1 create_account  →  tx 2 add_delegate_key (link us)

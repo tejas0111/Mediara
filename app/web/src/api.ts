@@ -1,4 +1,4 @@
-// Typed client for the DoseDaughter JSON API. Same-origin; session cookies ride
+// Typed client for the Mediara JSON API. Same-origin; session cookies ride
 // along automatically. Every function throws ApiError (with .status) on failure
 // so views can render honest error states instead of silent blanks.
 

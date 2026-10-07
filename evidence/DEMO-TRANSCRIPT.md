@@ -1,4 +1,4 @@
-# DEMO TRANSCRIPT — DoseDaughter end-to-end (user `e2e-mom`)
+# DEMO TRANSCRIPT — Mediara end-to-end (user `e2e-mom`)
 
 > Captured 2026-09-20 ~22:46 UTC against a live local server (`PORT=3001 node src/server.js`,
 > `MEMWAL_MODE` unset → `local`). **Every `local-*` blob below is a LOCAL DEMO record in

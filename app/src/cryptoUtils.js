@@ -1,4 +1,4 @@
-// Secret-at-rest crypto for DoseDaughter (delegate private keys, etc.).
+// Secret-at-rest crypto for Mediara (delegate private keys, etc.).
 // AES-256-GCM with a key derived via scrypt from SESSION_SECRET and a random
 // per-value salt (stored alongside the ciphertext so decrypt works across
 // restarts/cold starts). When SESSION_SECRET is unset, values pass through

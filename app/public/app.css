@@ -1,4 +1,4 @@
-/* DoseDaughter — design system + components. Hand-written, no framework. */
+/* Mediara — design system + components. Hand-written, no framework. */
 :root{
   --bg:#f7f5f2; --bg-grad:radial-gradient(1100px 560px at 82% -12%, #eef3f1 0%, rgba(238,243,241,0) 58%), radial-gradient(820px 460px at -8% 6%, #f1f4f2 0%, rgba(241,244,242,0) 52%);
   --surface:#ffffff; --surface-2:#f0ede8; --surface-3:#e8e3dc;

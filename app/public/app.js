@@ -1,4 +1,4 @@
-/* DoseDaughter client. Hand-written chat UI (no framework). */
+/* Mediara client. Hand-written chat UI (no framework). */
 (function () {
   'use strict';
   function $(id) { return document.getElementById(id); }
@@ -47,7 +47,7 @@
     }
     if (role !== 'user') {
       var meta = el('div', 'meta');
-      meta.appendChild(el('span', null, role === 'stop' ? 'Safety stop' : 'DoseDaughter'));
+      meta.appendChild(el('span', null, role === 'stop' ? 'Safety stop' : 'Mediara'));
       meta.appendChild(el('span', null, '\u00B7'));
       meta.appendChild(el('span', null, clock()));
       body.appendChild(meta);
@@ -122,7 +122,7 @@
     if (!root) return;
     thread = $('thread'); typing = $('typing');
     var modeEl = $('chatmode'); if (modeEl) modeEl.textContent = MODE === 'mainnet' ? 'Walrus Mainnet' : 'local demo';
-    addRow('ai', 'Hi \u2014 I\u2019m DoseDaughter. Teach me about the person you care for (meds, allergies, routines). I\u2019ll remember across sessions on Walrus' + (MODE === 'mainnet' ? ' Mainnet' : '') + ' and show you every receipt.');
+    addRow('ai', 'Hi \u2014 I\u2019m Mediara. Teach me about the person you care for (meds, allergies, routines). I\u2019ll remember across sessions on Walrus' + (MODE === 'mainnet' ? ' Mainnet' : '') + ' and show you every receipt.');
     var composer = $('composer'), text = $('text');
     if (composer && text) {
       composer.addEventListener('submit', function (e) { e.preventDefault(); var v = text.value; text.value = ''; autoGrow(text); send(v); });
@@ -202,7 +202,7 @@
       } catch (e) { alert('Wallet error: ' + ((e && e.message) ? e.message : String(e))); }
     });
     async function runOnboarding(w, acct, needsCreate) {
-      var names = needsCreate ? ['Create your vault (sign in wallet \u2014 you pay gas)', 'Link DoseDaughter (second signature)', 'Done \u2014 your memories, your account'] : ['Link DoseDaughter (sign in wallet)', 'Done \u2014 your memories, your account'];
+      var names = needsCreate ? ['Create your vault (sign in wallet \u2014 you pay gas)', 'Link Mediara (second signature)', 'Done \u2014 your memories, your account'] : ['Link Mediara (sign in wallet)', 'Done \u2014 your memories, your account'];
       stepList(names);
       var i = 0;
       try {
@@ -219,7 +219,7 @@
         stepMark(i, 'active', 'Waiting for your signature\u2026');
         var s2 = await signTx(w, acct, b64ToBytes(pl.txBytesBase64));
         var c2 = await post('/api/wallet/onboard/complete', { signature: s2 }); if (c2.error) throw c2;
-        stepMark(i, 'done', 'DoseDaughter linked \u2713');
+        stepMark(i, 'done', 'Mediara linked \u2713');
         stepMark(i + 1, 'done', 'Your memories now live in your own on-chain vault');
         var st = await fetch('/api/wallet/status').then(function (r) { return r.json(); });
         setTimeout(function () { setSignedIn(st); ob.className = 'obsteps'; }, 2200);

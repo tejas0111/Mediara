@@ -5,9 +5,9 @@
     "express": "^4.19.2",
     "serverless-http": "^3.2.0"
   },
-  "description": "DoseDaughter \u2014 caregiver chatbot that never re-asks a dose (Walrus Sessions 8: Chatbots That Remember)",
+  "description": "Mediara \u2014 caregiver chatbot that never re-asks a dose (Walrus Sessions 8: Chatbots That Remember)",
   "license": "MIT",
-  "name": "dosedughter",
+  "name": "mediara",
   "scripts": {
     "test": "node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/frontend.test.js",
     "eval": "node src/eval.js",

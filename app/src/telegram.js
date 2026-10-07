@@ -1,4 +1,4 @@
-// DoseDaughter Telegram bot (Walrus Sessions 8) — polling, no polyfills.
+// Mediara Telegram bot (Walrus Sessions 8) — polling, no polyfills.
 // Setup:
 //   1. Chat BotFather on Telegram → /newbot → copy token.
 //   2. Add to app/.env: TELEGRAM_BOT_TOKEN=<token> (plus OPENROUTER_API_KEY optional, MEMWAL_MODE=local default).
@@ -74,7 +74,7 @@ async function callLLM(system, userMessage) {
 }
 
 const START_TEXT =
-  'Hi, I am DoseDaughter — I remember meds so you do not have to repeat them.\n' +
+  'Hi, I am Mediara — I remember meds so you do not have to repeat them.\n' +
   'Tell me 3 facts to start:\n1) Daily meds with times (e.g. "I take Metformin 8pm after food")\n' +
   '2) Allergies (e.g. "Allergic to ibuprofen")\n3) Routine (e.g. "Mom dinner 7pm, bedtime 10pm").\n' +
   'Commands: /memory /summary /reset.';
@@ -186,4 +186,4 @@ bot.on('message', async (msg) => {
 
 bot.on('polling_error', (e) => console.error('polling_error', String(e.message || e).slice(0, 200)));
 
-console.log(`DoseDaughter Telegram bot polling (mode=${MODE}). Press Ctrl+C to stop.`);
+console.log(`Mediara Telegram bot polling (mode=${MODE}). Press Ctrl+C to stop.`);

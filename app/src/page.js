@@ -1,4 +1,4 @@
-// DoseDaughter — server-rendered page shells (hand-written UI, no framework/build).
+// Mediara — server-rendered page shells (hand-written UI, no framework/build).
 // Untrusted text is escaped server-side (esc); the client uses textContent only.
 export const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 import fs from 'node:fs';
@@ -16,7 +16,7 @@ const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset
 <a class="skip" href="#main">Skip to content</a>
 <header class="top"><div class="bar">
   <div class="brand"><span class="logo">&#129461;</span>
-    <div><h1>DoseDaughter</h1><p>a caregiver chatbot that never re-asks a dose</p></div></div>
+    <div><h1>Mediara</h1><p>a caregiver chatbot that never re-asks a dose</p></div></div>
   <nav class="topnav" aria-label="Primary">
     <a href="/">Chat</a><a href="/demo">Before / After</a><a href="/memory?user=demo-mom">Memory</a><a href="/guard-proof">Guard&nbsp;proof</a><a href="/print?user=demo-mom">Print</a><a href="/replay?user=demo-mom">Replay</a><a href="/compare?a=demo-mom&amp;b=demo-day7">Isolation</a>
     <span class="pill ${mode === 'mainnet' ? 'mainnet' : 'local'}"><span class="dot"></span>${mode === 'mainnet' ? 'Walrus Mainnet' : 'Local demo'}</span>
@@ -25,13 +25,13 @@ const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset
 
 const FOOT = (mode) => `<footer class="foot">
   Every remembered fact is a Seal-encrypted blob on Walrus${mode === 'mainnet' ? ' Mainnet' : ''}. ${mode === 'mainnet' ? 'Verify any fact on <a href="https://walruscan.com" target="_blank" rel="noopener">walruscan.com</a>.' : 'Set <span class="mono">MEMWAL_MODE=mainnet</span> with keys for real Mainnet storage.'}<br>
-  <a href="https://github.com/tejas0111/dosedaughter" target="_blank" rel="noopener">source</a> &middot; <a href="/healthz">health</a> &middot; built for Walrus Session 8<br>
+  <a href="https://github.com/tejas0111/mediara" target="_blank" rel="noopener">source</a> &middot; <a href="/healthz">health</a> &middot; built for Walrus Session 8<br>
   Confirm with your doctor &mdash; this is not medical advice.
 </footer>`;
 
 // ---------- chat ----------
 export function chatPage({ mode }) {
-  return TOP('DoseDaughter \u2014 chat', mode) + `
+  return TOP('Mediara \u2014 chat', mode) + `
 <main class="wrap" id="main"><div id="dd-app" data-mode="${esc(mode)}" data-default-user="demo-mom">
   <div class="walletbar" id="walletbar">
     <span class="who" id="who2">Checking wallet&hellip;</span>
@@ -47,10 +47,10 @@ export function chatPage({ mode }) {
     <label class="memtoggle"><input type="checkbox" id="memoff"> memory off (amnesia mode)</label></div>
 
   <div class="grid">
-    <section class="chat card" aria-label="Chat with DoseDaughter">
+    <section class="chat card" aria-label="Chat with Mediara">
       <div class="chat-head">
-        <div class="ava">DD</div>
-        <div><div class="who">DoseDaughter</div>
+        <div class="ava">M</div>
+        <div><div class="who">Mediara</div>
           <div class="status"><span class="live"></span><span>memory on &middot; <span id="chatmode">local demo</span></span></div></div>
       </div>
       <div class="thread" id="thread" role="log" aria-live="polite" aria-relevant="additions"></div>
@@ -100,7 +100,7 @@ export function ledgerPage({ mode, entries, verify }) {
   const chain = verify.ok
     ? '<span class="pill mainnet"><span class="dot"></span>chain intact</span>'
     : `<span class="pill local"><span class="dot"></span>CHAIN BROKEN at #${verify.brokenAt}</span>`;
-  return TOP('DoseDaughter — guard proof', mode) + `
+  return TOP('Mediara — guard proof', mode) + `
 <main class="wrap" id="main">
   <h1 class="pg">Guard proof — every STOP, on the record</h1>
   <p class="sub">Append-only ledger of every safety block, with the recalled fact and blob id that fired it. Each entry carries the hash of the previous one — any edit after the fact breaks the chain.</p>
@@ -130,9 +130,9 @@ export function memoryPage({ user, mode, rows, agentShort, stale }) {
   const notice = mode === 'mainnet'
     ? `<div class="notice mainnet">All memory below is stored on <b>Walrus Mainnet</b> via Walrus Memory (Seal-encrypted). Every row links to its blob on walruscan \u2014 verify, don\u2019t trust.${agentShort ? ` Agent: <span class="mono">${esc(agentShort)}\u2026</span>` : ''}</div>`
     : `<div class="notice local"><b>Local demo</b> \u2014 file-backed stand-in memory, not Walrus Mainnet. The Mainnet path runs when <span class="mono">MEMWAL_MODE=mainnet</span> is set with keys.</div>`;
-  return TOP('DoseDaughter \u2014 memory', mode) + `
+  return TOP('Mediara \u2014 memory', mode) + `
 <main class="wrap" id="main">
-  <h1 class="pg">What DoseDaughter remembers \u2014 <span class="mono">${esc(user)}</span></h1>
+  <h1 class="pg">What Mediara remembers \u2014 <span class="mono">${esc(user)}</span></h1>
   <p class="sub">${rows.length} fact${rows.length === 1 ? '' : 's'} &middot; recalled live from memory &middot; <a href="/">back to chat</a></p>
   ${stale ? '<div class="notice local"><b>Memory temporarily unreachable</b> \u2014 this list may be incomplete. Retry shortly.</div>' : ''}
   ${notice}
@@ -147,7 +147,7 @@ export function demoPage({ q, mode, before, after, afterNs, day7Empty }) {
   const list = (arr) => arr.length
     ? `<ul>${arr.map((m) => `<li>${esc(m.text)}<small>${esc(String(m.blob_id || '').slice(0, 12))}</small></li>`).join('')}</ul>`
     : `<ul><li class="none">no memories \u2014 generic answer, Day-1 amnesia</li></ul>`;
-  return TOP('DoseDaughter \u2014 before/after', mode) + `
+  return TOP('Mediara \u2014 before/after', mode) + `
 <main class="wrap" id="main">
   <h1 class="pg">Day 1 vs Day 7 \u2014 the same question, live recall</h1>
   <p class="sub">Both namespaces are queried live right now (mode: ${esc(mode)}). <a href="/">back to chat</a></p>
@@ -187,7 +187,7 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
     : rows.length
       ? `<ul>${rows.map((r) => `<li>${esc(String(r.text).replace(/^User\s+\S+:\s*/i, ''))}</li>`).join('')}</ul>`
       : '<p class="muted">None recorded</p>';
-  return TOP('DoseDaughter \u2014 printable summary', mode) + `
+  return TOP('Mediara \u2014 printable summary', mode) + `
 <main class="wrap" id="main">
   <div class="print-actions">
     <button class="btn" id="printbtn" type="button">Print / Save as PDF</button>
@@ -197,7 +197,7 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
   ${stale ? '<div class="notice local"><b>Memory temporarily unreachable</b> \u2014 this card may be incomplete. Do not rely on it for medication decisions until it reloads.</div>' : ''}
   <div class="sheet">
     <div class="ecard">
-      <div class="ecard-head"><span class="logo">&#129461;</span><div><b>Emergency card</b><div class="muted">DoseDaughter \u00b7 <span class="mono">${esc(user)}</span></div></div></div>
+      <div class="ecard-head"><span class="logo">&#129461;</span><div><b>Emergency card</b><div class="muted">Mediara \u00b7 <span class="mono">${esc(user)}</span></div></div></div>
       <div class="ecard-sec allergy"><h4>Allergies</h4>${cell(allergyRows)}</div>
       <div class="ecard-sec"><h4>Current medications</h4>${cell(medRows)}</div>
       <div class="ecard-sec"><h4>Emergency contacts</h4>${cell(contactRows)}</div>
@@ -226,7 +226,7 @@ export function comparePage({ q, mode, a, b, aFacts, bFacts }) {
   const list = (arr) => arr.length
     ? `<ul>${arr.map((m) => `<li>${esc(String(m.text).replace(/^User\s+\S+:\s*/i, ''))}${blobTag(m.blob_id, mode)}</li>`).join('')}</ul>`
     : '<ul><li class="none">no memories in this namespace</li></ul>';
-  return TOP('DoseDaughter \u2014 isolation', mode) + `
+  return TOP('Mediara \u2014 isolation', mode) + `
 <main class="wrap" id="main">
   <h1 class="pg">Cross-user isolation \u2014 the same question, two namespaces</h1>
   <p class="sub">Per-user namespaces keep one family member's memory out of another's. Queried live now (mode: ${esc(mode)}).</p>
@@ -244,7 +244,7 @@ export function comparePage({ q, mode, a, b, aFacts, bFacts }) {
 // ---------- Day 1 -> Day 90 replay ----------
 export function replayPage({ user, mode, facts, stale }) {
   const items = facts.map((f, i) => `<li data-i="${i}" aria-hidden="true"><span class="rpf">${esc(String(f.text).replace(/^User\s+\S+:\s*/i, ''))}</span>${blobTag(f.blob_id, mode)}</li>`).join('');
-  return TOP('DoseDaughter \u2014 90-day replay', mode) + `
+  return TOP('Mediara \u2014 90-day replay', mode) + `
 <main class="wrap" id="main">
   <h1 class="pg">Day 1 \u2192 Day 90</h1>
   <p class="sub">Watch a caregiver's memory accumulate \u2014 and the day it stops a dangerous dose. Facts are recalled live from <span class="mono">${esc(user)}</span>.</p>
@@ -256,7 +256,7 @@ export function replayPage({ user, mode, facts, stale }) {
     </div>
     <div class="replay-bar"><div class="replay-progress" id="rpProgress"></div></div>
     <ul class="replay-facts" id="rpFacts">${items}</ul>
-    <div class="replay-stop" id="rpStop" hidden role="alert"><b>Final day \u2014 STOP</b><br>\u201cCan she take ibuprofen for her headache?\u201d \u2192 DoseDaughter refuses and cites the allergy blob. This is the moment the memory earns its keep.</div>
+    <div class="replay-stop" id="rpStop" hidden role="alert"><b>Final day \u2014 STOP</b><br>\u201cCan she take ibuprofen for her headache?\u201d \u2192 Mediara refuses and cites the allergy blob. This is the moment the memory earns its keep.</div>
     <p class="sub" id="rpCaption" style="margin-top:14px">Press play.</p>
   </div>
   ${FOOT(mode)}

@@ -1,4 +1,4 @@
-# TEST-LOG — DoseDaughter (Walrus Sessions 8)
+# TEST-LOG — Mediara (Walrus Sessions 8)
 
 > Append-style probe log. REAL rows only from `evidence/DEMO-TRANSCRIPT.md` §§1–9.
 > Early rows' `local-*` ids are LOCAL DEMO records in `app/.local-memory.json`
