@@ -2,6 +2,7 @@ import React from 'react';
 import {
   ApiError,
   clean,
+  getDeviceId,
   getModels,
   loadModel,
   postChat,
@@ -148,6 +149,11 @@ export default function ChatView(props: ChatViewProps) {
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
   const boxRef = React.useRef<HTMLTextAreaElement>(null);
+  // Guest identity: ensure the persisted device id exists before the first
+  // turn (req() sends it as X-Device-Id for the per-browser guest budget).
+  React.useEffect(() => {
+    try { getDeviceId(); } catch { /* server falls back to 'anon' */ }
+  }, []);
 
   const msgs = active?.msgs ?? [];
   void props.sessions;

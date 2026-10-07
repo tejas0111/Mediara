@@ -130,7 +130,7 @@ test('SPA shell copy is self-explanatory (no mystery badges)', () => {
   assert.ok(!app.includes("'local?'") && !app.includes('"local?"'), 'no bare "local?" badge text');
   assert.ok(app.includes('Local demo') && app.includes('stand-in'), 'mode badge explains the backend');
   const css = wread('src/App.css') + wread('src/tokens.css');
-  assert.ok(css.includes('#ffffff') && css.includes('#f3f4f6'), 'topbar white-to-grey tone present');
+  assert.ok(css.includes('#0c0d10') && css.includes('#14151b'), 'topbar charcoal dark tone present');
 });
 
 test('SPA wallet connects in one click (no double prompt)', () => {

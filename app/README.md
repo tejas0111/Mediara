@@ -56,7 +56,8 @@ dev mode is never presented as Mainnet.
 
 | Method | Path | Params / body | Returns |
 |---|---|---|---|
-| `GET` | `/` | — | Chat landing HTML + links to `/memory`, `/demo` |
+| `GET` | `/` | — | Dark premium landing (hero, 3-step how-it-works, live evidence strip, Launch app → `/app`) |
+| `GET` | `/app` (+ `/app/*` fallback, static `/app/*` assets) | — | React SPA (hash routing; without a build falls back to the legacy server chat) |
 | `POST` | `/api/chat` | JSON `{userId, message}` (≤500 chars) | `{reply, recalled[], recalledMeta[], memoryScope, identity, savedBlob, mode, disclaimer}` — recalls top-5, coded allergy guard, LLM, gated auto-save. Signed-in wallet users read/write **their own vault** |
 | `GET` | `/api/summary` | `?user=<id>` (default `demo-mom`) | `{user, mode, medications[], allergies[], routine[], familyAndCare[], blobCount, disclaimer}` from recall only |
 | `GET` | `/memory` | `?user=<id>` | HTML memory receipts page (wallet users see their own vault) |
@@ -115,7 +116,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - Signatures verified server-side (`verifyPersonalMessageSignature`); the client-supplied address is never trusted — it is re-derived from the verified key.
 - Sessions: HMAC-signed tokens, HttpOnly + SameSite=Lax cookies, Secure flag on https, 7-day expiry; no session store to lose.
 - Delegate private keys encrypted at rest (AES-256-GCM); wrong `SESSION_SECRET` fails closed (null), never garbage.
-- All write surfaces rate-limited per IP (auth 10/min, onboarding 12/min, chat 30/min); per-user daily chat budgets (anon 20/day, vault 200/day via `DD_DAY_LIMIT_ANON`/`DD_DAY_LIMIT_WALLET`); shared demo namespaces are anonymous-read-only. JSON bodies capped at 16 KB; chat messages capped at 500 chars.
+- All write surfaces rate-limited per IP (auth 10/min, onboarding 12/min, chat 30/min); per-user daily chat budgets (anon 20/day per browser-guest-key, vault 200/day via `DD_DAY_LIMIT_ANON`/`DD_DAY_LIMIT_WALLET`); shared demo namespaces are anonymous-read-only. JSON bodies capped at 16 KB; chat messages capped at 500 chars.
 - Cost today is $0 (relayer-sponsored Walrus writes + free OpenRouter models, both upstream-rate-limited) — the budgets above guard rate, not money. If usage ever outgrows free tiers, the decision is per-vault daily caps vs user-pays (Sui micropayment before chat), not passthrough billing without caps.
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
@@ -156,17 +157,25 @@ Per-chat namespace is `user-tg-<chatId>`; `/reset` clears local rows only (mainn
 
 > Medical disclaimer: Mediara reminds and flags only — never adjusts dosage. Always confirm with your doctor.
 
-## React SPA (app/web) — the premium UI at `/`
+## React SPA (app/web) — the premium UI at `/app`
 
 Vite + React 18 + TypeScript, hand-vendored shadcn-style primitives (zero runtime
-deps, MIT-clean), white/greyish ChatGPT-type shell: sidebar history + centered chat.
+deps, MIT-clean), charcoal dark premium shell: sidebar history + centered chat.
+Guests chat instantly with per-browser memory (persisted `X-Device-Id` → server
+`guest:<hash12>` day budget) — no wallet wall; wallet sign-in unlocks your own
+vault + the bigger `DD_DAY_LIMIT_WALLET` budget.
+
+| Env | Meaning |
+|---|---|
+| Demo (same-origin, default) | Local stand-in memory; anonymous guests budgeted per browser (`DD_DAY_LIMIT_ANON`/day, demo namespaces capped by `DD_DAY_LIMIT_DEMO`) |
+| Mainnet (reachable candidate backend) | Real Walrus memory; wallet vaults; coming-soon gate while unreachable — never a URL prompt |
 
 | Command | Purpose |
 |---|---|
 | `npm run build:web` (in `app/`) | install `web/` deps + `vite build` → `web/dist/` (committed, so clone-and-run works) |
 | `npm run dev --prefix web` | Vite dev on :5173, `/api` proxied to the Express server on :3001 |
 
-- Hash routing (`#/memory`, `#/demo`, `#/replay`, `#/compare`, `#/proof`, `#/stats`, `#/print`, `#/wallet`) — no server fallback needed.
-- Express serves `web/dist` at `/app` (immutable hashed assets) and `index.html` at `/`; without a build it falls back to the legacy server-rendered chat.
+- Hash routing (`#/memory`, `#/demo`, `#/replay`, `#/compare`, `#/proof`, `#/stats`, `#/print`, `#/wallet`) — only `/app` + static `/app/*` need serving.
+- Express serves the dark server-rendered landing at `/`, `web/dist` assets under `/app` (immutable hashed files) and `index.html` at `/app` (+ `/app/*` fallback); without a build both fall back to the legacy server-rendered chat.
 - CSP unchanged (`script-src 'self'` — one bundled module file, no inline scripts).
 - Chat history lives in `localStorage` per user id; memory itself stays on Walrus.

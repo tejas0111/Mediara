@@ -22,7 +22,7 @@ import {
   titleFor,
 } from './chat';
 import type { ChatMsg, ChatSession, Route, ViewKey } from './chat';
-import { authLogout, checkHealth, getApiBase, setApiBase, walletStatus } from './api';
+import { authLogout, checkHealth, getApiBase, getDeviceId, setApiBase, walletStatus } from './api';
 import type { WalletStatus } from './api';
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 import {
@@ -137,6 +137,9 @@ export default function App() {
 
   React.useEffect(() => {
     void refreshWallet();
+    // Guest identity first: creates the persisted device id so the very first
+    // chat turn already carries X-Device-Id (per-browser guest budget).
+    try { getDeviceId(); } catch { /* keyless guests still chat — server falls back to 'anon' */ }
     // Initial backend state: same-origin mode decides toggle visibility;
     // active-base health decides the badge. A saved base is re-verified;
     // otherwise the default candidate is probed (never auto-switched).

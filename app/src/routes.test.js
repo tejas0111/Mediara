@@ -371,18 +371,24 @@ test('/api/chat rejects non-free models, accepts listed ones', async () => {
 
 test('daily budget gate caps anonymous turns with a login prompt', async () => {
   const u = `rt-demolimit-${Date.now()}`;
+  // Per-guest budget: a fresh device id isolates this test from every other
+  // request in the process (all share one IP and the 'anon' fallback key).
+  const devH = { 'X-Device-Id': `dev-${Date.now()}` };
   process.env.DD_DAY_LIMIT_ANON = '3';
   try {
     for (let i = 0; i < 3; i++) {
-      const r = await post('/api/chat', { userId: u, message: `hello number ${i}` });
+      const r = await post('/api/chat', { userId: u, message: `hello number ${i}` }, devH);
       assert.equal(r.status, 200, `turn ${i + 1} allowed`);
     }
-    const r = await post('/api/chat', { userId: u, message: 'one more please' });
+    const r = await post('/api/chat', { userId: u, message: 'one more please' }, devH);
     assert.equal(r.status, 429, '4th anonymous turn refused');
     const j = await r.json();
     assert.equal(j.loginRequired, true, 'prompt flags login');
     assert.equal(j.demoUser, 'demo-mom', 'prompt points at the premade demo');
     assert.match(j.resetsAt, /^\d{4}-\d{2}-\d{2}$/, 'reset day is explicit');
+    // A different browser (device) gets its own budget — same IP, same user.
+    const other = await post('/api/chat', { userId: u, message: 'other browser' }, { 'X-Device-Id': `dev-other-${Date.now()}` });
+    assert.equal(other.status, 200, 'a second device has its own guest budget');
   } finally {
     process.env.DD_DAY_LIMIT_ANON = '10000';
   }

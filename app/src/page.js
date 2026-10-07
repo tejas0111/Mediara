@@ -85,6 +85,68 @@ export function chatPage({ mode }) {
 </body></html>`;
 }
 
+// ---------- landing (GET /) ----------
+// Premium dark hero for Mediara. Server-rendered, zero JS (CSP script-src
+// 'self' holds: no inline <script>). Dynamic numbers are escaped server-side.
+export function landingPage({ mode, demoBlobs, guardCount }) {
+  const blobs = Number.isFinite(Number(demoBlobs)) ? Number(demoBlobs) : 0;
+  const guards = Number.isFinite(Number(guardCount)) ? Number(guardCount) : 0;
+  const modeLabel = mode === 'mainnet' ? 'Walrus Mainnet' : 'Local demo';
+  const demoNote = mode === 'mainnet'
+    ? 'Live on Walrus Mainnet — memories are Seal-encrypted blobs you can verify on walruscan.'
+    : 'Demo runs on a local stand-in (no chain). Set MEMWAL_MODE=mainnet with keys for real Mainnet storage.';
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="description" content="Mediara — a caregiver chatbot that never re-asks a dose.">
+<title>Mediara — never re-asks a dose</title><link rel="icon" href="data:,">
+<style>
+:root{color-scheme:dark;--lbg:#0c0d10;--lsurf:#14151b;--lbrd:rgb(255 255 255/.08);--ltx:#f4f4f5;--lmut:#a1a1aa;--lhi:#fafafa;--llo:#52525b;--lr:12px;--le:cubic-bezier(.32,.72,0,1)}
+*{box-sizing:border-box}body{margin:0;background:var(--lbg);color:var(--ltx);font:15px/1.6 Inter,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit}.skip{position:absolute;left:-9999px;top:0;background:#f4f4f5;color:#0c0d10;padding:8px 14px;border-radius:0 0 10px 0;z-index:100}.skip:focus{left:0}
+.hero{max-width:860px;margin:0 auto;padding:72px 20px 28px;text-align:center}
+.mark{width:52px;height:52px;margin:0 auto 18px;display:flex;align-items:center;justify-content:center;border-radius:16px;background:linear-gradient(135deg,var(--lhi),var(--llo));color:#0c0d10;font-weight:800;font-size:24px}
+.kicker{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--lmut);margin:0 0 10px}
+h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacing:-.03em}
+.promise{margin:0 auto 26px;max-width:52ch;color:var(--lmut);font-size:16px}
+.cta{display:inline-block;background:#f4f4f5;color:#0c0d10;font-weight:650;font-size:15px;padding:11px 26px;border-radius:10px;text-decoration:none;transition:background .15s var(--le)}
+.cta:hover{background:#fff}.cta:focus-visible{outline:2px solid #f4f4f5;outline-offset:3px}
+.ghost{display:inline-block;margin-left:10px;color:var(--lmut);font-size:14px}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:860px;margin:34px auto 0;padding:0 20px;text-align:left}
+.step{background:var(--lsurf);border:1px solid var(--lbrd);border-radius:var(--lr);padding:16px}
+.step b{display:block;font-size:13px;margin-bottom:6px}.step p{margin:0;font-size:13.5px;color:var(--lmut)}
+.strip{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;max-width:860px;margin:26px auto 0;padding:0 20px}
+.pill{font-size:12.5px;font-weight:600;border:1px solid var(--lbrd);border-radius:999px;padding:4px 12px;color:var(--ltx);background:var(--lsurf);font-variant-numeric:tabular-nums}
+.note{max-width:860px;margin:26px auto 0;padding:0 20px 60px;color:var(--lmut);font-size:13px;text-align:center}
+.foot{border-top:1px solid var(--lbrd);padding:18px 20px 34px;text-align:center;color:var(--lmut);font-size:12.5px}
+@media(max-width:640px){.steps{grid-template-columns:1fr}.hero{padding-top:52px}}
+@media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
+@media print{:root{color-scheme:light}body{background:#fff!important;color:#111!important}.hero,.steps,.strip,.note,.foot{color:#111}.step,.pill{background:#fff!important;border-color:#ccc!important}}
+</style></head><body>
+<a class="skip" href="#main">Skip to content</a>
+<main class="hero" id="main">
+<div class="mark" aria-hidden="true">M</div>
+<p class="kicker">Mediara &middot; ${esc(modeLabel)}</p>
+<h1>A caregiver chatbot that never re-asks a dose</h1>
+<p class="promise">Tell it once — meds, allergies, routines — and every future answer is checked against that memory before it speaks.</p>
+<a class="cta" href="/app">Launch app</a><a class="ghost" href="/demo">see Day&nbsp;1 vs Day&nbsp;7</a>
+<div class="steps">
+<div class="step"><b>1 · Teach it once</b><p>Medications with times, allergies, routines — stored as encrypted Walrus blobs, not chat logs.</p></div>
+<div class="step"><b>2 · Guards run first</b><p>Every question is checked for allergy conflicts and drug interactions before any model answers.</p></div>
+<div class="step"><b>3 · Proof, not vibes</b><p>Every STOP cites its blob; the guard ledger is hash-chained and publicly verifiable.</p></div>
+</div>
+<div class="strip" aria-label="Live evidence">
+<span class="pill">12/12 A/B memory checks</span>
+<span class="pill">30/30 eval gate</span>
+<span class="pill">${esc(String(blobs))} demo memories live</span>
+<span class="pill">${esc(String(guards))} guard stops on record</span>
+</div>
+<p class="note">${esc(demoNote)} Guests chat instantly with personal memory — no wallet needed; sign in later for your own vault and a bigger budget.</p>
+</main>
+<footer class="foot">Mediara · built for Walrus Session 8 · Confirm with your doctor — this is not medical advice.</footer>
+</body></html>`;
+}
+
 // ---------- guard-proof ledger ----------
 export function ledgerPage({ mode, entries, verify }) {
   const badge = (b) => (b ? '<span class="pill mainnet"><span class="dot"></span>high</span>' : '<span class="pill local"><span class="dot"></span>moderate</span>');

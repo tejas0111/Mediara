@@ -37,9 +37,13 @@ after(() => {
   try { fs.rmSync(TMPDIR, { recursive: true, force: true }); } catch {}
 });
 
-const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-const get = (p) => fetch(base + p);
-const chat = async (userId, message) => (await post('/api/chat', { userId, message })).json();
+const post = (p, body, headers) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(headers || {}) }, body: JSON.stringify(body) });
+const get = (p, headers) => fetch(base + p, { headers: headers || {} });
+const chat = async (userId, message, headers) => (await post('/api/chat', { userId, message }, headers)).json();
+// Fresh device per test = one browser: anonymous budgets are per-guest
+// (sha256(ip|deviceId)), so tests that assert counts must not share the
+// process-wide 'anon' fallback key with every other request.
+const devH = () => ({ 'X-Device-Id': `dbdev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
 
 // ---- unit: day-budget persist + rollover (dayOverride avoids faking the clock) ----
 test('SQLite usage: day-budget persists across reopen and rolls over on a new day', () => {
@@ -115,9 +119,10 @@ test('SQLite path: demo namespaces hit the 5/day cap even with high DD_DAY_LIMIT
 
 test('SQLite path: /api/dashboard returns the documented shape', async () => {
   const u = `db-dash-${Date.now()}`;
-  await chat(u, 'She is allergic to ibuprofen, causes rash');
-  await chat(u, 'Can she take ibuprofen for her headache?'); // fires the guard
-  const j = await (await get(`/api/dashboard?user=${encodeURIComponent(u)}`)).json();
+  const h = devH();
+  await chat(u, 'She is allergic to ibuprofen, causes rash', h);
+  await chat(u, 'Can she take ibuprofen for her headache?', h); // fires the guard
+  const j = await (await get(`/api/dashboard?user=${encodeURIComponent(u)}`, h)).json();
   assert.equal(j.user, u);
   assert.equal(j.mode, 'local');
   assert.equal(j.demo.userId, 'demo-mom');
@@ -131,7 +136,7 @@ test('SQLite path: /api/dashboard returns the documented shape', async () => {
 });
 
 test('SQLite path: /api/dashboard for an unknown user is honest zeros', async () => {
-  const j = await (await get('/api/dashboard?user=db-ghost-nobody')).json();
+  const j = await (await get('/api/dashboard?user=db-ghost-nobody', devH())).json();
   assert.equal(j.personal.memories, 0);
   assert.equal(j.personal.turns, 0);
   assert.equal(j.personal.guardHits, 0);

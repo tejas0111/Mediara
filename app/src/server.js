@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, rememberWithReceipt, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
-import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage, esc } from './page.js';
+import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage, landingPage, esc } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
@@ -52,6 +52,28 @@ const normalizeUser = (v, fallback = 'demo-mom') => {
 // Namespaces derived from a credential (wallet vault) or a private channel must
 // never be addressable anonymously. Check the NORMALISED namespace.
 const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
+
+// Guests (no wallet, no forced wall) get personal memory keyed to IP+device.
+// The client sends X-Device-Id (persisted UUID in localStorage); the server
+// hashes it with the caller IP into a stable per-browser key:
+//
+//   guestKey = 'guest:' + sha256(ip + '|' + deviceId).slice(0, 12)
+//
+// Usage-ledger keys stay readable: wallet users keep their full `safeUser`,
+// demo namespaces keep the shared `safeUser` (existing demo rules), and every
+// other anonymous caller is budgeted under their `guest:<hash12>`. The device
+// id is client-rotatable (never a security boundary); the IP limiter below it
+// still applies. Demo namespaces are unaffected by device rotation by design.
+function deviceIdFor(req) {
+  const v = req.headers['x-device-id'];
+  const s = Array.isArray(v) ? v[0] : v;
+  const t = String(s == null ? '' : s).trim();
+  return /^[A-Za-z0-9_-]{8,64}$/.test(t) ? t : 'anon';
+}
+function guestKeyFor(req) {
+  const ip = clientKey(req);
+  return 'guest:' + crypto.createHash('sha256').update(`${ip}|${deviceIdFor(req)}`).digest('hex').slice(0, 12);
+}
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 
@@ -183,7 +205,7 @@ app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
 // React SPA bundle (Vite build in app/web/dist, served under /app). Hashed
 // filenames are immutable; index.html is served explicitly at / (never cached).
 const WEB_DIST = path.join(__dirname, '..', 'web', 'dist');
-app.use('/app', express.static(WEB_DIST, { maxAge: '1y', index: false, immutable: true }));
+app.use('/app', express.static(WEB_DIST, { maxAge: '1y', index: false, immutable: true, redirect: false }));
 // 16 KB JSON bodies — chat messages and tx signatures are tiny; anything
 // larger is abuse. (Express's json parser rejects oversize with 413.)
 app.use(express.json({ limit: '16kb' }));
@@ -327,9 +349,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const cap = walletClient
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
       : (DEMO_READONLY.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
+    // Budget identity: wallet users spend as themselves, demo namespaces spend
+    // as the shared demo id (existing demo rules), everyone else spends as
+    // their per-browser guest key — one IP with N browsers gets N budgets.
+    const budgetKey = walletClient || DEMO_READONLY.has(safeUser) ? safeUser : guestKeyFor(req);
     let chk = { ok: true, used: 0, remaining: cap, reset: null };
     try {
-      chk = usage.checkDay(safeUser, cap);
+      chk = usage.checkDay(budgetKey, cap);
     } catch { /* fail open on ledger errors — the IP limiter below still applies */ }
     if (!chk.ok) {
       return res.status(429).json({
@@ -382,7 +408,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       const reply = 'Memory is temporarily unreachable, so I can\u2019t load your memories right now — please retry shortly. Nothing was answered from memory.';
       rememberTurn(nsKey, 'user', message);
       rememberTurn(nsKey, 'assistant', reply);
-      usage.touchUser(safeUser, { turn: true });
+      usage.touchUser(budgetKey, { turn: true });
       return res.json({
         reply, recalled: [], recalledMeta: [], memoryScope: identity.ns,
         identity: identity.kind, savedBlob: null, memoryPersisted: null,
@@ -499,7 +525,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Usage evidence: only REAL chat turns and only blobs Walrus actually
     // returned are counted — `npm run stats` reads this same ledger.
-    usage.touchUser(safeUser, { turn: true });
+    usage.touchUser(budgetKey, { turn: true });
     if (saved?.blob_id) usage.recordMemory(safeUser, { blobId: saved.blob_id, text: message });
 
     res.json({
@@ -558,14 +584,31 @@ app.get('/memory', readLimiter, async (req, res) => {
   } catch (e) { console.error('page error:', String((e && e.message) || e).slice(0, 200)); res.status(500).send('<pre>Something went wrong loading this page. Please retry.</pre>'); }
 });
 
+// Landing at / (server-rendered premium dark hero, zero JS) + the React SPA
+// at /app (vite base '/app/'; hash routing means /app + static /app/* cover
+// every view). Legacy compat routes (/memory, /demo, /print, …) untouched.
 app.get('/', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    let demoBlobs = 0, guardCount = 0;
+    try { demoBlobs = usage.snapshot('demo-mom').memories || 0; } catch { /* evidence best-effort */ }
+    try { guardCount = guardProof.entries.length || 0; } catch { /* evidence best-effort */ }
+    res.send(landingPage({ mode: MODE, demoBlobs, guardCount }));
+  } catch {
+    res.send(chatPage({ mode: MODE }));
+  }
+});
+
+function sendSpa(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   try {
     res.send(fs.readFileSync(path.join(WEB_DIST, 'index.html'), 'utf8'));
   } catch {
     res.send(chatPage({ mode: MODE }));
   }
-});
+}
+app.get('/app', sendSpa);
+app.get('/app/*', sendSpa);
 
 app.get('/demo', readLimiter, async (req, res) => {
   // LIVE before/after: same question, real recall against two namespaces.
@@ -728,12 +771,19 @@ app.get('/api/dashboard', readLimiter, async (req, res) => {
     if (!view) return;
     const { userId, mode } = view;
     const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
+    const isDemoNs = ['demo-mom', 'demo-day7', 'demo-day1'].includes(userId);
     const cap = view.isVault
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
-      : (['demo-mom', 'demo-day7', 'demo-day1'].includes(userId) ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
+      : (isDemoNs ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
+    // Same budget identity as /api/chat: vault + demo namespaces spend as the
+    // user id, anonymous guests spend as their per-browser guest key. The
+    // personal turn/budget readout follows the SAME key (a guest sees their
+    // own activity); blob evidence stays keyed by namespace (recordMemory
+    // uses safeUser, so /api/usage + stats attribution is unchanged).
+    const budgetKey = (view.isVault || isDemoNs) ? userId : guestKeyFor(req);
     let chk = { ok: true, used: 0, remaining: cap, reset: null };
-    try { chk = usage.checkDay(userId, cap); } catch { /* fail open — budget unknown, not fatal */ }
-    const snap = usage.snapshot(userId);
+    try { chk = usage.checkDay(budgetKey, cap); } catch { /* fail open — budget unknown, not fatal */ }
+    const snap = usage.snapshot(budgetKey);
     // guardHits works on both store impls (SQLite has countByUser; the JSON
     // ledger is filtered from list()).
     const guardHits = typeof guardProof.countByUser === 'function'

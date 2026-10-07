@@ -68,14 +68,17 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
 
       {step === 'connect' ? (
         <div className="stack">
+          <p className="eyebrow">Step 1 of 4 · Connect</p>
           <p className="soon-copy" style={{ marginTop: 0 }}>
             Connect your Sui wallet to unlock your private memory vault.
-            Everything else — signing in, vault setup — follows right here.
+            Signing in and vault setup follow right here — skip anytime and
+            keep chatting as a guest.
           </p>
           <div className="btn-row">
             <ConnectButton connectText="Connect Sui wallet" />
           </div>
           <FieldHint>No wallet yet? Install Slush (slush.app), then come back.</FieldHint>
+          {error ? <Alert variant="danger" role="alert">{error}</Alert> : null}
           <div className="btn-row">
             <Button size="sm" onClick={onClose}>Skip for now</Button>
           </div>
@@ -84,23 +87,25 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
 
       {step === 'sign' ? (
         <div className="stack">
+          <p className="eyebrow">Step 2 of 4 · Sign in</p>
           <p className="soon-copy" style={{ marginTop: 0 }}>
             Signing as <span className="mono">{account ? shortAddr(account.address) : ''}</span> —
             a free message that proves ownership. No gas, no transaction.
           </p>
           <div className="btn-row">
-            <Button variant="primary" onClick={() => void signIn()} disabled={busy || !account}>
+            <Button variant="primary" onClick={() => void signIn()} disabled={busy || !account} aria-busy={busy}>
               {busy ? 'Check your wallet…' : 'Sign message'}
             </Button>
-            <Button size="sm" onClick={onClose}>Skip for now</Button>
+            <Button size="sm" onClick={onClose} disabled={busy}>Skip for now</Button>
           </div>
           {busy ? <FieldHint>Approve the signature request in your wallet.</FieldHint> : null}
-          {error ? <Alert variant="danger">{error}</Alert> : null}
+          {error ? <Alert variant="danger" role="alert">{error}</Alert> : null}
         </div>
       ) : null}
 
       {step === 'setup' ? (
         <div className="stack">
+          <p className="eyebrow">Step 3 of 4 · Vault</p>
           <p className="soon-copy" style={{ marginTop: 0 }}>
             You&apos;re signed in. Your private vault needs a
             one-time setup — two mainnet transactions, you pay gas.
@@ -115,6 +120,7 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
 
       {step === 'done' ? (
         <div className="stack">
+          <p className="eyebrow">Step 4 of 4 · Chat</p>
           <p className="signed-line"><IconCheck /> Vault ready — your chats now save to your own memory.</p>
           <div className="btn-row">
             <Button variant="primary" onClick={onClose}>Back to chat</Button>

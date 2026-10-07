@@ -18,6 +18,28 @@ export class ApiError extends Error {
 // Persisted in localStorage under `ddApiBase`.
 const API_BASE_KEY = 'ddApiBase';
 
+// Guest identity: stable per-browser device id (persisted UUID, created on
+// first run). Sent as X-Device-Id on every req(); the server hashes it with
+// the caller IP into `guest:<hash12>` for the anonymous day budget — guests
+// get personal memory with no wallet and no forced wall.
+const DEVICE_KEY = 'ddDeviceId';
+
+export function getDeviceId(): string {
+  try {
+    let v = localStorage.getItem(DEVICE_KEY);
+    if (!v || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) {
+      const c = typeof crypto !== 'undefined' ? (crypto as unknown as { randomUUID?: () => string }) : null;
+      v = c?.randomUUID
+        ? c.randomUUID().replace(/-/g, '')
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
+      localStorage.setItem(DEVICE_KEY, v);
+    }
+    return v;
+  } catch {
+    return 'anon';
+  }
+}
+
 export function getApiBase(): string {
   try {
     return localStorage.getItem(API_BASE_KEY) || '';
@@ -59,7 +81,7 @@ export async function checkHealth(base?: string): Promise<HealthResult> {
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${getApiBase()}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}), 'X-Device-Id': getDeviceId() },
   });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new ApiError(r.status, String((body as { error?: unknown }).error || `request failed (${r.status})`), body as Record<string, unknown>);
