@@ -146,6 +146,10 @@ function AssistantBody({ msg, mode }: { msg: ChatMsg; mode: 'local' | 'mainnet' 
   return <p className="asst-text">{text}</p>;
 }
 
+function guardFired(m: ChatMsg): boolean {
+  return m.text.startsWith('STOP') || m.text.startsWith('CAUTION');
+}
+
 export default function ChatView(props: ChatViewProps) {
   const { userId, memoryOn, active } = props;
   const [models, setModels] = React.useState<string[]>([]);
@@ -325,16 +329,18 @@ export default function ChatView(props: ChatViewProps) {
             ) : (
               <div key={m.id} className="row row-asst">
                 <div className="asst-card">
-                  <AssistantBody msg={m} mode={mode} />
+                  {/* Claude order: verdict first on a guard fire (never bury a
+                      STOP), reasoning first otherwise — thinking before text. */}
+                  {guardFired(m) ? <AssistantBody msg={m} mode={mode} /> : null}
                   {m.thinking && m.thinking.length > 0 ? (
                     <details
                       className="think"
-                      open={(m.text.startsWith('STOP') || m.text.startsWith('CAUTION')) || undefined}
+                      open={guardFired(m) || undefined}
                     >
                       <summary>How I decided ({m.thinking.length} steps)</summary>
                       <ol>
                         {m.thinking.map((t, i) => (
-                          <li key={i}>
+                          <li key={i} style={{ '--i': i } as React.CSSProperties}>
                             <strong>{t.label}.</strong> <span>{t.detail}</span>
                           </li>
                         ))}
@@ -356,6 +362,7 @@ export default function ChatView(props: ChatViewProps) {
                       ) : null}
                     </details>
                   ) : null}
+                  {guardFired(m) ? null : <AssistantBody msg={m} mode={mode} />}
                   <p className={cn('saved', m.savedBlob ? 'saved-yes' : 'saved-no')}>
                     {m.savedBlob
                       ? `Saved to memory · blob ${shortBlob(m.savedBlob) ?? m.savedBlob}`

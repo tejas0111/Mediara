@@ -356,11 +356,18 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Strip control chars/newlines before the id is used as a namespace or a
     // stored fact label — otherwise it is a stored-prompt-injection primitive.
     const safeUser = normalizeUser(userId, 'anon');
+    // Demo chat is ALWAYS the shared demo namespace: anyone asking in demo-mom
+    // reads premade memory. A signed-in vault owner is NOT switched to their
+    // vault here (that hijack answered demo questions from an empty vault),
+    // and NOBODY writes into the shared demo — teachings belong in personal
+    // Chat, which is the only writer. Budget identity below is unchanged.
+    const demoShared = DEMO_PUBLIC.has(safeUser);
     // Identity: signed-in onboarded wallet user → their OWN MemWal account
-    // (delegate client). Everyone else → the shared anonymous channel
-    // (agent account on mainnet / local stand-in in dev). Never mixed.
+    // (delegate client). Everyone else, plus every demo turn, → the shared
+    // anonymous channel (agent account on mainnet / local stand-in in dev).
+    // Never mixed.
     const sess = sessionFromReq(req);
-    const walletClient = sess ? userClientFor(sess.address) : null;
+    const walletClient = (sess && !demoShared) ? userClientFor(sess.address) : null;
     // An expired session must NOT silently fall through to the shared channel —
     // that would write a signed-in user's private facts to a public namespace.
     if (!sess && hasSessionCookie(req)) {
@@ -368,14 +375,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Never silently downgrade a signed-in user to the shared channel — that would
     // write their private health facts into a world-readable namespace. Fail loud.
-    if (sess && !walletClient) {
+    // (Demo turns never reach this branch: demoShared bypasses the vault above.)
+    if (sess && !walletClient && !demoShared) {
       return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
     }
-    // Shared demo namespaces are READ-ONLY for anonymous callers: anyone may
-    // ask (recall + guards run), but nobody without a wallet vault can write
-    // into the premade demo memory. Signed-in vault writes are unaffected.
-    const DEMO_READONLY = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
-    const demoReadonly = !walletClient && DEMO_READONLY.has(safeUser);
+    // Shared demo namespaces are READ-ONLY for everyone: anyone may ask
+    // (recall + guards run on premade memory), but nobody writes into the
+    // premade demo — personal Chat is the only writer.
+    const demoReadonly = DEMO_PUBLIC.has(safeUser);
     // Rolling budget gate: DEMO + ANON channels roll on a 24h sliding window
     // (per-key turn timestamps, last 50 kept) so one user cannot burn the
     // shared OpenRouter/Walrus budget (free tiers are rate-limited upstream).
@@ -391,11 +398,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
     const cap = walletClient
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
-      : (DEMO_READONLY.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
+      : (DEMO_PUBLIC.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
     // Budget identity: wallet users spend as themselves, demo namespaces spend
     // as the shared demo id (existing demo rules), everyone else spends as
     // their per-browser guest key — one IP with N browsers gets N budgets.
-    const budgetKey = walletClient || DEMO_READONLY.has(safeUser) ? safeUser : guestKeyFor(req);
+    const budgetKey = walletClient || DEMO_PUBLIC.has(safeUser) ? safeUser : guestKeyFor(req);
     // Wallet stays on the UTC-day bucket; demo + anon roll on the 24h window.
     const budgetMode = walletClient ? { mode: 'daily' } : undefined;
     const nextUtcMidnightIso = () => {
@@ -412,7 +419,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       return res.status(429).json({
         error: walletClient
           ? `You've used your ${cap} daily messages — limit resets at UTC midnight.`
-          : DEMO_READONLY.has(safeUser)
+          : DEMO_PUBLIC.has(safeUser)
             ? `You've used your ${cap} demo messages — sign in with your Sui wallet for a bigger budget and your own vault.`
             : `You've used your ${cap} guest messages — sign in with your Sui wallet for a bigger budget and your own vault.`,
         loginRequired: !walletClient,
@@ -545,7 +552,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (memoryOff) {
       thinking.push({ label: 'Memory write', detail: 'Skipped (memory off for this turn).' });
     } else if (demoReadonly) {
-      thinking.push({ label: 'Memory write', detail: 'Skipped — the shared demo is read-only. Sign in with your Sui wallet to save your own memories.' });
+      thinking.push({ label: 'Memory write', detail: 'Skipped — the shared demo is read-only for everyone. Teach me in personal Chat to save your own memories.' });
     } else if (conflict || interaction) {
       thinking.push({ label: 'Memory write', detail: 'Skipped — a fired guard means this turn is never stored as a fact.' });
     } else if (!shouldRemember(message)) {

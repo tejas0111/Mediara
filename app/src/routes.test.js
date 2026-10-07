@@ -129,6 +129,21 @@ test('signed-in vault owners still reach the public demo by name', async () => {
   assert.equal(j.personal.budget.cap, 10, 'demo cap applies, not the wallet cap');
 });
 
+test('demo chat stays shared for signed-in vault owners (no vault hijack)', async () => {
+  // Regression: a signed-in owner chatting in demo-mom read their OWN (often
+  // empty) vault instead of premade memory. Demo turns always use the shared
+  // channel now, and nobody writes into the shared demo.
+  const { issueSession } = await import('./walletAuth.js');
+  const addr = '0x' + 'ce'.repeat(32);
+  const h = { Cookie: `dd_session=${issueSession(addr)}`, 'X-Device-Id': `dev-demohijack-${Date.now()}` };
+  const r = await post('/api/chat', { userId: 'demo-mom', message: 'What do you remember about her?' }, h);
+  assert.equal(r.status, 200, 'demo turn answers on the shared channel, never 409');
+  const j = await r.json();
+  assert.equal(j.identity, 'shared-anon', 'demo turns never take the wallet identity');
+  assert.equal(j.memoryScope, 'user-demo-mom', 'demo turns read the shared demo namespace');
+  assert.equal(j.savedBlob, null, 'demo turns never write into the shared demo');
+});
+
 test('fail-loud identity: expired/garbage cookie -> 401 on chat AND reads', async () => {
   const h = { Cookie: 'dd_session=garbage.token' };
   assert.equal((await post('/api/chat', { userId: 'x', message: 'hello there' }, h)).status, 401);

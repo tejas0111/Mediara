@@ -216,6 +216,7 @@ test('SPA surfaces a dead vault delegate as re-link, not retry-soon', () => {
   assert.ok(mem.includes('authFailure'), 'recall layer tags 401-class rejections for the route');
   assert.ok(mem.includes('shouldResearch'), 'agent research gate lives in the memory layer');
   assert.ok(server.includes("label: 'Research'") && server.includes('webSearch'), 'chat route runs the bounded research tool with a trace step');
+  assert.ok(wread('src/ChatView.css').includes('step-in') && c.includes('--i'), 'reasoning steps cascade in progressively');
 });
 test('SPA fresh-start path for retired-deployment vaults', () => {
   const ob = fs.readFileSync(path.join(__dirname, 'onboarding.js'), 'utf8');

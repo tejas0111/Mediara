@@ -94,7 +94,7 @@ function DemoBanner() {
         if (!live) return;
         setLabel(
           cap !== null && used !== null
-            ? `Shared demo · ${used}/${cap} guest chats used today`
+            ? `Shared demo · ${used}/${cap} guest chats used today · read-only`
             : 'Shared demo · guests get personal budgets',
         );
       } catch {

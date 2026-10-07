@@ -225,6 +225,11 @@
 .think > summary::before { content: "+"; font-weight: 700; }
 .think[open] > summary::before { content: "\2013"; }
 .think ol { margin: 8px 0 4px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+/* Claude-style progressive disclosure: steps cascade in one by one when the
+   message lands (stagger via --i). Real completed steps animating in — never
+   fake progress. Reduced-motion below collapses this to instant. */
+.think li { animation: step-in 0.3s var(--ease) both; animation-delay: calc(var(--i, 0) * 110ms); }
+@keyframes step-in { from { opacity: 0; transform: translateY(5px); } }
 .think li strong { font-weight: 650; }
 .think li span { color: var(--text-2); overflow-wrap: anywhere; }
 
