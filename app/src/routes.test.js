@@ -385,3 +385,12 @@ test('demo gate caps anonymous turns with a login prompt', async () => {
     process.env.DD_DEMO_LIMIT = '10000';
   }
 });
+
+test('shared demo namespaces are read-only for anonymous writers', async () => {
+  const r = await post('/api/chat', { userId: 'demo-mom', message: 'She takes calcium at 9am' });
+  assert.equal(r.status, 200, 'reads still answer');
+  const j = await r.json();
+  assert.equal(j.savedBlob, null, 'anonymous demo write refused');
+  assert.ok((j.thinking || []).some((s) => s.label === 'Memory write' && /read-only/i.test(s.detail)), 'trace says read-only');
+  assert.ok(typeof j.reply === 'string' && j.reply.length > 0, 'read path still answers');
+});

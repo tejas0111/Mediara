@@ -1,6 +1,7 @@
 import React from 'react';
 import ChatView from './ChatView';
 import WalletView from './WalletView';
+import WalletModal from './WalletModal';
 import MemoryView from './views/MemoryView';
 import DemoView from './views/DemoView';
 import ReplayView from './views/ReplayView';
@@ -101,6 +102,7 @@ export default function App() {
   const DEFAULT_MAINNET_URL = 'https://cannon-followed-offers-chubby.trycloudflare.com';
   const [mainnetLive, setMainnetLive] = React.useState(false);
   const [comingOpen, setComingOpen] = React.useState(false);
+  const [wmodal, setWmodal] = React.useState(false);
   const [comingNote, setComingNote] = React.useState<string | null>(null);
   // dAppKit wallet connection (client-side) vs server session (signed-in):
   // no wallet = ConnectButton opens the chooser modal directly,
@@ -503,7 +505,7 @@ export default function App() {
                 size="sm"
                 className="wallet-btn"
                 aria-label={`Sui wallet ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)} connected — sign in`}
-                onClick={() => navigate('wallet')}
+                onClick={() => setWmodal(true)}
               >
                 <IconWallet />
                 <span className="wallet-label">Sign in</span>
@@ -531,6 +533,7 @@ export default function App() {
               pushMsg={pushMsg}
               onMode={handleMode}
               onSwitchUser={(id) => { setDraftId(id); setUserId(id); navigate('chat'); }}
+              onSignIn={() => setWmodal(true)}
             />
           ) : view === 'wallet' ? (
             <WalletView userId={userId} onAuth={() => void refreshWallet()} />
@@ -566,6 +569,9 @@ export default function App() {
             </Button>
           </div>
         </Dialog>
+      ) : null}
+      {wmodal ? (
+        <WalletModal onClose={() => setWmodal(false)} onAuth={() => void refreshWallet()} />
       ) : null}
       {acctOpen ? (
         <Dialog title="Account" onClose={() => setAcctOpen(false)}>
@@ -613,7 +619,7 @@ export default function App() {
             </Badge>
             <Button
               size="sm"
-              onClick={() => { void handleSignOut(); }}
+              onClick={() => { if (wallet?.signedIn) { void handleSignOut(); } else { setAcctOpen(false); setWmodal(true); } }}
             >
               {wallet?.signedIn ? 'Sign out' : 'Sign in'}
             </Button>

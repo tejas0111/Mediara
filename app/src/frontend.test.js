@@ -183,3 +183,11 @@ test('SPA demo gate: login prompt + one-click demo switch', () => {
   assert.ok(c.includes('Explore the demo'), 'demo entry chip exists');
   assert.ok(wread('src/api.ts').includes('loginRequired') || wread('src/api.ts').includes('data: Record'), '429 body survives on ApiError');
 });
+
+test('SPA wallet modal guides connect -> sign -> vault -> chat', () => {
+  const m = wread('src/WalletModal.tsx');
+  assert.ok(m.includes('useSignPersonalMessage') && m.includes('authVerify'), 'modal signs the server challenge');
+  assert.ok(m.includes('Back to chat') && m.includes('Skip for now'), 'skippable, always lands in chat');
+  const app = wread('src/App.tsx');
+  assert.ok(app.includes('setWmodal(true)'), 'topbar/account/login-card open the modal, not a page hop');
+});

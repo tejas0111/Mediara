@@ -23,6 +23,7 @@ export interface ChatViewProps {
   newSession: () => string;
   pushMsg: (sessionId: string, msg: ChatMsg) => void;
   onSwitchUser?: (userId: string) => void;
+  onSignIn?: () => void;
   onMode?: (mode: 'local' | 'mainnet') => void;
 }
 
@@ -315,7 +316,7 @@ export default function ChatView(props: ChatViewProps) {
         <Alert variant="warn" className="send-error" role="alert">
           <span><strong>Demo limit reached (5 messages).</strong> Sign in with your Sui wallet to keep chatting in your own vault — or keep exploring the premade demo, no teaching needed.</span>
           <span className="btn-row">
-            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(false); window.location.hash = '#/wallet'; }}>Sign in</Button>
+            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(false); if (props.onSignIn) props.onSignIn(); else window.location.hash = '#/wallet'; }}>Sign in</Button>
             <Button size="sm" onClick={() => { setNeedLogin(false); props.onSwitchUser?.('demo-mom'); }}>Explore the demo</Button>
           </span>
         </Alert>

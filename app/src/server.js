@@ -262,6 +262,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (sess && !walletClient) {
       return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
     }
+    // Shared demo namespaces are READ-ONLY for anonymous callers: anyone may
+    // ask (recall + guards run), but nobody without a wallet vault can write
+    // into the premade demo memory. Signed-in vault writes are unaffected.
+    const DEMO_READONLY = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
+    const demoReadonly = !walletClient && DEMO_READONLY.has(safeUser);
     // Demo gate: the anonymous shared channel is capped (default 5 turns per
     // user id) so drive-by traffic cannot burn the LLM budget. Wallet vault
     // users bypass it — and judges keep a ready-made demo namespace either way.
@@ -362,12 +367,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     let saved = null, memoryPersisted = null;
     if (memoryOff) {
       thinking.push({ label: 'Memory write', detail: 'Skipped (memory off for this turn).' });
+    } else if (demoReadonly) {
+      thinking.push({ label: 'Memory write', detail: 'Skipped — the shared demo is read-only. Sign in with your Sui wallet to save your own memories.' });
     } else if (conflict || interaction) {
       thinking.push({ label: 'Memory write', detail: 'Skipped — a fired guard means this turn is never stored as a fact.' });
     } else if (!shouldRemember(message)) {
       thinking.push({ label: 'Memory write', detail: 'Skipped — not a durable fact (chit-chat, question, or no save signal).' });
     }
-    if (!memoryOff && !conflict && !interaction && shouldRemember(message)) {
+    if (!memoryOff && !demoReadonly && !conflict && !interaction && shouldRemember(message)) {
       memoryPersisted = false;
       try {
         // Dedup: skip a write only when it is near-identical to an existing fact.
