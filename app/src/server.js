@@ -267,24 +267,30 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // into the premade demo memory. Signed-in vault writes are unaffected.
     const DEMO_READONLY = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
     const demoReadonly = !walletClient && DEMO_READONLY.has(safeUser);
-    // Demo gate: the anonymous shared channel is capped (default 5 turns per
-    // user id) so drive-by traffic cannot burn the LLM budget. Wallet vault
-    // users bypass it — and judges keep a ready-made demo namespace either way.
-    // DD_DEMO_LIMIT=0 disables the cap (local dev); tests raise it.
-    if (!walletClient) {
-      const demoLimit = Number(process.env.DD_DEMO_LIMIT) > 0 ? Number(process.env.DD_DEMO_LIMIT) : (process.env.DD_DEMO_LIMIT === '0' ? Infinity : 5);
-      let turns = 0;
-      try {
-        const snap = usage.snapshot(safeUser);
-        turns = Number(snap?.turns || 0);
-      } catch { /* fail open on ledger errors — the limiter below still applies */ }
-      if (turns >= demoLimit) {
-        return res.status(429).json({
-          error: 'Demo limit reached (5 messages on the shared channel) — sign in with your Sui wallet to keep chatting with your own vault.',
-          loginRequired: true,
-          demoUser: 'demo-mom',
-        });
-      }
+    // Daily budget gate: per-user rolling-UTC-day window so one user cannot
+    // burn the shared OpenRouter/Walrus budget (free tiers are rate-limited
+    // upstream). Anonymous shared channel: DD_DAY_LIMIT_ANON (default 20).
+    // Signed-in vault users: DD_DAY_LIMIT_WALLET (default 200). Judges keep
+    // the ready-made demo namespace either way; the demo namespaces stay
+    // read-only for anonymous writers regardless of budget.
+    // NOTE: current spend is $0 (sponsored writes + free models) — this gate
+    // guards rate, not money. User-pays billing is a future decision, see docs.
+    const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
+    const cap = walletClient ? dayCap('DD_DAY_LIMIT_WALLET', 200) : dayCap('DD_DAY_LIMIT_ANON', 20);
+    let chk = { ok: true, used: 0, remaining: cap, reset: null };
+    try {
+      chk = usage.checkDay(safeUser, cap);
+    } catch { /* fail open on ledger errors — the IP limiter below still applies */ }
+    if (!chk.ok) {
+      return res.status(429).json({
+        error: walletClient
+          ? `Daily budget used (${cap} chats/day) — resets UTC midnight.`
+          : `Daily demo budget used (${cap} chats/day on the shared channel) — sign in with your Sui wallet for a bigger budget and your own vault.`,
+        loginRequired: !walletClient,
+        demoUser: 'demo-mom',
+        remaining: 0,
+        resetsAt: chk.reset,
+      });
     }
     // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
     // must never be able to name one. Reserve the prefix for wallet sessions.

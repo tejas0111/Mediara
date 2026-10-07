@@ -85,7 +85,12 @@ export class UsageTracker {
       rec = { firstSeen: new Date().toISOString(), lastSeen: null, turns: 0, memories: new Map() };
       this.users.set(u, rec);
     }
-    if (turn) rec.turns += 1;
+    if (turn) {
+      rec.turns += 1;
+      const today = UsageTracker.todayStr();
+      if (!rec.day || rec.day.date !== today) rec.day = { date: today, count: 1 };
+      else rec.day = { date: today, count: Number(rec.day.count || 0) + 1 };
+    }
     rec.lastSeen = new Date().toISOString();
     this.#save();
   }
@@ -104,6 +109,35 @@ export class UsageTracker {
     return !had;
   }
 
+  // Rolling-day budget: abuse protection for the LLM + Walrus write path.
+  // Spend today is $0 (sponsored Walrus writes + free OpenRouter models), so
+  // these caps guard RATE (upstream throttles, relayer fairness), not money.
+  // Stored on the user record ({...rec} spread persists it automatically);
+  // rows written before this feature simply have no `day` and start at 0.
+  static todayStr(d = new Date()) {
+    return d.toISOString().slice(0, 10); // UTC day bucket
+  }
+  checkDay(userId, cap) {
+    const u = String(userId || '').slice(0, 64);
+    const today = UsageTracker.todayStr();
+    const rec = this.users.get(u);
+    const used = rec && rec.day && rec.day.date === today ? Number(rec.day.count || 0) : 0;
+    return used < cap
+      ? { ok: true, used, remaining: cap - used, reset: today }
+      : { ok: false, used, remaining: 0, reset: today };
+  }
+  noteDay(userId) {
+    const u = String(userId || '').slice(0, 64);
+    if (!u) return;
+    let rec = this.users.get(u);
+    if (!rec) {
+      rec = { firstSeen: new Date().toISOString(), lastSeen: null, turns: 0, memories: new Map() };
+      this.users.set(u, rec);
+    }
+    const today = UsageTracker.todayStr();
+    if (!rec.day || rec.day.date !== today) rec.day = { date: today, count: 1 };
+    else rec.day = { date: today, count: Number(rec.day.count || 0) + 1 };
+  }
   snapshot(userId) {
     const id = String(userId);
     const rec = this.users.get(id);
