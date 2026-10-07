@@ -215,15 +215,20 @@
 .think li strong { font-weight: 650; }
 .think li span { color: var(--text-2); overflow-wrap: anywhere; }
 
-/* free-only model picker */
-.chat-bar { display: flex; align-items: center; gap: 8px; padding: 10px 20px 0; max-width: 780px; width: 100%; margin: 0 auto; }
-.model-pick { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-weight: 600; min-width: 0; }
-.model-pick select {
-  border: 1px solid var(--border); background: var(--surface); color: var(--text);
-  border-radius: 8px; padding: 5px 8px; font-size: 13px; max-width: min(420px, 52vw);
-  text-overflow: ellipsis;
-}
-.free-note { font-size: 11.5px; font-weight: 700; color: var(--ok); background: var(--ok-soft); border: 1px solid var(--ok-border); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 
 /* demo entry chip: first, distinct, honest */
 .chip-demo { border-color: var(--text); font-weight: 650; }
+
+/* model picker lives inside the composer box */
+.composer { flex-direction: column; align-items: stretch; gap: 8px; }
+.composer-bar { display: flex; align-items: center; gap: 8px; }
+.model-pick { display: flex; align-items: center; min-width: 0; }
+.model-pick select {
+  border: 1px solid transparent; background: transparent; color: var(--muted);
+  border-radius: 8px; padding: 4px 6px; font-size: 12.5px; font-weight: 600;
+  max-width: min(200px, 40vw); text-overflow: ellipsis; cursor: pointer;
+}
+.model-pick select:hover { border-color: var(--border); color: var(--text); }
+.model-pick select:focus-visible { border-color: var(--text); color: var(--text); }
+.composer-bar .count { margin-left: auto; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

@@ -170,9 +170,10 @@ test('SPA renders the reasoning trace per reply', () => {
   assert.ok(wread('src/api.ts').includes('thinking: ThinkStep[]'), 'typed trace in the client');
 });
 
-test('SPA model picker is free-only with persisted choice', () => {
+test('SPA model picker lives in the composer with clean names', () => {
   const c = wread('src/ChatView.tsx');
-  assert.ok(c.includes('Answer model (free only)') && c.includes('free only'), 'picker labelled free-only');
+  assert.ok(c.includes('composer-bar') && c.includes('prettyModel'), 'picker inside the chat box, prettified');
+  assert.ok(!c.includes('free only') && !c.includes('· free'), 'no free-tier wording in the UI');
   assert.ok(c.includes('ddModel') || wread('src/api.ts').includes('ddModel'), 'choice persisted');
   assert.ok(wread('src/api.ts').includes('/api/models'), 'list sourced from the server registry');
 });

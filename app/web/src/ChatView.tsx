@@ -29,6 +29,21 @@ export interface ChatViewProps {
 
 const MAX_LEN = 500;
 
+// Clean display names for model ids (e.g. google/gemma-4-31b-it:free -> Gemma 4 31B).
+export function prettyModel(id: string): string {
+  if (id === 'openrouter/free') return 'Auto';
+  const base = id.split('/').pop() ?? id;
+  const parts = base.replace(/:free$/i, '').split('-').filter((p) => !/^(it|free|preview)$/i.test(p));
+  const words = parts.map((p) => {
+    const low = p.toLowerCase();
+    const alias: Record<string, string> = { gemma: 'Gemma', nemotron: 'Nemotron', ling: 'Ling', apodex: 'Apodex', dots: 'Dots', liquid: 'Liquid', lfm: 'LFM', thinkingmachines: 'Thinking Machines', inkling: 'Inkling', poolside: 'Poolside', laguna: 'Laguna', cohere: 'Cohere', north: 'North', nvidia: 'Nvidia', google: 'Google', qwen: 'Qwen', deepseek: 'DeepSeek', meta: 'Meta', mistral: 'Mistral', xiaomi: 'Xiaomi', minimax: 'MiniMax', tng: 'TNG', arcee: 'Arcee', zhipu: 'Zhipu', glm: 'GLM' };
+    if (/^[a-z]*\d[\w.]*$/i.test(p) && /[a-z]/i.test(p)) return p.toUpperCase();
+    if (/^[vV]?\d/.test(p)) return p.toUpperCase();
+    return alias[low] ?? p.charAt(0).toUpperCase() + p.slice(1);
+  });
+  return words.join(' ').replace(/\s+/g, ' ').trim() || id;
+}
+
 const SUGGESTIONS = [
   'My mom is allergic to penicillin',
   'She takes metformin at 8am every day',
@@ -192,7 +207,7 @@ export default function ChatView(props: ChatViewProps) {
       setLastFailed(text);
       setNeedLogin(e instanceof ApiError && e.status === 429 && (e as ApiError).data?.loginRequired === true);
       setError(status === 503
-        ? `Server is degraded right now (503): ${msg}. Your message was not answered — nothing was saved for this turn.`
+        ? `Server is degraded right now: ${msg}. Your message was not answered.`
         : `Send failed${status ? ` (${status})` : ''}: ${msg}`);
     } finally {
       setPending(false);
@@ -212,22 +227,6 @@ export default function ChatView(props: ChatViewProps) {
           Memory is off — I will answer without saving or recalling. Turn memory on to keep facts for {userId}.
         </Alert>
       ) : null}
-      <div className="chat-bar">
-        <label className="model-pick">
-          <span>Model</span>
-          <select
-            value={model}
-            onChange={(e) => { setModel(e.target.value); saveModel(e.target.value); }}
-            aria-label="Answer model (free only)"
-          >
-            {models.length === 0 ? <option value="">Loading…</option> : null}
-            {models.map((m) => (
-              <option key={m} value={m}>{m.replace(':free', ' · free')}</option>
-            ))}
-          </select>
-        </label>
-        <span className="free-note">free only</span>
-      </div>
       <div className="chat-list" ref={listRef} role="log" aria-label="Conversation" aria-live="polite">
         {empty ? (
           <div className="greet">
@@ -355,7 +354,21 @@ export default function ChatView(props: ChatViewProps) {
             }
           }}
         />
-        <div className="composer-side">
+        <div className="composer-bar">
+          <label className="model-pick">
+            <span className="sr-only">Answer model</span>
+            <select
+              value={model}
+              onChange={(e) => { setModel(e.target.value); saveModel(e.target.value); }}
+              aria-label="Answer model"
+              title="Answer model"
+            >
+              {models.length === 0 ? <option value="">Loading…</option> : null}
+              {models.map((m) => (
+                <option key={m} value={m}>{prettyModel(m)}</option>
+              ))}
+            </select>
+          </label>
           <span className="count" aria-label={`${input.length} of ${MAX_LEN} characters`}>
             {input.length}/{MAX_LEN}
           </span>
