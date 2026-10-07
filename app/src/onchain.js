@@ -2,12 +2,15 @@
 // Visitors create their own MemWalAccount with their wallet (user-funded);
 // our delegate key is registered so the server can recall/remember for them.
 //
-// IDs verified on mainnet (Sept 2026):
-//   registry (current):  0x0da982cefa26864ae834a8a0504b904233d49e20fcc17c373c8bed99c75a7edd
-//   package (current):   0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd50958a24c6
-//   package (original):  0xe7c16fbea0560e7057e2bf7422feaa4fb313749fc69c9e9092fac7a33b81d7f5
-//     — MemWalAccount objects created earlier still carry the ORIGINAL package
+// IDs verified on mainnet (Oct 2026 — the deployment migrated; the relayer
+// /config is authoritative for the CURRENT package):
+//   registry (current):  0x8bf82c9e09e36b8d1c38298f68b7cb68e7b8762887e7592add9986d5e9cf199f
+//   package (current):   0xe7c16fbea0560e7057e2bf7422feaa4fb313749fc69c9e9092fac7a33b81d7f5
+//   package (retired):   0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd50958a24c6
+//     — MemWalAccount objects created earlier still carry the RETIRED package
 //       ID in their type, so AccountCreated events exist under BOTH packages.
+//       Retired-typed accounts CANNOT be used with current-package entry
+//       functions (Move type check) — their owners must create fresh.
 //
 // Transport: SuiGraphQLClient. (The gRPC client in @mysten/sui 2.31.3 fails
 // even trivial tx builds here; the GraphQL client builds + executes fine.)
@@ -18,9 +21,9 @@ import { Transaction } from '@mysten/sui/transactions';
 import { SuiGraphQLClient } from '@mysten/sui/graphql';
 
 const GRAPHQL_URL = process.env.SUI_GRAPHQL_URL || 'https://graphql.mainnet.sui.io/graphql';
-export const REGISTRY_ID = process.env.MEMWAL_REGISTRY_ID || '0x0da982cefa26864ae834a8a0504b904233d49e20fcc17c373c8bed99c75a7edd';
-export const PACKAGE_ID = process.env.MEMWAL_PACKAGE_ID || '0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd50958a24c6';
-export const PACKAGE_IDS = [...new Set([PACKAGE_ID, '0xe7c16fbea0560e7057e2bf7422feaa4fb313749fc69c9e9092fac7a33b81d7f5'])];
+export const REGISTRY_ID = process.env.MEMWAL_REGISTRY_ID || '0x8bf82c9e09e36b8d1c38298f68b7cb68e7b8762887e7592add9986d5e9cf199f';
+export const PACKAGE_ID = process.env.MEMWAL_PACKAGE_ID || '0xe7c16fbea0560e7057e2bf7422feaa4fb313749fc69c9e9092fac7a33b81d7f5';
+export const PACKAGE_IDS = [...new Set([PACKAGE_ID, '0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd50958a24c6'])];
 
 let gqlClient = null;
 export function suiClient() {

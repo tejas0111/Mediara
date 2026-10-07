@@ -11,6 +11,14 @@ let pass = 0, fail = 0;
 const ok = (cond, name) => { if (cond) { pass++; console.log(`ok - ${name}`); } else { fail++; console.log(`FAIL - ${name}`); } };
 
 ok(namespaceFor('demo-mom') === 'user-demo-mom', 'namespace basic');
+// Chain deployment pins (offline import, no network): the app must target the
+// LIVE deployment the relayer serves (retired ids hard-fail every link tx).
+{
+  const chain = await import('./onchain.js');
+  ok(chain.PACKAGE_ID === '0xe7c16fbea0560e7057e2bf7422feaa4fb313749fc69c9e9092fac7a33b81d7f5', 'chain: package id tracks the live deployment');
+  ok(chain.REGISTRY_ID === '0x8bf82c9e09e36b8d1c38298f68b7cb68e7b8762887e7592add9986d5e9cf199f', 'chain: registry id tracks the live deployment');
+  ok(chain.PACKAGE_IDS.includes('0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd50958a24c6'), 'chain: retired package kept for event lookup');
+}
 ok(namespaceFor('  Priya S! ') === 'user-priyas', 'namespace sanitizes');
 ok(namespaceFor('') === 'user-anon', 'namespace empty -> anon');
 const long = 'x'.repeat(600);

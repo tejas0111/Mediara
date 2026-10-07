@@ -92,7 +92,7 @@ test('SPA api client covers every JSON route the views need', () => {
   for (const p of ['/api/chat', '/api/summary', '/api/export', '/api/seed-status', '/api/guard-proof',
     '/api/proactive', '/api/usage', '/api/auth/message', '/api/auth/verify', '/api/auth/logout',
     '/api/wallet/status', '/api/wallet/onboard/create', '/api/wallet/onboard/link',
-    '/api/wallet/onboard/complete', '/api/wallet/relink']) {
+    '/api/wallet/onboard/complete', '/api/wallet/relink', '/api/wallet/reset']) {
     assert.ok(api.includes(`'${p}'`) || api.includes(`\`${p}`), `api.ts covers ${p}`);
   }
 });
@@ -192,6 +192,14 @@ test('SPA surfaces a dead vault delegate as re-link, not retry-soon', () => {
   assert.ok(server.includes('needsRelink'), 'chat route fails actionable (409) on a dead delegate, not 503');
   const mem = fs.readFileSync(path.join(__dirname, 'memory.js'), 'utf8');
   assert.ok(mem.includes('authFailure'), 'recall layer tags 401-class rejections for the route');
+});
+test('SPA fresh-start path for retired-deployment vaults', () => {
+  const ob = fs.readFileSync(path.join(__dirname, 'onboarding.js'), 'utf8');
+  assert.ok(ob.includes('retiredDeployment') && ob.includes('resetVault'), 'link failure is actionable and reset exists');
+  assert.ok(server.includes('/api/wallet/reset') && server.includes('resetVault'), 'reset route is session-scoped to self');
+  const w = wread('src/WalletView.tsx');
+  assert.ok(w.includes('retiredDeployment') && w.includes('Start a fresh vault'), 'wallet offers an explicit fresh start, never a dead end');
+  assert.ok(wread('src/api.ts').includes('/api/wallet/reset'), 'reset is in the typed client');
 });
 test('SPA wallet modal guides connect -> sign -> vault -> chat', () => {
   const m = wread('src/WalletModal.tsx');

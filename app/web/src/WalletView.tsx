@@ -17,6 +17,7 @@ import {
   onboardCreate,
   onboardLink,
   relink,
+  resetVault,
   walletStatus,
 } from './api';
 import type { WalletStatus } from './api';
@@ -68,6 +69,9 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
   // rejects (Relink detects the dead key). The step UI below is gated on
   // !onboarded, so without this the link step could never be reached.
   const [linkRepair, setLinkRepair] = React.useState(false);
+  // Retired deployment: the stored vault predates the live chain deployment
+  // and can never link — offer an explicit fresh start instead of dead ends.
+  const [retiredDeployment, setRetiredDeployment] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -182,6 +186,9 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
       setTxBytes(tx);
     } catch (e) {
       setStepError(errText(e));
+      if (e instanceof ApiError && (e.data as { retiredDeployment?: boolean })?.retiredDeployment === true) {
+        setRetiredDeployment(true);
+      }
     } finally {
       setStepBusy(false);
     }
@@ -247,6 +254,24 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
       setStepError(errText(e));
     } finally {
       setStepBusy(false);
+    }
+  }
+
+  async function doFreshStart() {
+    setRelinkError(null);
+    try {
+      await resetVault();
+      setRetiredDeployment(false);
+      setLinkRepair(false);
+      setStep(0);
+      setStepError(null);
+      setTxBytes(null);
+      setStepSig('');
+      setRelinkMsg('Old vault row abandoned — run create, then link, on the live deployment.');
+      await refresh();
+      onAuth();
+    } catch (e) {
+      setStepError(errText(e));
     }
   }
 
@@ -420,6 +445,14 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
                 <Alert variant="danger">
                   {stepError}
                   {/501|mainnet/i.test(stepError) ? ' Onboarding targets Sui mainnet and needs MEMWAL_MODE=mainnet plus SESSION_SECRET on the server.' : null}
+                </Alert>
+              ) : null}
+              {retiredDeployment ? (
+                <Alert variant="warn" role="alert">
+                  <span>Your old vault was created under a retired deployment and cannot link. Starting fresh abandons the old row (its memories stay unreadable) and runs create + link on the live deployment.</span>
+                  <span className="btn-row">
+                    <Button size="sm" variant="primary" onClick={() => void doFreshStart()}>Start a fresh vault</Button>
+                  </span>
                 </Alert>
               ) : null}
             </div>

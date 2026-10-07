@@ -87,6 +87,16 @@ export function upsertUser({ address, accountId, delegatePrivateKey, delegatePub
   return row;
 }
 
+// Abandon a vault row (retired-deployment recovery): the owner drops the
+// stale account id + dead delegate key so create+link can start fresh on the
+// live deployment. Only ever called for the signed-in session's own address
+// (the route enforces this) — there is no cross-user effect.
+export function clearUser(address) {
+  const db = load();
+  delete db.users[String(address).toLowerCase()];
+  save(db);
+}
+
 // Mark an account as linked. UPSERTS: if the registry row is missing (the exact
 // recovery case this exists for — account lives onchain but the local row was
 // lost, e.g. redeploy), a minimal row is created with address + accountId. The

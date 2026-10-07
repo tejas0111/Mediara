@@ -18,7 +18,7 @@ import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallA
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage, landingPage, esc } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
-import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting } from './onboarding.js';
+import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting, resetVault } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser, registryStatus } from './userRegistry.js';
 import { limiter, clientKey } from './rateLimit.js';
@@ -37,7 +37,10 @@ function fail(res, e) {
   // Pass through messages we authored (e.expose), even for 501; mask only
   // genuinely internal 5xx.
   const msg = (e && e.expose) ? String(e.message) : (code >= 500 ? 'Internal error' : String((e && e.message) || e));
-  res.status(code).json({ error: msg });
+  // Actionable flags our code attaches (e.data) ride along, e.g.
+  // { needsRelink: true } / { retiredDeployment: true } — never secrets.
+  const extra = (e && e.data && typeof e.data === 'object') ? e.data : null;
+  res.status(code).json(extra ? { error: msg, ...extra } : { error: msg });
 }
 // A session cookie that fails to parse means EXPIRED (not anonymous). Used to
 // avoid silently downgrading an expired signed-in user to the shared channel.
@@ -1048,6 +1051,17 @@ app.post('/api/wallet/onboard/complete', onboardLimiter, async (req, res) => {
     const { signature } = req.body || {};
     if (typeof signature !== 'string' || signature.length < 50) return res.status(400).json({ error: 'missing signature' });
     res.json(await completeOnboarding(sess.address, signature));
+  } catch (e) { fail(res, e); }
+});
+
+// Fresh start: abandon the signed-in wallet's own local vault row (retired
+// deployment recovery). Memories live onchain, never in this row — but the
+// old vault stays unreadable; the user re-teaches into the new one.
+app.post('/api/wallet/reset', onboardLimiter, async (req, res) => {
+  try {
+    const sess = sessionFromReq(req);
+    if (!sess) return res.status(401).json({ error: 'sign in first' });
+    res.json(resetVault(sess.address));
   } catch (e) { fail(res, e); }
 });
 

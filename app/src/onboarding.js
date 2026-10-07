@@ -15,7 +15,7 @@ import {
   verifyAccount,
   executeSigned,
 } from './onchain.js';
-import { upsertUser, markAccountLinked, getUser, getRawUser } from './userRegistry.js';
+import { upsertUser, markAccountLinked, getUser, getRawUser, clearUser } from './userRegistry.js';
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 
@@ -26,7 +26,7 @@ function buildClient() {
 
 // Client-state errors (user skipped a step / wrong order) carry a status so the
 // route returns 4xx, not a misleading 500.
-function clientError(message, status = 409) { const e = new Error(message); e.status = status; e.expose = true; return e; }
+function clientError(message, status = 409, data = null) { const e = new Error(message); e.status = status; e.expose = true; if (data) e.data = data; return e; }
 
 function keypairFromHexPrivateKey(hex) {
   return Ed25519Keypair.fromSecretKey(Uint8Array.from(Buffer.from(String(hex).replace(/^0x/, ''), 'hex')));
@@ -112,7 +112,24 @@ export async function prepareLinkDelegate(address) {
   }
   const delegatePublicKey = Uint8Array.from(Buffer.from(delegatePublicKeyHex, 'hex'));
   const tx = buildLinkDelegateTx(address, accountId, delegatePublicKey);
-  const bytes = await tx.build({ client: buildClient() });
+  let bytes;
+  try {
+    bytes = await tx.build({ client: buildClient() });
+  } catch (e) {
+    // A stored account from a RETIRED deployment fails the Move type check
+    // (old-typed objects vs current-package entry funs). That is permanent
+    // for this account — say so (409 + flag) instead of a bare 500, so the
+    // UI can offer a fresh vault. Transient/network failures rethrow masked.
+    const msg = String((e && e.message) || e);
+    if (accountId && /resolution failed|invalid command argument|moveabort/i.test(msg)) {
+      throw clientError(
+        'This vault was created under a retired Walrus Memory deployment and can no longer link — start a fresh vault (create + link) to use the live deployment. Memories in the old vault are not transferable.',
+        409,
+        { retiredDeployment: true },
+      );
+    }
+    throw e;
+  }
   const txBytesBase64 = Buffer.from(bytes).toString('base64');
   // Persist the account id with the pending phase: if the user signs but
   // closes the tab before completion, the next visit finds the account id
@@ -169,6 +186,14 @@ export async function completeOnboarding(address, signatureBase64) {
   if (!check.ok) throw new Error(`Link verification failed: ${check.reason}`);
   upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
   return { stage: 'linked', accountId, digest, nextStep: null };
+}
+
+// Abandon the local vault row so the owner can start fresh (create + link)
+// on the live deployment. Old-vault memories are NOT transferable — the row
+// holds only service metadata (account id + delegate key), never memory.
+export function resetVault(address) {
+  clearUser(address);
+  return { ok: true };
 }
 
 // Recover a lost registry: the account already exists onchain, but this server

@@ -323,6 +323,11 @@ export const relink = () =>
     method: 'POST',
     body: '{}',
   });
+export const resetVault = () =>
+  req<{ ok: boolean } & Record<string, unknown>>('/api/wallet/reset', {
+    method: 'POST',
+    body: '{}',
+  });
 
 // ------------------------------------------------------------ dashboard ---
 export interface DashboardDemo {
