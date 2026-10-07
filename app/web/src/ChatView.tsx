@@ -206,9 +206,10 @@ export default function ChatView(props: ChatViewProps) {
       const msg = e instanceof Error ? e.message : 'request failed';
       setLastFailed(text);
       setNeedLogin(e instanceof ApiError && e.status === 429 && (e as ApiError).data?.loginRequired === true);
+      const cleanMsg = msg.replace(/[.\u2026\s]+$/, '');
       setError(status === 503
-        ? `Server is degraded right now: ${msg}. Your message was not answered.`
-        : `Send failed${status ? ` (${status})` : ''}: ${msg}`);
+        ? `Server is degraded right now: ${cleanMsg}. Your message was not answered.`
+        : `Send failed${status ? ` (${status})` : ''}: ${cleanMsg}`);
     } finally {
       setPending(false);
     }

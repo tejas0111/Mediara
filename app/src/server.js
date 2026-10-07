@@ -312,10 +312,27 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (/\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message)) {
       try { const full = await recallAllMeta(client, ALL_QUERIES, 25); if (full.facts.length) recalled = full.facts; } catch { /* keep the query recall */ }
     }
+    // A memory recap ("what do you remember?") is not an advice question, so it
+    // is exempt from the fail-closed below — but it must say UNREACHABLE,
+    // never "I don't have any memories" (that would deny stored facts).
+    const isRecap = /\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message);
     // FAIL CLOSED: if memory is unreachable we cannot verify allergies or
     // interactions, so refuse medication questions rather than answer unguarded.
-    if (rr.degraded && looksLikeMedicationQuestion(message)) {
+    if (rr.degraded && looksLikeMedicationQuestion(message) && !isRecap) {
       return res.status(503).json({ error: 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.', retryable: true });
+    }
+    if (rr.degraded && isRecap) {
+      thinking.push({ label: 'Recall', detail: 'Memory unreachable — answering honestly instead of pretending to be empty.' });
+      const reply = 'Memory is temporarily unreachable, so I can\u2019t load your memories right now — please retry shortly. Nothing was answered from memory.';
+      rememberTurn(nsKey, 'user', message);
+      rememberTurn(nsKey, 'assistant', reply);
+      usage.touchUser(safeUser, { turn: true });
+      return res.json({
+        reply, recalled: [], recalledMeta: [], memoryScope: identity.ns,
+        identity: identity.kind, savedBlob: null, memoryPersisted: null,
+        memoryOff, thinking, mode: MODE,
+        disclaimer: 'Confirm with your doctor — this is not medical advice.',
+      });
     }
     // Coded safety nets FIRST, before any LLM output:
     //   1) allergy conflict (hard block)  2) curated drug–drug interaction.

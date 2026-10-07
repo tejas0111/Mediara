@@ -394,3 +394,20 @@ test('shared demo namespaces are read-only for anonymous writers', async () => {
   assert.ok((j.thinking || []).some((s) => s.label === 'Memory write' && /read-only/i.test(s.detail)), 'trace says read-only');
   assert.ok(typeof j.reply === 'string' && j.reply.length > 0, 'read path still answers');
 });
+
+test('degraded memory: recap questions answer honestly instead of 503', async () => {
+  const { resetBreaker } = await import('./memory.js');
+  const u = `rt-recapdeg-${Date.now()}`;
+  process.env.DD_FAULT_RECALL = 'throw';
+  resetBreaker();
+  try {
+    const r = await post('/api/chat', { userId: u, message: 'What do you remember about her?' });
+    assert.equal(r.status, 200, 'recap is not a medication question');
+    const j = await r.json();
+    assert.match(j.reply, /temporarily unreachable/i);
+    assert.ok(!(j.thinking || []).some((s) => /no FACTS|0 recalled facts above/i.test(s.detail) && s.label === 'Answer'), 'never pretends memory is empty');
+  } finally {
+    delete process.env.DD_FAULT_RECALL;
+    resetBreaker();
+  }
+});
