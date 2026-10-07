@@ -262,6 +262,25 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (sess && !walletClient) {
       return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
     }
+    // Demo gate: the anonymous shared channel is capped (default 5 turns per
+    // user id) so drive-by traffic cannot burn the LLM budget. Wallet vault
+    // users bypass it — and judges keep a ready-made demo namespace either way.
+    // DD_DEMO_LIMIT=0 disables the cap (local dev); tests raise it.
+    if (!walletClient) {
+      const demoLimit = Number(process.env.DD_DEMO_LIMIT) > 0 ? Number(process.env.DD_DEMO_LIMIT) : (process.env.DD_DEMO_LIMIT === '0' ? Infinity : 5);
+      let turns = 0;
+      try {
+        const snap = usage.snapshot(safeUser);
+        turns = Number(snap?.turns || 0);
+      } catch { /* fail open on ledger errors — the limiter below still applies */ }
+      if (turns >= demoLimit) {
+        return res.status(429).json({
+          error: 'Demo limit reached (5 messages on the shared channel) — sign in with your Sui wallet to keep chatting with your own vault.',
+          loginRequired: true,
+          demoUser: 'demo-mom',
+        });
+      }
+    }
     // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
     // must never be able to name one. Reserve the prefix for wallet sessions.
     if (!walletClient && isReservedNs(safeUser)) {

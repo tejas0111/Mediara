@@ -26,6 +26,7 @@ process.env.DD_CHAT_LIMIT = '10000';
 process.env.DD_READ_LIMIT = '10000';
 process.env.DD_NONCE_LIMIT = '10000';
 process.env.DD_AUTH_LIMIT = '10000';
+process.env.DD_DEMO_LIMIT = '10000';
 
 const { default: app } = await import('./server.js');
 
@@ -365,4 +366,22 @@ test('/api/chat rejects non-free models, accepts listed ones', async () => {
   assert.equal(good.status, 200);
   const j = await good.json();
   assert.ok((j.thinking || []).some((s) => s.label === 'Memory write'), 'trace intact with model override');
+});
+
+test('demo gate caps anonymous turns with a login prompt', async () => {
+  const u = `rt-demolimit-${Date.now()}`;
+  process.env.DD_DEMO_LIMIT = '5';
+  try {
+    for (let i = 0; i < 5; i++) {
+      const r = await post('/api/chat', { userId: u, message: `hello number ${i}` });
+      assert.equal(r.status, 200, `turn ${i + 1} allowed`);
+    }
+    const r = await post('/api/chat', { userId: u, message: 'one more please' });
+    assert.equal(r.status, 429, '6th anonymous turn refused');
+    const j = await r.json();
+    assert.equal(j.loginRequired, true, 'prompt flags login');
+    assert.equal(j.demoUser, 'demo-mom', 'prompt points at the premade demo');
+  } finally {
+    process.env.DD_DEMO_LIMIT = '10000';
+  }
 });

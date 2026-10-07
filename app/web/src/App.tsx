@@ -530,6 +530,7 @@ export default function App() {
               newSession={handleNewSessionProp}
               pushMsg={pushMsg}
               onMode={handleMode}
+              onSwitchUser={(id) => { setDraftId(id); setUserId(id); navigate('chat'); }}
             />
           ) : view === 'wallet' ? (
             <WalletView userId={userId} onAuth={() => void refreshWallet()} />

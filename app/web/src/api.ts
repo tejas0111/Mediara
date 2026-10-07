@@ -4,9 +4,11 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  data: Record<string, unknown>;
+  constructor(status: number, message: string, data?: Record<string, unknown>) {
     super(message);
     this.status = status;
+    this.data = data ?? {};
   }
 }
 
@@ -60,7 +62,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
   });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new ApiError(r.status, String((body as { error?: unknown }).error || `request failed (${r.status})`));
+  if (!r.ok) throw new ApiError(r.status, String((body as { error?: unknown }).error || `request failed (${r.status})`), body as Record<string, unknown>);
   return body as T;
 }
 

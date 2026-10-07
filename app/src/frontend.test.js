@@ -176,3 +176,10 @@ test('SPA model picker is free-only with persisted choice', () => {
   assert.ok(c.includes('ddModel') || wread('src/api.ts').includes('ddModel'), 'choice persisted');
   assert.ok(wread('src/api.ts').includes('/api/models'), 'list sourced from the server registry');
 });
+
+test('SPA demo gate: login prompt + one-click demo switch', () => {
+  const c = wread('src/ChatView.tsx');
+  assert.ok(c.includes('Demo limit reached') && c.includes("onSwitchUser?.('demo-mom')"), 'limit renders sign-in + demo actions');
+  assert.ok(c.includes('Explore the demo'), 'demo entry chip exists');
+  assert.ok(wread('src/api.ts').includes('loginRequired') || wread('src/api.ts').includes('data: Record'), '429 body survives on ApiError');
+});

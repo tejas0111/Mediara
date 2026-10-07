@@ -22,6 +22,7 @@ export interface ChatViewProps {
   selectSession: (id: string) => void;
   newSession: () => string;
   pushMsg: (sessionId: string, msg: ChatMsg) => void;
+  onSwitchUser?: (userId: string) => void;
   onMode?: (mode: 'local' | 'mainnet') => void;
 }
 
@@ -126,6 +127,7 @@ export default function ChatView(props: ChatViewProps) {
   const [input, setInput] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [needLogin, setNeedLogin] = React.useState(false);
   const [lastFailed, setLastFailed] = React.useState<string | null>(null);
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
@@ -187,6 +189,7 @@ export default function ChatView(props: ChatViewProps) {
       const status = e instanceof ApiError ? e.status : 0;
       const msg = e instanceof Error ? e.message : 'request failed';
       setLastFailed(text);
+      setNeedLogin(e instanceof ApiError && e.status === 429 && (e as ApiError).data?.loginRequired === true);
       setError(status === 503
         ? `Server is degraded right now (503): ${msg}. Your message was not answered — nothing was saved for this turn.`
         : `Send failed${status ? ` (${status})` : ''}: ${msg}`);
@@ -234,6 +237,9 @@ export default function ChatView(props: ChatViewProps) {
               Ask anything; safety checks run before every answer.
             </p>
             <div className="chips">
+              <button type="button" className="chip chip-demo" onClick={() => props.onSwitchUser?.('demo-mom')}>
+                Explore the demo — no setup
+              </button>
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
@@ -305,7 +311,16 @@ export default function ChatView(props: ChatViewProps) {
         ) : null}
       </div>
 
-      {error ? (
+      {needLogin ? (
+        <Alert variant="warn" className="send-error" role="alert">
+          <span><strong>Demo limit reached (5 messages).</strong> Sign in with your Sui wallet to keep chatting in your own vault — or keep exploring the premade demo, no teaching needed.</span>
+          <span className="btn-row">
+            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(false); window.location.hash = '#/wallet'; }}>Sign in</Button>
+            <Button size="sm" onClick={() => { setNeedLogin(false); props.onSwitchUser?.('demo-mom'); }}>Explore the demo</Button>
+          </span>
+        </Alert>
+      ) : null}
+      {error && !needLogin ? (
         <Alert variant="danger" className="send-error">
           <span>{error} Nothing was saved for this turn — you can retry safely.</span>
           {lastFailed ? (
