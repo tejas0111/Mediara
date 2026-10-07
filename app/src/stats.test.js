@@ -182,3 +182,16 @@ test('/api/nudge: reserved namespaces are refused', async () => {
   const j = await r.json();
   assert.equal(j.users.length, 0, 'a vault namespace must never be probed anonymously');
 });
+
+test('/api/usage: anonymous callers get counts but redacted blob texts (privacy)', async () => {
+  await chat('user-a', 'User-a takes Metformin 500mg at 8pm');
+  const j = await (await get('/api/usage')).json();
+  // Counts + requirement stay public.
+  assert.ok(j.requirement, 'requirement stays public');
+  const me = j.users.find((u) => u.userId === 'user-a');
+  assert.ok(me && me.memories >= 1, 'counts stay public');
+  assert.ok(me.blobs.length >= 1 && me.blobs[0].blobId, 'blob ids + links stay public');
+  for (const b of me.blobs) {
+    assert.equal(b.text, null, 'anonymous callers must not read blob texts');
+  }
+});

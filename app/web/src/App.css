@@ -333,6 +333,27 @@
 .main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .only-mobile { display: none; }
 
+/* Demo-chat banner: slim read-only strip under the topbar. */
+.demo-banner {
+  flex: none;
+  margin: 0;
+  padding: 7px 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 480px) {
+  .demo-banner { padding: 7px 12px; white-space: normal; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-banner { transition: none; }
+}
+
 /* FIX 1 — one-click connect: dAppKit ConnectButton in the topbar, dressed
    like .btn.btn-sm (className is passed through AND this wrapper rule holds
    the look even where dAppKit's own classes win specificity). */
@@ -386,6 +407,7 @@
 .main > .chat { max-width: 860px; }
 .main > .mem-wrap,
 .main > .demo-wrap,
+.main > .dash-wrap,
 .main > .cmp-wrap,
 .main > .replay-wrap,
 .main > .gp-wrap,
@@ -403,6 +425,7 @@
 @media (max-width: 480px) {
   .main > .mem-wrap,
   .main > .demo-wrap,
+  .main > .dash-wrap,
   .main > .cmp-wrap,
   .main > .replay-wrap,
   .main > .gp-wrap,

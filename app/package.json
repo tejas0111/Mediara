@@ -9,7 +9,7 @@
   "license": "MIT",
   "name": "dosedughter",
   "scripts": {
-    "test": "node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/frontend.test.js",
+    "test": "node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/frontend.test.js",
     "eval": "node src/eval.js",
     "stats": "node src/stats.js",
     "stats:live": "node src/stats.js -- --live",

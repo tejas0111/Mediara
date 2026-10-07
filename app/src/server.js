@@ -24,6 +24,7 @@ import { getUser, registryStatus } from './userRegistry.js';
 import { limiter, clientKey } from './rateLimit.js';
 import { encryptionEnabled } from './cryptoUtils.js';
 import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
+import { createStores, DEFAULT_DB_PATH } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -55,9 +56,22 @@ const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 
 // Usage evidence (hackathon requirement: ≥3 users × ≥10 memories) + the
-// tamper-evident guard ledger. Both persist next to the server code.
-const usage = new UsageTracker({ persistPath: process.env.DD_USAGE_LEDGER || path.join(__dirname, 'usage-ledger.json') });
-const guardProof = new GuardProof({ persistPath: process.env.DD_GUARD_PROOF || path.join(__dirname, 'guard-proof.json') });
+// tamper-evident guard ledger.
+//
+// Store selection rule: SQLite (src/data/dosedughter.db, or DD_DB_PATH) is
+// ALWAYS preferred — EXCEPT when DD_USAGE_LEDGER or DD_GUARD_PROOF is set, in
+// which case the legacy JSON-file classes are used untouched. Tests isolate
+// via temp JSON paths, so they keep exercising the JSON path unchanged.
+function buildStores() {
+  if (process.env.DD_USAGE_LEDGER || process.env.DD_GUARD_PROOF) {
+    return {
+      usage: new UsageTracker({ persistPath: process.env.DD_USAGE_LEDGER || path.join(__dirname, 'usage-ledger.json') }),
+      guardProof: new GuardProof({ persistPath: process.env.DD_GUARD_PROOF || path.join(__dirname, 'guard-proof.json') }),
+    };
+  }
+  return createStores({ dbPath: process.env.DD_DB_PATH || DEFAULT_DB_PATH });
+}
+const { usage, guardProof } = buildStores();
 
 // Reuse MemWal clients: constructing one per request repeats the relayer
 // /version + /config + Seal-session handshake (~3s) on every mainnet call. Cache
@@ -300,14 +314,19 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const demoReadonly = !walletClient && DEMO_READONLY.has(safeUser);
     // Daily budget gate: per-user rolling-UTC-day window so one user cannot
     // burn the shared OpenRouter/Walrus budget (free tiers are rate-limited
-    // upstream). Anonymous shared channel: DD_DAY_LIMIT_ANON (default 20).
+    // upstream). Anonymous shared channel: DD_DAY_LIMIT_ANON (default 20) —
+    // EXCEPT inside the shared demo namespaces (demo-mom/demo-day7/demo-day1),
+    // which cap at DD_DAY_LIMIT_DEMO (default 5) no matter how high
+    // DD_DAY_LIMIT_ANON is set, so the premade demo cannot be burned down.
     // Signed-in vault users: DD_DAY_LIMIT_WALLET (default 200). Judges keep
     // the ready-made demo namespace either way; the demo namespaces stay
     // read-only for anonymous writers regardless of budget.
     // NOTE: current spend is $0 (sponsored writes + free models) — this gate
     // guards rate, not money. User-pays billing is a future decision, see docs.
     const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
-    const cap = walletClient ? dayCap('DD_DAY_LIMIT_WALLET', 200) : dayCap('DD_DAY_LIMIT_ANON', 20);
+    const cap = walletClient
+      ? dayCap('DD_DAY_LIMIT_WALLET', 200)
+      : (DEMO_READONLY.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
     let chk = { ok: true, used: 0, remaining: cap, reset: null };
     try {
       chk = usage.checkDay(safeUser, cap);
@@ -674,12 +693,70 @@ app.get('/api/export', readLimiter, async (req, res) => {
 });
 
 // Usage evidence (hackathon requirement ≥3 users × ≥10 memories): JSON view.
+//
+// PRIVACY RULE: counts + requirement are public, but per-blob TEXT is private.
+// `users[].blobs[].text` is included ONLY for namespaces the caller owns —
+// i.e. a wallet session whose vault namespace matches the snapshot's
+// namespace. Anonymous callers (and signed-in callers viewing anyone else's
+// namespace) get `{ blobId, link }` with `text: null`: enough to verify the
+// count, never enough to read someone else's health facts.
 app.get('/api/usage', readLimiter, (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     const wantsMd = String(req.query.format || '') === 'md';
     const s = usage.summary({ mode: MODE });
-    res.json({ ...s.json, markdown: wantsMd ? s.md : undefined });
+    const sess = sessionFromReq(req);
+    const mine = sess ? userClientFor(sess.address) : null;
+    const ownedNs = mine ? mine.ns : null;
+    const users = (s.json.users || []).map((u) => {
+      if (ownedNs && u.namespace === ownedNs) return u;
+      return { ...u, blobs: (u.blobs || []).map((b) => ({ ...b, text: null })) };
+    });
+    res.json({ ...s.json, users, markdown: wantsMd ? s.md : undefined });
+  } catch (e) { fail(res, e); }
+});
+
+app.get('/api/dashboard', readLimiter, async (req, res) => {
+  // Per-user dashboard: demo readiness + personal budget/memories + vault state.
+  // Same auth/namespace rules as /api/summary (shared namespaceView: expired
+  // sessions 401, unlinked vaults 409, anonymous vault peeks 403).
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    const view = await namespaceView(req, res);
+    if (!view) return;
+    const { userId, mode } = view;
+    const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
+    const cap = view.isVault
+      ? dayCap('DD_DAY_LIMIT_WALLET', 200)
+      : (['demo-mom', 'demo-day7', 'demo-day1'].includes(userId) ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
+    let chk = { ok: true, used: 0, remaining: cap, reset: null };
+    try { chk = usage.checkDay(userId, cap); } catch { /* fail open — budget unknown, not fatal */ }
+    const snap = usage.snapshot(userId);
+    // guardHits works on both store impls (SQLite has countByUser; the JSON
+    // ledger is filtered from list()).
+    const guardHits = typeof guardProof.countByUser === 'function'
+      ? guardProof.countByUser(userId)
+      : guardProof.list({ limit: 100000 }).filter((e) => e.userId === userId).length;
+    // Demo readiness: the shared demo-mom namespace, read live (recall only).
+    let demoBlobs = 0;
+    try {
+      const ra = await recallAllMeta(clientFor('demo-mom').client, ALL_QUERIES, 25);
+      demoBlobs = ra.facts.length;
+    } catch { demoBlobs = 0; }
+    const sess = sessionFromReq(req);
+    res.json({
+      user: userId,
+      mode,
+      demo: { userId: 'demo-mom', ready: demoBlobs > 0, blobCount: demoBlobs },
+      personal: {
+        memories: snap.memories || 0,
+        turns: snap.turns || 0,
+        budget: { used: chk.used || 0, cap, reset: chk.reset || null },
+        guardHits,
+        stale: !!view.degraded,
+      },
+      vault: { signedIn: !!sess, onboarded: !!view.isVault },
+    });
   } catch (e) { fail(res, e); }
 });
 

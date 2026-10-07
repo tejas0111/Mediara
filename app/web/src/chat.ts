@@ -30,8 +30,9 @@ export interface ChatSession {
 
 export type ViewKey =
   | 'chat'
-  | 'memory'
   | 'demo'
+  | 'dashboard'
+  | 'memory'
   | 'replay'
   | 'compare'
   | 'proof'
@@ -39,13 +40,14 @@ export type ViewKey =
   | 'print'
   | 'wallet';
 
-/** Parsed location hash: a plain view, or the chat view with a session. */
-export type Route = ViewKey | { chat: 'chat'; sessionId: string };
+/** Parsed location hash: a plain view, or a chat view (personal or demo) with a session. */
+export type Route = ViewKey | { chat: 'chat' | 'demo'; sessionId: string };
 
 const VIEWS: ViewKey[] = [
   'chat',
-  'memory',
   'demo',
+  'dashboard',
+  'memory',
   'replay',
   'compare',
   'proof',
@@ -63,14 +65,14 @@ export function parseHash(): Route {
   const parts = raw.split('/').filter(Boolean);
   if (parts.length === 0) return 'chat';
   const [head, tail] = parts;
-  if (head === 'chat' && tail) return { chat: 'chat', sessionId: decodeURIComponent(tail) };
+  if ((head === 'chat' || head === 'demo') && tail) return { chat: head, sessionId: decodeURIComponent(tail) };
   if (isView(head)) return head;
   return 'chat';
 }
 
 export function navigate(view: ViewKey, sessionId?: string): void {
-  if (view === 'chat' && sessionId) {
-    window.location.hash = `#/chat/${encodeURIComponent(sessionId)}`;
+  if (sessionId && (view === 'chat' || view === 'demo')) {
+    window.location.hash = `#/${view}/${encodeURIComponent(sessionId)}`;
   } else if (view === 'chat') {
     window.location.hash = '#/chat';
   } else {
@@ -79,11 +81,11 @@ export function navigate(view: ViewKey, sessionId?: string): void {
 }
 
 export function routeView(r: Route): ViewKey {
-  return typeof r === 'string' ? r : 'chat';
+  return typeof r === 'string' ? r : r.chat;
 }
 
 export function routeSessionId(r: Route): string | null {
-  return typeof r === 'object' && r.chat === 'chat' ? r.sessionId : null;
+  return typeof r === 'object' ? r.sessionId : null;
 }
 
 // ------------------------------------------------------- persistence ---

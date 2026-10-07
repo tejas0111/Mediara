@@ -301,3 +301,35 @@ export const relink = () =>
     method: 'POST',
     body: '{}',
   });
+
+// ------------------------------------------------------------ dashboard ---
+export interface DashboardDemo {
+  userId: string;
+  ready: boolean;
+  blobCount: number;
+}
+export interface DashboardBudget {
+  used: number;
+  cap: number;
+  reset: string;
+}
+export interface DashboardPersonal {
+  memories: number;
+  turns: number;
+  budget: DashboardBudget;
+  guardHits: number;
+  stale: boolean;
+}
+export interface DashboardVault {
+  signedIn: boolean;
+  onboarded: boolean;
+}
+export interface DashboardResponse {
+  user: string;
+  mode: string;
+  demo: DashboardDemo;
+  personal: DashboardPersonal;
+  vault: DashboardVault;
+}
+export const getDashboard = (userId: string) =>
+  req<DashboardResponse>(`/api/dashboard?user=${encodeURIComponent(userId)}`);

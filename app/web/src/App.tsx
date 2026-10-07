@@ -3,7 +3,7 @@ import ChatView from './ChatView';
 import WalletView from './WalletView';
 import WalletModal from './WalletModal';
 import MemoryView from './views/MemoryView';
-import DemoView from './views/DemoView';
+import DashboardView from './views/DashboardView';
 import ReplayView from './views/ReplayView';
 import CompareView from './views/CompareView';
 import ProofView from './views/ProofView';
@@ -45,21 +45,21 @@ import {
 } from './ui';
 import './App.css';
 
-const TOP_NAV: Array<{ key: ViewKey; label: string }> = [
+const NAV: Array<{ key: ViewKey; label: string }> = [
+  { key: 'chat', label: 'Chat' },
+  { key: 'demo', label: 'Demo chat' },
+  { key: 'dashboard', label: 'Dashboard' },
   { key: 'memory', label: 'Memory' },
-  { key: 'proof', label: 'Guard proof' },
-];
-const MORE_NAV: Array<{ key: ViewKey; label: string }> = [
-  { key: 'print', label: 'Print' },
-  { key: 'demo', label: 'Demo' },
   { key: 'replay', label: 'Replay' },
-  { key: 'compare', label: 'Compare' },
-  { key: 'stats', label: 'Stats' },
+  { key: 'proof', label: 'Guard proof' },
+  { key: 'print', label: 'Print' },
+  { key: 'wallet', label: 'Wallet' },
 ];
 const VIEW_TITLES: Record<ViewKey, string> = {
   chat: 'Chat',
+  demo: 'Demo chat',
+  dashboard: 'Dashboard',
   memory: 'Memory',
-  demo: 'Demo',
   replay: 'Replay',
   compare: 'Compare',
   proof: 'Guard proof',
@@ -113,6 +113,10 @@ export default function App() {
   const view = routeView(route);
   const activeId = routeSessionId(route);
   const active = sessions.find((s) => s.id === activeId) ?? null;
+  // Demo chat is locked to the shared demo namespace: the sidebar user
+  // editor is ignored while on it, so guests always read premade memory.
+  const DEMO_USER = 'demo-mom';
+  const chatUser = view === 'demo' ? DEMO_USER : userId;
 
   const refreshWallet = React.useCallback(async () => {
     try {
@@ -168,8 +172,8 @@ export default function App() {
   }, []);
 
   React.useEffect(() => {
-    setSessions(loadSessions(userId));
-  }, [userId]);
+    setSessions(loadSessions(chatUser));
+  }, [chatUser]);
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -200,20 +204,20 @@ export default function App() {
 
   function handleNewChat() {
     const s = makeSession();
-    setSessions(saveSession(userId, s));
-    navigate('chat', s.id);
+    setSessions(saveSession(chatUser, s));
+    navigate(view === 'demo' ? 'demo' : 'chat', s.id);
     setDrawer(false);
   }
 
   function handleSelect(id: string) {
-    navigate('chat', id);
+    navigate(view === 'demo' ? 'demo' : 'chat', id);
     setDrawer(false);
   }
 
   function handleNewSessionProp(): string {
     const s = makeSession();
-    setSessions(saveSession(userId, s));
-    navigate('chat', s.id);
+    setSessions(saveSession(chatUser, s));
+    navigate(view === 'demo' ? 'demo' : 'chat', s.id);
     return s.id;
   }
 
@@ -227,21 +231,21 @@ export default function App() {
         title: firstUser ? titleFor(msg.text) : base.title,
         msgs: [...base.msgs, msg],
       };
-      saveSession(userId, next);
+      saveSession(chatUser, next);
       return [next, ...prev.filter((s) => s.id !== next.id)];
     });
   }
 
   function handleDelete(id: string) {
-    const next = delSess(userId, id);
+    const next = delSess(chatUser, id);
     setSessions(next);
-    if (activeId === id) navigate('chat');
+    if (activeId === id) navigate(view === 'demo' ? 'demo' : 'chat');
   }
 
   function handleRename(id: string, current: string) {
     const next = window.prompt('Rename chat', current);
     if (next === null) return;
-    setSessions(renSess(userId, id, next));
+    setSessions(renSess(chatUser, id, next));
   }
 
   function handleMode(m: 'local' | 'mainnet') {
@@ -332,55 +336,20 @@ export default function App() {
         <nav className="side-sec" aria-label="Features">
           <p className="side-h">Features</p>
           <ul className="nav-list">
-            <li>
-              <button
-                type="button"
-                className={cn('nav-it', view === 'chat' && 'nav-active')}
-                onClick={() => { navigate('chat'); setDrawer(false); }}
-              >
-                <IconChat /> <span className="nav-label">Chat</span>
-              </button>
-            </li>
-            {TOP_NAV.map((n) => (
+            {NAV.map((n) => (
               <li key={n.key}>
                 <button
                   type="button"
                   className={cn('nav-it', view === n.key && 'nav-active')}
+                  aria-current={view === n.key ? 'page' : undefined}
                   onClick={() => { navigate(n.key); setDrawer(false); }}
                 >
+                  {n.key === 'chat' ? <IconChat /> : null}
+                  {n.key === 'wallet' ? <IconWallet /> : null}
                   <span className="nav-label">{n.label}</span>
                 </button>
               </li>
             ))}
-            <li>
-              <details className="more">
-                <summary className="nav-it more-sum">
-                  <span className="nav-label">More views</span>
-                </summary>
-                <ul className="nav-list more-list">
-                  {MORE_NAV.map((n) => (
-                    <li key={n.key}>
-                      <button
-                        type="button"
-                        className={cn('nav-it', view === n.key && 'nav-active')}
-                        onClick={() => { navigate(n.key); setDrawer(false); }}
-                      >
-                        <span className="nav-label">{n.label}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            </li>
-            <li>
-              <button
-                type="button"
-                className={cn('nav-it', view === 'wallet' && 'nav-active')}
-                onClick={() => { navigate('wallet'); setDrawer(false); }}
-              >
-                <IconWallet /> <span className="nav-label">Wallet</span>
-              </button>
-            </li>
           </ul>
         </nav>
 
@@ -521,6 +490,11 @@ export default function App() {
             )}
           </div>
         </header>
+        {view === 'demo' ? (
+          <p className="demo-banner" role="note">
+            Shared demo — reads premade memory, writes need sign-in. 5 chats/day anonymous.
+          </p>
+        ) : null}
         <main id="main" className="main" tabIndex={-1}>
           {view === 'chat' ? (
             <ChatView
@@ -532,15 +506,34 @@ export default function App() {
               newSession={handleNewSessionProp}
               pushMsg={pushMsg}
               onMode={handleMode}
-              onSwitchUser={(id) => { setDraftId(id); setUserId(id); navigate('chat'); }}
+              onSwitchUser={(id) => {
+                if (id === 'demo-mom') { navigate('demo'); return; }
+                setDraftId(id); setUserId(id); navigate('chat');
+              }}
               onSignIn={() => setWmodal(true)}
             />
+          ) : view === 'demo' ? (
+            <ChatView
+              userId={DEMO_USER}
+              memoryOn={memoryOn}
+              sessions={sessions}
+              active={active}
+              selectSession={handleSelect}
+              newSession={handleNewSessionProp}
+              pushMsg={pushMsg}
+              onMode={handleMode}
+              onSwitchUser={(id) => {
+                if (id === 'demo-mom') { navigate('demo'); return; }
+                setDraftId(id); setUserId(id); navigate('chat');
+              }}
+              onSignIn={() => setWmodal(true)}
+            />
+          ) : view === 'dashboard' ? (
+            <DashboardView userId={userId} />
           ) : view === 'wallet' ? (
             <WalletView userId={userId} onAuth={() => void refreshWallet()} />
           ) : view === 'memory' ? (
             <MemoryView userId={userId} />
-          ) : view === 'demo' ? (
-            <DemoView userId={userId} />
           ) : view === 'replay' ? (
             <ReplayView userId={userId} />
           ) : view === 'compare' ? (

@@ -87,7 +87,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/frontend.test.js` | 317 offline checks (core 180 + wallet/auth/crypto/rate-limit 61 + route 42 + stats 11 + frontend 22), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/frontend.test.js` | 326 checks (180 core + 61 wallet + 44 route + 12 stats + 7 db + 22 frontend), no network |
 | `npm run stats` | `node src/stats.js` | **Judge command**: per-user memory counts → the ≥3 users × ≥10 memories requirement. `-- --live` reads Walrus itself; `-- --json` is machine-readable. Exit 0 = requirement met. Appends `evidence/USAGE-LEDGER.md` |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
@@ -120,7 +120,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
 - `src/verify.js` — Mainnet health + write/recall probe.
-- `src/selftest.js` — 180 offline tests (namespace/truncate/prompt/write-gate/conflict/per-clause substance-class safety/OOV fallback/negation-scope/class-gaps/fuzz/bulk/concurrency/resilience regressions); `src/wallet.test.js` adds 61 wallet/auth/crypto/rate-limit tests; `src/routes.test.js` adds 42 HTTP-level tests (guard-before-LLM, write-skip-on-guard, fail-loud 401, rate limit, daily budgets, demo read-only, nudge caps, escaping, classification, degraded-mode, thinking trace); `src/stats.test.js` adds 11 usage/proof tests; `src/frontend.test.js` adds 5 legacy print/replay/XSS checks + 17 React-SPA checks — `npm test` runs all five = 317.
+- `src/selftest.js` — 180 offline tests (memory/safety/regression core); `src/wallet.test.js` — 61 wallet/auth/crypto/rate-limit; `src/routes.test.js` — 44 HTTP-level (guards, identity, budgets, demo read-only, dashboard, thinking trace); `src/stats.test.js` — 12 usage/proof (anon-redacted); `src/db.test.js` — 7 SQLite store; `src/frontend.test.js` — 5 legacy + 17 SPA checks — `npm test` runs all six = 326.
 - `api/index.js` + `vercel.json` + `DEPLOY.md` — Vercel deploy wiring (serverless entry, rewrites, 5-min guide; prod MUST be mainnet — serverless disk is ephemeral).
 
 ## Local vs Mainnet — honesty box

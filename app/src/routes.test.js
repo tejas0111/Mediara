@@ -414,6 +414,27 @@ test('degraded memory: recap questions answer honestly instead of 503', async ()
   }
 });
 
+test('demo namespaces cap at DD_DAY_LIMIT_DEMO even with high DD_DAY_LIMIT_ANON', async () => {
+  process.env.DD_DAY_LIMIT_DEMO = '1';
+  try {
+    let got429 = null;
+    for (let i = 0; i < 3; i++) {
+      const r = await post('/api/chat', { userId: 'demo-mom', message: `hello number ${i}` });
+      if (r.status === 429) { got429 = await r.json(); break; }
+      assert.equal(r.status, 200);
+    }
+    assert.ok(got429, 'demo-mom must hit the demo day-cap');
+    assert.equal(got429.loginRequired, true, 'prompt flags login');
+    assert.equal(got429.demoUser, 'demo-mom', 'prompt points at the premade demo');
+    assert.match(got429.resetsAt, /^\d{4}-\d{2}-\d{2}$/, 'reset day is explicit');
+    // Normal namespaces still use the (high) ANON cap — the split is demo-only.
+    const ok = await post('/api/chat', { userId: `rt-nondemo-${Date.now()}`, message: 'hello there' });
+    assert.equal(ok.status, 200);
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
+  }
+});
+
 test('poisoned cached client recovers once on 401, never loops', async () => {
   const { __cachedClientForTest: cc } = await import('./server.js');
   let makes = 0;
