@@ -453,3 +453,10 @@ test('poisoned cached client recovers once on 401, never loops', async () => {
   await assert.rejects(() => cc('t-plain', plain).recall({}), /boom/, 'non-auth errors propagate');
   assert.equal(plainMakes, 1, 'non-auth errors never trigger a rebuild');
 });
+
+test('/api/usage markdown redacts other users blob texts', async () => {
+  await chat('user-a', 'She takes calcium at 9am');
+  const md = await (await get(`/api/usage?format=md`)).text();
+  assert.ok(!/calcium/i.test(md), 'no other-user health text in markdown');
+  assert.ok(/\[redacted/.test(md), 'redaction is explicit, not silent');
+});

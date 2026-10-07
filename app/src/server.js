@@ -704,13 +704,15 @@ app.get('/api/usage', readLimiter, (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store');
     const wantsMd = String(req.query.format || '') === 'md';
-    const s = usage.summary({ mode: MODE });
     const sess = sessionFromReq(req);
     const mine = sess ? userClientFor(sess.address) : null;
     const ownedNs = mine ? mine.ns : null;
+    const redactUser = (id) => !(ownedNs && namespaceFor(id) === ownedNs);
+    const s = usage.summary({ mode: MODE, redactUser });
     const users = (s.json.users || []).map((u) => {
       if (ownedNs && u.namespace === ownedNs) return u;
       return { ...u, blobs: (u.blobs || []).map((b) => ({ ...b, text: null })) };
+      // NOTE: markdown is redacted inside summary() via the same predicate.
     });
     res.json({ ...s.json, users, markdown: wantsMd ? s.md : undefined });
   } catch (e) { fail(res, e); }

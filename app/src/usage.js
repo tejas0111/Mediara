@@ -164,7 +164,9 @@ export class UsageTracker {
     };
   }
 
-  summary({ users = USERS, mode = 'local', minUsers = 3, minMemories = 10 } = {}) {
+  // redactUser(userId) -> true hides blob TEXTS (counts + ids stay) in every
+  // rendering of this summary (json rows, md). Same rule as the route layer.
+  summary({ users = USERS, mode = 'local', minUsers = 3, minMemories = 10, redactUser = null } = {}) {
     const snap = users.map((u) => this.snapshot(u));
     const q = this.qualifies(snap, minUsers, minMemories);
     const generatedAt = new Date().toISOString();
@@ -175,8 +177,9 @@ export class UsageTracker {
       users: snap,
     };
     const rows = snap.map((s) => {
+      const shown = (b) => (redactUser && redactUser(s.userId) ? '[redacted — not your namespace]' : b.text.replace(/^User\s+\S+:\s*/i, ''));
       const blobList = s.blobs.length
-        ? s.blobs.map((b) => `\n     - ${b.blobId} — ${b.text.replace(/^User\s+\S+:\s*/i, '')}${b.link ? `\n       ${b.link}` : ''}`).join('')
+        ? s.blobs.map((b) => `\n     - ${b.blobId} — ${shown(b)}${b.link ? `\n       ${b.link}` : ''}`).join('')
         : '\n     - (none recorded)';
       const okMark = s.meetsMinimum ? '✅' : '❌';
       return `  ${okMark} ${s.userId}: ${s.memories} memories, ${s.turns} chat turns${s.firstSeen ? ` · since ${s.firstSeen}` : ''}${blobList}`;
@@ -190,7 +193,7 @@ export class UsageTracker {
       '',
       ...snap.map((s) => `## ${s.userId} — ${s.memories} memories${s.meetsMinimum ? ' ✅' : ''}\n\n` +
         (s.blobs.length
-          ? s.blobs.map((b) => `- \`${b.blobId}\` — ${b.text.replace(/^User\s+\S+:\s*/i, '')}${b.link ? ` — [walruscan](${b.link})` : ' (local demo id, not Mainnet)'}`).join('\n')
+          ? s.blobs.map((b) => `- \`${b.blobId}\` — ${redactUser && redactUser(s.userId) ? '[redacted — not your namespace]' : b.text.replace(/^User\s+\S+:\s*/i, '')}${b.link ? ` — [walruscan](${b.link})` : ' (local demo id, not Mainnet)'}`).join('\n')
           : '_no memories recorded_')),
       '',
       '_Every blob id above was returned by a real `rememberAndWait` after the write gate — nothing inferred, nothing padded._',
