@@ -1,0 +1,5 @@
+# Never upload secrets into builds/deploys. Variables only.
+.env
+*.local-memory.json
+.wallet-registry*.json
+node_modules/
