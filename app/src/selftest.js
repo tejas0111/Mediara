@@ -7,6 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 if (!process.env.DD_LOCAL_STORE) { const _t = (await import('node:os')).default.tmpdir(); const _p = (await import('node:path')).default; process.env.DD_LOCAL_STORE = _p.join(_t, `dd-selftest-${process.pid}-${Date.now()}.json`); }
+// Same resolution as localClient.js: tests must read/write the OVERRIDDEN
+// store, never the hardcoded demo file (a fresh checkout has no demo file,
+// so hardcoded reads fail the run).
+const storePath = () => process.env.DD_LOCAL_STORE || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json');
 let pass = 0, fail = 0;
 const ok = (cond, name) => { if (cond) { pass++; console.log(`ok - ${name}`); } else { fail++; console.log(`FAIL - ${name}`); } };
 
@@ -135,7 +139,7 @@ ok((await recallRelevant(fakeClient, 'q', -1)).length === 0, 'regression: recall
   ok((await lc.recall({ query: 'meds', limit: -1 })).results.length === 0, 'regression: local negative limit -> []');
   ok((await lc.remember(null)).job_id.startsWith('job-local-'), 'regression: local remember coerces null');
   try {
-    const store = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json');
+    const store = storePath();
     const db = JSON.parse(fs.readFileSync(store, 'utf8'));
     delete db.namespaces[tns];
     fs.writeFileSync(store, JSON.stringify(db, null, 2));
@@ -218,11 +222,11 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok(all.results.filter((r) => r.text.startsWith('atomic fact')).length === 25,
     'regression: local concurrent writes all persisted (atomic + serialized)');
   let valid = true;
-  try { JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json'), 'utf8')); }
+  try { JSON.parse(fs.readFileSync(storePath(), 'utf8')); }
   catch { valid = false; }
   ok(valid, 'regression: local store is valid JSON after concurrent writes');
   try {
-    const store = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.local-memory.json');
+    const store = storePath();
     const db = JSON.parse(fs.readFileSync(store, 'utf8'));
     delete db.namespaces[tns];
     fs.writeFileSync(store, JSON.stringify(db, null, 2));
