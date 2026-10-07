@@ -64,6 +64,10 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
   const [stepMsg, setStepMsg] = React.useState<string | null>(null);
   const [relinkMsg, setRelinkMsg] = React.useState<string | null>(null);
   const [relinkError, setRelinkError] = React.useState<string | null>(null);
+  // Repair mode: an onboarded vault whose stored delegate key the relayer
+  // rejects (Relink detects the dead key). The step UI below is gated on
+  // !onboarded, so without this the link step could never be reached.
+  const [linkRepair, setLinkRepair] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setLoading(true);
@@ -234,6 +238,7 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
         );
       } else {
         setStep(0);
+        setLinkRepair(false);
         setStepMsg(`Onboarding complete${doneId ? ` — account ${doneId}` : ''}.`);
       }
       await refresh();
@@ -257,8 +262,11 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
       };
       if (out?.needsDelegateLink) {
         setStep(1);
+        setLinkRepair(true);
         setRelinkMsg(
-          `Found onchain account${out.accountId ? ` ${out.accountId}` : ''} but this server has no delegate key — run the link step below.`,
+          (out as { delegateRotated?: boolean })?.delegateRotated
+            ? 'The stored vault key was rejected by the memory network — a fresh key is ready on the server. Run the link step below to register it.'
+            : `Found onchain account${out.accountId ? ` ${out.accountId}` : ''} but this server has no delegate key — run the link step below.`,
         );
       } else {
         setRelinkMsg(
@@ -357,7 +365,7 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
         </CardContent>
       </Card>
 
-      {signedIn && !onboarded ? (
+      {signedIn && (!onboarded || linkRepair) ? (
         <Card>
           <CardHeader>
             <CardTitle>Onboarding ({stepName} — step {step + 1} of 2)</CardTitle>

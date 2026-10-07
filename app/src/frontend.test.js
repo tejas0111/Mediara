@@ -185,6 +185,14 @@ test('SPA demo gate: login prompt + one-click demo switch', () => {
   assert.ok(wread('src/api.ts').includes('loginRequired') || wread('src/api.ts').includes('data: Record'), '429 body survives on ApiError');
 });
 
+test('SPA surfaces a dead vault delegate as re-link, not retry-soon', () => {
+  const c = wread('src/ChatView.tsx');
+  assert.ok(c.includes('needsRelink') && c.includes('Re-link wallet'), 'chat shows the re-link action on a rejected delegate key');
+  assert.ok(wread('src/WalletView.tsx').includes('linkRepair'), 'wallet opens the link step even when already onboarded');
+  assert.ok(server.includes('needsRelink'), 'chat route fails actionable (409) on a dead delegate, not 503');
+  const mem = fs.readFileSync(path.join(__dirname, 'memory.js'), 'utf8');
+  assert.ok(mem.includes('authFailure'), 'recall layer tags 401-class rejections for the route');
+});
 test('SPA wallet modal guides connect -> sign -> vault -> chat', () => {
   const m = wread('src/WalletModal.tsx');
   assert.ok(m.includes('useSignPersonalMessage') && m.includes('authVerify'), 'modal signs the server challenge');

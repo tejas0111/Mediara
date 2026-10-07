@@ -185,6 +185,35 @@ export async function relinkExisting(address) {
   if (!account?.accountId) return null;
   const before = getUser(address); // decrypted view; null if row missing/corrupt
   const alreadyLinked = Boolean(before?.accountId);
+  // A stored delegate key can die (revoked, never landed, account mismatch):
+  // the relayer then 401s every vault call while the UI still reports "vault
+  // ready" and Relink says "already linked". Probe the stored key with one
+  // cheap recall — a 401 here means re-link is the ONLY repair, so mint a
+  // fresh delegate and send the user to the link step. Any other outcome
+  // keeps the existing row untouched (transient outages must not churn keys),
+  // and the probe never touches the shared recall breaker (direct call).
+  if (before?.delegatePrivateKey && before?.accountId) {
+    try {
+      const { createDelegateClient } = await import('./memory.js');
+      const probe = createDelegateClient({ delegatePrivateKey: before.delegatePrivateKey, accountId: before.accountId, namespace: 'relink-probe' });
+      await Promise.race([
+        probe.recall({ query: 'probe', limit: 1 }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('probe timeout')), 15000)),
+      ]);
+    } catch (e) {
+      if (/\b401\b|unauthorized|forbidden|invalid signature|wrong private key/i.test(String((e && e.message) || e))) {
+        const fresh = await generateDelegateKey();
+        upsertUser({
+          address, accountId: account.accountId,
+          delegatePrivateKey: fresh.privateKey,
+          delegatePublicKey: Buffer.from(fresh.publicKey).toString('hex'),
+          delegateAddress: fresh.suiAddress,
+          pendingPhase: null, pendingTxBytes: null,
+        });
+        return { accountId: account.accountId, alreadyLinked: true, needsDelegateLink: true, delegateRotated: true };
+      }
+    }
+  }
   markAccountLinked(address, account.accountId);
   return {
     accountId: account.accountId,

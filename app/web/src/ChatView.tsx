@@ -145,6 +145,7 @@ export default function ChatView(props: ChatViewProps) {
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [needLogin, setNeedLogin] = React.useState<string | null>(null);
+  const [needRelink, setNeedRelink] = React.useState<string | null>(null);
   const [lastFailed, setLastFailed] = React.useState<string | null>(null);
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
@@ -212,6 +213,7 @@ export default function ChatView(props: ChatViewProps) {
       const msg = e instanceof Error ? e.message : 'request failed';
       setLastFailed(text);
       setNeedLogin(e instanceof ApiError && e.status === 429 && (e as ApiError).data?.loginRequired === true ? msg : null);
+      setNeedRelink(e instanceof ApiError && e.status === 409 && (e as ApiError).data?.needsRelink === true ? msg : null);
       const cleanMsg = msg.replace(/[.\u2026\s]+$/, '');
       setError(status === 503
         ? `Server is degraded right now: ${cleanMsg}. Your message was not answered.`
@@ -327,7 +329,15 @@ export default function ChatView(props: ChatViewProps) {
           </span>
         </Alert>
       ) : null}
-      {error && !needLogin ? (
+      {needRelink ? (
+        <Alert variant="warn" className="send-error" role="alert">
+          <span><strong>Vault link broken.</strong> {needRelink}</span>
+          <span className="btn-row">
+            <Button size="sm" variant="primary" onClick={() => { setNeedRelink(null); window.location.hash = '#/wallet'; }}>Re-link wallet</Button>
+          </span>
+        </Alert>
+      ) : null}
+      {error && !needLogin && !needRelink ? (
         <Alert variant="danger" className="send-error">
           <span>{error} Nothing was saved for this turn — you can retry safely.</span>
           {lastFailed ? (

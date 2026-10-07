@@ -645,7 +645,11 @@ export async function safeRecall(client, params, tries = 2, timeoutMs = 10_000) 
   }
   if (++BREAKER.fails >= 8) BREAKER.openUntil = Date.now() + 10_000;
   console.error(`recall degraded (fails=${BREAKER.fails}):`, String(lastErr?.message || lastErr).slice(0, 120));
-  return { results: [], degraded: true };
+  // A 401-class rejection means the CREDENTIAL is dead (wrong/revoked delegate
+  // key, account mismatch) — retrying the same key can never succeed. Tag it so
+  // callers can answer actionably (re-link) instead of "retry shortly".
+  const authFailure = /\b401\b|unauthorized|forbidden|invalid signature|wrong private key/i.test(String((lastErr && lastErr.message) || lastErr));
+  return { results: [], degraded: true, authFailure: authFailure || undefined };
 }
 
 // Allergy facts are a hard safety requirement: the normal message query may not
@@ -702,6 +706,7 @@ export async function recallRelevantMeta(client, query, limit = 5) {
   const ordered = [...byText.values()].sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1));
   const out = ordered.slice(0, n);
   const degraded = main.degraded || safety.degraded || meds.degraded;
+  const authFailure = main.authFailure || safety.authFailure || meds.authFailure || undefined;
   // Force-include allergy AND med facts that fell past the cap. Prefer evicting
   // the worst entry that is NEITHER an allergy NOR a medication fact, so the
   // interaction guard still sees the med fact it needs. Only evict a med fact
@@ -723,9 +728,9 @@ export async function recallRelevantMeta(client, query, limit = 5) {
       if (idx >= 0) res[idx] = m;
       else if (res.length < n) res.push(m);
     }
-    return { facts: res.sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1)), degraded };
+    return { facts: res.sort((a, b) => (a.distance ?? 1) - (b.distance ?? 1)), degraded, authFailure };
   }
-  return { facts: out, degraded };
+  return { facts: out, degraded, authFailure };
 }
 
 export async function recallRelevant(client, query, limit = 5) {
@@ -741,9 +746,11 @@ export async function recallAllMeta(client, queries, limit = 20) {
   const settled = await Promise.allSettled((queries || []).map((q) => safeRecall(client, { query: q, limit: 25 })));
   const byText = new Map();
   let degraded = false;
+  let authFailure = false;
   for (const s of settled) {
     if (s.status !== 'fulfilled') { degraded = true; continue; }
     if (s.value.degraded) degraded = true;
+    if (s.value.authFailure) authFailure = true;
     for (const r of s.value.results || []) {
       // A LISTING is not a relevance query: keep EVERY fact (no distance cutoff),
       // or the emergency card can print "None recorded" for a stored allergy.
@@ -756,7 +763,7 @@ export async function recallAllMeta(client, queries, limit = 20) {
   const list = [...byText.values()];
   // Allergies first (safety), then by relevance.
   list.sort((a, b) => ((isActiveAllergyFact(b.text) ? 1 : 0) - (isActiveAllergyFact(a.text) ? 1 : 0)) || ((a.distance ?? 1) - (b.distance ?? 1)));
-  return { facts: list.slice(0, limit), degraded };
+  return { facts: list.slice(0, limit), degraded, authFailure: authFailure || undefined };
 }
 export async function recallAll(client, queries, limit = 20) {
   return (await recallAllMeta(client, queries, limit)).facts;

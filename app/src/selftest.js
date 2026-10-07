@@ -336,6 +336,15 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   const throwing = { recall: async () => { throw new Error('503 relayer unavailable'); } };
   const sr = await safeRecall(throwing, { query: 'x', limit: 1 });
   ok(sr.degraded === true && sr.results.length === 0, 'resilience: safeRecall reports degraded on failure');
+  // Dead-credential tagging (a 401 means the KEY is rejected — retry is futile,
+  // the user must re-link). Field must not exist before this fix, so this is
+  // the red-green proof for the tag.
+  const authFail = { recall: async () => { throw new Error('401 from relayer: unauthorized'); } };
+  const af = await safeRecall(authFail, { query: 'x', limit: 1 });
+  ok(af.degraded === true && af.authFailure === true, 'resilience: safeRecall tags 401-class failures as authFailure');
+  const otherFail = { recall: async () => { throw new Error('503 relayer unavailable'); } };
+  const ot = await safeRecall(otherFail, { query: 'x', limit: 1 });
+  ok(ot.degraded === true && !ot.authFailure, 'resilience: non-401 failures carry no authFailure tag');
   ok(mentionsDrug('Can she take ibuprofen?') === true, 'resilience: mentionsDrug true for a drug question');
   ok(mentionsDrug('what is the weather?') === false, 'resilience: mentionsDrug false for chit-chat');
   ok(looksLikeMedicationQuestion('Can I give her levothyroxine?') === true, 'fail-closed: out-of-vocabulary drug question is conservative');

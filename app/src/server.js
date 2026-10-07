@@ -382,6 +382,16 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Recall a wide set for the GUARDS (so presentation trimming / poisoning can
     // never evict the allergy fact a STOP depends on), but show only the top 5.
     const rr = memoryOff ? { facts: [], degraded: false } : await recallRelevantMeta(client, message, 25);
+    // Dead vault credential (the relayer 401s this wallet's delegate key):
+    // retrying the same key can never succeed, so fail actionable (re-link)
+    // instead of the generic "retry shortly" 503. Shared-channel outages keep
+    // the honest 503 below. memoryOff never touches the delegate, unaffected.
+    if (!memoryOff && walletClient && rr.authFailure) {
+      return res.status(409).json({
+        error: 'Your vault link was rejected by the memory network — the delegate key on file is not registered on your account. Re-link your wallet (one signature) and retry.',
+        needsRelink: true,
+      });
+    }
     const guardFacts = rr.facts;
     let recalled = rr.facts.slice(0, 5);
     // Visible reasoning trace (DeepSeek-style "thinking", but real): every
