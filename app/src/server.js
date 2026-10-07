@@ -603,9 +603,17 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         }
       } catch { memoryPersisted = false; thinking.push({ label: 'Memory write', detail: 'Skipped — the write failed and was surfaced, not silently kept.' }); /* surfaced to the client below */ }
     }
+    // Demo teach redirect: save-worthy content aimed at the read-only shared
+    // demo must not vanish silently — point at personal Chat (no UI change).
+    let demoRedirected = false;
+    if (!memoryOff && demoReadonly && shouldRemember(message)) {
+      reply += ' (The shared demo is read-only, so that was not saved — switch to personal Chat and tell me again to save it.)';
+      thinking.push({ label: 'Memory write', detail: 'Redirected, not dropped: save-worthy content goes to personal Chat, never the shared demo.' });
+      demoRedirected = true;
+    }
     // Never ship a persistence lie: if the reply claims it saved but the write
     // did not confirm (and memory isn't off), correct it inline.
-    if (!memoryOff && CLAIMS_SAVED_RE.test(reply) && memoryPersisted !== true && memoryPersisted !== 'pending') {
+    if (!memoryOff && !demoRedirected && CLAIMS_SAVED_RE.test(reply) && memoryPersisted !== true && memoryPersisted !== 'pending') {
       reply += demoReadonly
         ? ' (Note: the shared demo is read-only, so that was not saved — sign in with your Sui wallet for your own vault.)'
         : ' (Note: that was not saved — please send it again as one short sentence.)';

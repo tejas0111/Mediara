@@ -444,6 +444,13 @@ test('shared demo namespaces are read-only for anonymous writers', async () => {
   assert.ok(typeof j.reply === 'string' && j.reply.length > 0, 'read path still answers');
 });
 
+test('demo teaches redirect to personal Chat (never silently dropped)', async () => {
+  const j = await chat('demo-mom', 'i have adhd');
+  assert.equal(j.savedBlob, null, 'demo never writes');
+  assert.ok(/read-only/i.test(j.reply) && /personal Chat/.test(j.reply), 'reply redirects the teach, exactly once');
+  assert.equal((j.reply.match(/read-only/gi) || []).length, 1, 'no double suffix (redirect XOR lie-guard)');
+});
+
 test('degraded memory: recap questions answer honestly instead of 503', async () => {
   const { resetBreaker } = await import('./memory.js');
   const u = `rt-recapdeg-${Date.now()}`;

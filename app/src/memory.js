@@ -350,7 +350,7 @@ export function shouldRemember(text) {
   if (/\b(?:store|remember|note(?: down)?|save|keep track of)\b[^.?]{0,40}\bthat\b|\b(?:remember|note)\s*:/i.test(t)) return true;
   // Health conditions ("I have migraines", "she suffers from asthma"): durable
   // care facts the doctor summary exists to hold. Typo-tolerant stems.
-  if (/\b(?:i have|she has|he has|mom has|dad has|has been diagnosed|diagnosed with|suffers?(?: from| with)?|living with|dealing with)\b[^.?]{0,60}\b(?:migrain\w*|headaches?|diabetes|blood pressure|hypertension|asthma|arthritis|epilepsy|seizures?|thyroid|cholesterol|depression|anxiety|insomnia|allergies|pain|condition|disease|syndrome|dementia|alzheimer|parkinson|stroke|cancer)\b/i.test(t)) return true;
+  if (/\b(?:i have|i am|i'?m|she (?:has|is)|he (?:has|is)|mom (?:has|is)|dad (?:has|is)|has been diagnosed|diagnosed with|suffers?(?: from| with)?|living with|dealing with)\b[^.?]{0,60}\b(?:migrain\w*|headaches?|diabetes|diabetic|blood pressure|hypertension|asthma|arthritis|epilepsy|seizures?|thyroid|cholesterol|depression|anxiety|anxious|insomnia|adhd|autis\w*|\bocd\b|ptsd|bipolar|dyslex\w*|schizophren\w*|allergies|pain|condition|disease|syndrome|dementia|alzheimer|parkinson|stroke|cancer)\b/i.test(t)) return true;
   // Durable safety/care facts — ONE shared definition also used by the guards,
   // so every saved allergy phrasing is readable by the conflict/interaction net.
   if (hasAllergySignal(t)) return true;
