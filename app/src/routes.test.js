@@ -413,3 +413,22 @@ test('degraded memory: recap questions answer honestly instead of 503', async ()
     resetBreaker();
   }
 });
+
+test('poisoned cached client recovers once on 401, never loops', async () => {
+  const { __cachedClientForTest: cc } = await import('./server.js');
+  let makes = 0;
+  const flaky = () => {
+    makes++;
+    const n = makes;
+    return { recall: async () => { if (n === 1) throw new Error('401 Unauthorized'); return { results: [{ text: 'ok', distance: 0.1 }] }; } };
+  };
+  const r = await cc('t-flaky', flaky).recall({ query: 'x' });
+  assert.equal(r.results[0].text, 'ok', 'one fresh handshake recovers the read');
+  assert.equal(makes, 2, 'exactly one recovery attempt');
+  const bad = () => ({ recall: async () => { throw new Error('401 nope'); } });
+  await assert.rejects(() => cc('t-bad', bad).recall({}), /401/, 'persistent 401 still surfaces');
+  let plainMakes = 0;
+  const plain = () => { plainMakes++; return { recall: async () => { throw new Error('boom 500'); } }; };
+  await assert.rejects(() => cc('t-plain', plain).recall({}), /boom/, 'non-auth errors propagate');
+  assert.equal(plainMakes, 1, 'non-auth errors never trigger a rebuild');
+});

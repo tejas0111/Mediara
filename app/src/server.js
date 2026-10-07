@@ -64,15 +64,46 @@ const guardProof = new GuardProof({ persistPath: process.env.DD_GUARD_PROOF || p
 // by key with a TTL below the Seal session expiry (5 min).
 const CLIENT_TTL_MS = 4 * 60 * 1000;
 const clientCache = new Map();
+// A 401 is almost always client-state (stale Seal session, rotated key), not a
+// dead relayer: evict the cached client and retry ONCE with a fresh handshake
+// instead of serving degraded reads for up to 4 minutes on a broken client.
+// Any other error (or a second 401) propagates to the normal degraded path.
+function isAuthFailure(e) {
+  return /\b401\b|unauthorized|forbidden|invalid signature|wrong private key/i.test(String((e && e.message) || e));
+}
+function wrapRecallRecovery(key, make, client) {
+  if (!client || typeof client.recall !== 'function' || client.__recallWrapped) return client;
+  const inner = client.recall.bind(client);
+  const wrapped = Object.create(client);
+  wrapped.recall = async (params) => {
+    try {
+      return await inner(params);
+    } catch (e) {
+      if (!isAuthFailure(e)) throw e;
+      clientCache.delete(key); // drop the poisoned client first — never reuse it
+      const retryClient = make();
+      // Cache the WRAPPED client for future requests, but retry this call on
+      // the raw client: exactly one recovery attempt, never recursion.
+      clientCache.set(key, { client: wrapRecallRecovery(key, make, retryClient), at: Date.now() });
+      return retryClient.recall(params);
+    }
+  };
+  Object.defineProperty(wrapped, '__recallWrapped', { value: true });
+  return wrapped;
+}
+export function __cachedClientForTest(key, make) { return cachedClient(key, make); }
 function cachedClient(key, make) {
   const now = Date.now();
   const hit = clientCache.get(key);
   if (hit && now - hit.at < CLIENT_TTL_MS) return hit.client;
-  const client = make();
+  const client = wrapRecallRecovery(key, make, make());
   clientCache.set(key, { client, at: now });
   if (clientCache.size > 500) { for (const k of clientCache.keys()) { clientCache.delete(k); if (clientCache.size <= 400) break; } }
   return client;
 }
+// Exported for tests only: poisoning the cache must be observable + recoverable.
+export function __evictClientForTest(key) { clientCache.delete(key); }
+export function __cacheSizeForTest() { return clientCache.size; }
 
 function clientFor(userId) {
   const ns = namespaceFor(userId);
