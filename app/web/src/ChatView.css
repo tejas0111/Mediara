@@ -221,8 +221,8 @@
 
 /* model picker lives inside the composer box */
 .composer { flex-direction: column; align-items: stretch; gap: 8px; }
-.composer-bar { display: flex; align-items: center; gap: 8px; }
-.model-pick { display: flex; align-items: center; min-width: 0; }
+.composer-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.model-pick { display: flex; align-items: center; min-width: 0; flex: 1 1 auto; }
 .model-pick select {
   border: 1px solid transparent; background: transparent; color: var(--muted);
   border-radius: 8px; padding: 4px 6px; font-size: 12.5px; font-weight: 600;
@@ -230,5 +230,12 @@
 }
 .model-pick select:hover { border-color: var(--border); color: var(--text); }
 .model-pick select:focus-visible { border-color: var(--text); color: var(--text); }
+/* Native option popups ignore the parent dark surface — without this the
+   model menu (and any select list) renders OS-white on a charcoal UI. */
+.model-pick select { color-scheme: dark; }
+.model-pick select option, .model-pick select optgroup {
+  background-color: var(--surface-2);
+  color: var(--text);
+}
 .composer-bar .count { margin-left: auto; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

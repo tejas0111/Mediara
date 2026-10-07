@@ -10,22 +10,47 @@ try { ASSET_V = String(Math.floor(fs.statSync(path.join(__pdir, '..', 'public', 
 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
 <title>${esc(title)}</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/app.css?v=${ASSET_V}">
+<style>
+/* Compat-view charcoal shim: these server pages are shareable legacy views
+   (kept because tests + evidence link them); the app lives at /app. The
+   file stylesheet is var-driven, so forcing the Mediara charcoal vars here
+   re-skins every page at once. !important: the file's own dark-mode block
+   outranks plain :root on dark-OS browsers. */
+:root{
+  color-scheme:dark !important;
+  --bg:#0c0d10 !important; --surface:#14151b !important; --surface-2:#1a1c23 !important; --surface-3:#23262f !important;
+  --border:rgb(255 255 255/.12) !important; --border-strong:rgb(255 255 255/.22) !important;
+  --text:#f4f4f5 !important; --text-2:#d4d4d8 !important; --muted:#a1a1aa !important;
+  --primary:#f4f4f5 !important; --primary-hover:#ffffff !important; --primary-active:#d4d4d8 !important;
+  --primary-soft:#1a1c23 !important; --primary-contrast:#0c0d10 !important;
+  --success:#4ade80 !important; --success-soft:rgb(74 222 128/.1) !important;
+  --warning:#fbbf24 !important; --warning-soft:rgb(251 191 36/.1) !important;
+  --danger:#f87171 !important; --danger-soft:rgb(248 113 113/.1) !important; --danger-border:rgb(248 113 113/.4) !important;
+  --focus:#f4f4f5 !important;
+}
+body{background:#0c0d10 !important;background-image:none !important;color:#f4f4f5 !important;}
+.top{background:#101116 !important;border-bottom:1px solid rgb(255 255 255/.08);}
+select,option,optgroup{color-scheme:dark;background-color:#1a1c23;color:#f4f4f5;}
+.legacy-note{font-size:12.5px;color:#a1a1aa;text-align:center;padding:8px 20px;border-bottom:1px solid rgb(255 255 255/.08);}
+.legacy-note a{color:#f4f4f5;}
+</style>
 <script type="module" src="/assets/app.js?v=${ASSET_V}"></script></head><body>
 <a class="skip" href="#main">Skip to content</a>
 <header class="top"><div class="bar">
-  <div class="brand"><span class="logo">&#129461;</span>
+  <div class="brand"><span class="logo">M</span>
     <div><h1>Mediara</h1><p>a caregiver chatbot that never re-asks a dose</p></div></div>
   <nav class="topnav" aria-label="Primary">
-    <a href="/">Chat</a><a href="/demo">Before / After</a><a href="/memory?user=demo-mom">Memory</a><a href="/guard-proof">Guard&nbsp;proof</a><a href="/print?user=demo-mom">Print</a><a href="/replay?user=demo-mom">Replay</a><a href="/compare?a=demo-mom&amp;b=demo-day7">Isolation</a>
+    <a href="/app">Chat</a><a href="/app#/demo">Demo chat</a><a href="/app#/memory">Memory</a><a href="/app#/proof">Guard&nbsp;proof</a><a href="/app#/print">Print</a><a href="/app#/replay">Replay</a><a href="/app#/compare">Isolation</a>
     <span class="pill ${mode === 'mainnet' ? 'mainnet' : 'local'}"><span class="dot"></span>${mode === 'mainnet' ? 'Walrus Mainnet' : 'Local demo'}</span>
   </nav>
-</div></header>`;
+</div></header>
+<div class="legacy-note">Shareable legacy view — the full app lives at <a href="/app">/app</a>.</div>`;
 
 const FOOT = (mode) => `<footer class="foot">
   Every remembered fact is a Seal-encrypted blob on Walrus${mode === 'mainnet' ? ' Mainnet' : ''}. ${mode === 'mainnet' ? 'Verify any fact on <a href="https://walruscan.com" target="_blank" rel="noopener">walruscan.com</a>.' : 'Set <span class="mono">MEMWAL_MODE=mainnet</span> with keys for real Mainnet storage.'}<br>
-  <a href="https://github.com/tejas0111/mediara" target="_blank" rel="noopener">source</a> &middot; <a href="/healthz">health</a> &middot; built for Walrus Session 8<br>
+  <a href="https://github.com/tejas0111/mediara" target="_blank" rel="noopener">source</a> &middot; <a href="/healthz">health</a> &middot; <a href="/app">open the app</a> &middot; built for Walrus Session 8<br>
   Confirm with your doctor &mdash; this is not medical advice.
 </footer>`;
 
@@ -76,8 +101,8 @@ export function chatPage({ mode }) {
     <button class="chip" data-msg="Can she take ibuprofen for her headache?"><span class="n">4</span>Allergy trap &#9888;</button>
   </div>
   <div class="chips">
-    <a class="chip ghost" id="memlink" href="/memory?user=demo-mom">See what it remembers</a>
-    <a class="chip ghost" href="/demo">Day&nbsp;1 vs Day&nbsp;7</a>
+    <a class="chip ghost" id="memlink" href="/app#/memory">See what it remembers</a>
+    <a class="chip ghost" href="/app#/demo">Demo chat</a>
     <a class="chip ghost" href="/api/summary?user=demo-mom">Doctor summary</a>
   </div>
   ${FOOT(mode)}
@@ -129,7 +154,7 @@ h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacin
 <p class="kicker">Mediara &middot; ${esc(modeLabel)}</p>
 <h1>A caregiver chatbot that never re-asks a dose</h1>
 <p class="promise">Tell it once — meds, allergies, routines — and every future answer is checked against that memory before it speaks.</p>
-<a class="cta" href="/app">Launch app</a><a class="ghost" href="/demo">see Day&nbsp;1 vs Day&nbsp;7</a>
+<a class="cta" href="/app">Launch app</a><a class="ghost" href="/app#/demo">see the live demo chat</a>
 <div class="steps">
 <div class="step"><b>1 · Teach it once</b><p>Medications with times, allergies, routines — stored as encrypted Walrus blobs, not chat logs.</p></div>
 <div class="step"><b>2 · Guards run first</b><p>Every question is checked for allergy conflicts and drug interactions before any model answers.</p></div>
