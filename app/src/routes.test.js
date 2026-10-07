@@ -108,6 +108,27 @@ test('teaching an allergy is not a STOP and IS saved', async () => {
   assert.ok(j.savedBlob, 'a taught allergy should be saved');
 });
 
+test('explicit save commands persist (no noted-down lie)', async () => {
+  const u = `rt-explicit-${Date.now()}`;
+  const j = await chat(u, 'store that i have migraines');
+  assert.ok(j.savedBlob, 'an explicit store command must be saved');
+  assert.ok(!/not saved/i.test(j.reply), 'reply must not disclaim a save that happened');
+});
+
+test('signed-in vault owners still reach the public demo by name', async () => {
+  // A valid session whose wallet has NO vault row: old code 409'd here
+  // (vault branch hijacked the explicit demo request); the banner + signed-in
+  // demo views ask for demo-mom by name and must get the shared demo.
+  const { issueSession } = await import('./walletAuth.js');
+  const addr = '0x' + 'cd'.repeat(32);
+  const h = { Cookie: `dd_session=${issueSession(addr)}` };
+  const r = await get('/api/dashboard?user=demo-mom', h);
+  assert.equal(r.status, 200, 'explicit public-demo request bypasses the vault branch');
+  const j = await r.json();
+  assert.equal(j.demo.userId, 'demo-mom', 'serves the shared demo namespace');
+  assert.equal(j.personal.budget.cap, 10, 'demo cap applies, not the wallet cap');
+});
+
 test('fail-loud identity: expired/garbage cookie -> 401 on chat AND reads', async () => {
   const h = { Cookie: 'dd_session=garbage.token' };
   assert.equal((await post('/api/chat', { userId: 'x', message: 'hello there' }, h)).status, 401);

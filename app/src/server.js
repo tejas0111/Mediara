@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, rememberWithReceipt, shouldRemember, findConflict, findInteraction, classifyFacts } from './memory.js';
+import { createClient, namespaceFor, recallRelevant, recallRelevantMeta, recallAllMeta, namespaceCensus, mentionsDrug, looksLikeMedicationQuestion, memoryDegraded, withTimeout, truncateFact, hasAllergySignalExport, sanitizeChatTurn, buildSystemPrompt, rememberAndWait, rememberWithReceipt, shouldRemember, shouldResearch, findConflict, findInteraction, classifyFacts } from './memory.js';
 import { createLocalClient } from './localClient.js';
 import { chatPage, memoryPage, demoPage, printPage, replayPage, comparePage, ledgerPage, landingPage, esc } from './page.js';
 import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionFromReq, sessionCookie, clearCookie, revokeSession } from './walletAuth.js';
@@ -297,6 +297,34 @@ function prettyModelName(id) {
     .join(' ').replace(/\s+/g, ' ').trim() || s;
 }
 
+// Agent research tool: general web background for definitional questions asked
+// from an EMPTY memory. Keyless DuckDuckGo Instant Answer, 6s bound, fail-open
+// (null = answer without it, never an error). NEVER safety verdicts — the
+// shouldResearch gate already excluded medication/personal/guard shapes; the
+// snippet is fenced as background and the disclaimer still applies.
+async function webSearch(query) {
+  try {
+    const res = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(String(query).slice(0, 120))}&format=json&no_html=1&skip_disambig=1`, {
+      signal: AbortSignal.timeout(6000),
+      headers: { 'User-Agent': 'Mediara/1.0 (caregiver-memory-agent)' },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = String(data?.AbstractText || '').trim();
+    if (text.length < 40) return null;
+    return { text: text.slice(0, 600), source: String(data?.AbstractURL || 'duckduckgo.com').slice(0, 120) };
+  } catch { return null; }
+}
+
+// A reply that claims persistence the write did not confirm is a lie the
+// pipeline must not ship (the "noted that down" case). Corrected inline.
+const CLAIMS_SAVED_RE = /\bnoted?(?: that)? down\b|(?:i'll|i will) remember\b|remember (?:that|this|it)\b|i.?ve (?:noted|saved|remembered)\b|saved (?:it|that|to memory)\b|committed to memory\b/i;
+
+// Public demo namespaces: world-readable by design, even for signed-in vault
+// owners (their vault no longer hijacks an explicit demo request — the banner
+// and signed-in demo views both ask for demo-mom by name).
+const DEMO_PUBLIC = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
+
 // Deterministic, keyless, LLM-free answer built from recalled facts — used when
 // there is no key or every model failed, so the demo ALWAYS shows memory working.
 function memoryAnswer(recalled) {
@@ -488,7 +516,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       reply = `${lead} — ${interaction.substance} may interact with ${interaction.withSubstance}${interaction.blob_id ? ` (blob ${interaction.blob_id})` : ''}: ${interaction.reason}. Confirm with your doctor — this is not medical advice.`;
       thinking.push({ label: 'Answer', detail: 'Deterministic guard template — no LLM involved in a STOP/CAUTION.' });
     } else {
-      const system = buildSystemPrompt(recalled);
+      // Agent think-then-act: definitional question + empty memory → one
+      // bounded web-background lookup, cited and fenced (never safety).
+      let webCtx = null;
+      if (shouldResearch(message, recalled.length, { memoryOff, guardFired: !!(conflict || interaction) })) {
+        webCtx = await webSearch(message);
+        thinking.push({ label: 'Research', detail: webCtx ? `Web background from ${webCtx.source} (general info only — memory and guards still decide safety).` : 'Web lookup attempted, nothing usable — answering from memory state.' });
+      }
+      const system = buildSystemPrompt(recalled) + (webCtx ? `\n\nWeb background for general context only (NOT a safety source, NOT user memory): <web_background source="${webCtx.source}">\n${webCtx.text}\n</web_background>\nFor anything about safety, dosage, or this person, ignore the background and answer from memory/guards.` : '');
       const llm = await callLLM(system, message, history, model);
       reply = llm.text;
       // No key, or every model failed (dead free model, out of credits, stall):
@@ -560,6 +595,14 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
           else { saved = await withTimeout(rememberAndWait(client, stored), 15_000, 'remember'); memoryPersisted = !!saved?.blob_id; thinking.push({ label: 'Memory write', detail: saved?.blob_id ? `Saved to Walrus (blob ${saved.blob_id}).` : 'Write attempted but no blob returned.' }); }
         }
       } catch { memoryPersisted = false; thinking.push({ label: 'Memory write', detail: 'Skipped — the write failed and was surfaced, not silently kept.' }); /* surfaced to the client below */ }
+    }
+    // Never ship a persistence lie: if the reply claims it saved but the write
+    // did not confirm (and memory isn't off), correct it inline.
+    if (!memoryOff && CLAIMS_SAVED_RE.test(reply) && memoryPersisted !== true && memoryPersisted !== 'pending') {
+      reply += demoReadonly
+        ? ' (Note: the shared demo is read-only, so that was not saved — sign in with your Sui wallet for your own vault.)'
+        : ' (Note: that was not saved — please send it again as one short sentence.)';
+      thinking.push({ label: 'Memory write', detail: 'Reply claimed a save the write did not confirm — corrected inline instead of shipping the lie.' });
     }
     // Never deny memory we just stored: if the (keyless) reply says we know
     // nothing but a fact was saved this turn, acknowledge it.
@@ -706,8 +749,12 @@ const ALL_QUERIES = [
 async function namespaceView(req, res) {
   const sess = sessionFromReq(req);
   if (!sess && hasSessionCookie(req)) { res.status(401).json({ error: 'Your session expired — sign in again.' }); return null; }
-  const mine = sess ? userClientFor(sess.address) : null;
-  if (sess && !mine) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
+  // Explicit public-demo requests bypass the vault branch: a signed-in owner
+  // asking for demo-mom gets the shared demo, not their vault (the banner and
+  // signed-in demo views ask by name; vaults stay credential-scoped).
+  const explicitDemo = req.query.user != null && DEMO_PUBLIC.has(normalizeUser(req.query.user));
+  const mine = (sess && !explicitDemo) ? userClientFor(sess.address) : null;
+  if (sess && !mine && !explicitDemo) { res.status(409).json({ error: 'Your memory vault is not linked on this server.' }); return null; }
   const userId = mine ? mine.ns.replace(/^user-/, '') : normalizeUser(req.query.user);
   // A wallet vault is credential-scoped: refuse to resolve it anonymously. The
   // namespace id is derivable from a public address, so it is not a secret.

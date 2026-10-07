@@ -214,6 +214,8 @@ test('SPA surfaces a dead vault delegate as re-link, not retry-soon', () => {
   assert.ok(server.includes('needsRelink'), 'chat route fails actionable (409) on a dead delegate, not 503');
   const mem = fs.readFileSync(path.join(__dirname, 'memory.js'), 'utf8');
   assert.ok(mem.includes('authFailure'), 'recall layer tags 401-class rejections for the route');
+  assert.ok(mem.includes('shouldResearch'), 'agent research gate lives in the memory layer');
+  assert.ok(server.includes("label: 'Research'") && server.includes('webSearch'), 'chat route runs the bounded research tool with a trace step');
 });
 test('SPA fresh-start path for retired-deployment vaults', () => {
   const ob = fs.readFileSync(path.join(__dirname, 'onboarding.js'), 'utf8');

@@ -344,6 +344,13 @@ export function shouldRemember(text) {
   // Never persist instruction-shaped text: a stored fact must not be a prompt
   // injection vector into the system prompt.
   if (/\b(?:ignore|disregard|forget|override|bypass)\b[^.]{0,60}\b(?:previous|prior|above|all|earlier|instructions?|guidance|disclaimer|doctor|prompt|rules?)\b|\bgoing\s+forward\b|\bfrom\s+now\s+on\b|\bnew\s+instructions?\b|\bsystem\s*:|\byou\s+must\b|\bas\s+an\s+ai\b|\bjailbreak\b|\b(?:always|never)\s+(?:say|state|answer|claim|mention|warn|tell|recommend|prescribe)\b|\b(?:recommend|prescribe)\b[^.]{0,40}\b(?:safe|give|take)\b|\bimportant\s*:\s*always\s+say\b/i.test(t)) return false;
+  // Explicit save commands ("store that I have migraines", "remember: ..."):
+  // the user is instructing persistence — honor it, otherwise the reply lies
+  // about having noted it down. Injection shapes were rejected above.
+  if (/\b(?:store|remember|note(?: down)?|save|keep track of)\b[^.?]{0,40}\bthat\b|\b(?:remember|note)\s*:/i.test(t)) return true;
+  // Health conditions ("I have migraines", "she suffers from asthma"): durable
+  // care facts the doctor summary exists to hold. Typo-tolerant stems.
+  if (/\b(?:i have|she has|he has|mom has|dad has|has been diagnosed|diagnosed with|suffers?(?: from| with)?|living with|dealing with)\b[^.?]{0,60}\b(?:migrain\w*|headaches?|diabetes|blood pressure|hypertension|asthma|arthritis|epilepsy|seizures?|thyroid|cholesterol|depression|anxiety|insomnia|allergies|pain|condition|disease|syndrome|dementia|alzheimer|parkinson|stroke|cancer)\b/i.test(t)) return true;
   // Durable safety/care facts — ONE shared definition also used by the guards,
   // so every saved allergy phrasing is readable by the conflict/interaction net.
   if (hasAllergySignal(t)) return true;
@@ -354,6 +361,24 @@ export function shouldRemember(text) {
   // Meds / caregiver facts / routines. Bare meal words are deliberately NOT
   // enough ("dinner was nice" is chit-chat); a time/context is required.
   return /i take|\btakes?\b|\btaking\b|my (mom|dad|dose|routine|mother|father)|\bevery day\b|\bdaily\b|\bmedication\b|prescription|\bmeds?\b|\bpill|remind|\bmg\b|\d\s?mg|\d:\d|\d\s?(am|pm)\b|\b(?:dinner|breakfast|lunch)\b.*\bat\s+\d|\bbedtime\b|\broutine\b/.test(t);
+}
+
+// Agent research gate (pure): may the assistant consult general web background
+// for this turn? YES only for general-knowledge questions asked from an EMPTY
+// memory — safety verdicts (medication questions, guards) and personal-memory
+// questions NEVER consult the web: memory + coded guards decide those, never a
+// search snippet. Called before the LLM; the snippet (if any) enters context
+// cited, fenced off from safety logic.
+export function shouldResearch(message, recalledCount, { memoryOff = false, guardFired = false } = {}) {
+  if (memoryOff || guardFired) return false;
+  if ((recalledCount || 0) > 0) return false; // memory answers first, always
+  const m = String(message ?? '');
+  if (/\b(she|her|hers|he|him|his|mom|dad|mother|father|thuy|patient|daughter|son|grandma|grandpa)\b/i.test(m)) return false; // personal — memory only
+  // Administration / personal-safety shapes never consult the web, even when
+  // phrased generally ("is ibuprofen safe" is a verdict, not trivia).
+  if (/\b(can (she|he|i|we)|should (she|he|i|we)|give (her|him|me)|is .*?\bsafe\b|\bokay\b|\bok\b|dose|dosage|\d+\s?(?:mg|mcg|ml|iu|units?))\b/i.test(m)) return false;
+  if (/\bweather\b|\bwhat time\b|\bwhat day\b|\bjoke\b/i.test(m)) return false; // chit-chat, not research
+  return /^(what is|what are|tell me about|explain|define|how does|what does)\b/i.test(m.trim());
 }
 
 // Coded safety net: if the user asks about giving/taking something matching a
