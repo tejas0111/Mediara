@@ -45,9 +45,12 @@ A caregiver chatbot with durable memory. Three memory planes that NEVER mix:
    views). Vault data is NEVER served for a demo request and vice versa.
 5. **Anonymous callers can never name a vault namespace** (403), signed-in
    non-owners can never read another vault (session binds exactly one).
-6. **Budget identity**: wallet → own id (200 UTC-day); demo namespaces →
+6. **Budget identity**: wallet → the lowercase session address, ONE canonical
+   key on the chat AND dashboard paths (turns, memories, guard receipts;
+   pre-unification rows under the truncated id / vault-hash heal at read
+   time — unioned, never dropped, never reset); demo namespaces →
    shared demo id (10 / rolling 24h); everyone else → own guest key
-   (20 / rolling 24h). 429 bodies carry `remaining:0 + resetAt/resetInHrs`
+   (20 / rolling 24h; memories stay namespace-keyed evidence). 429 bodies carry `remaining:0 + resetAt/resetInHrs`
    (+ `loginRequired`, `demoUser` for anon/demo).
 7. **Every reply carries `budget{used,cap,remaining,resetAt}`** (best-effort,
    never fails chat). UI whispers at ≤3 remaining, never nags the signed-in
@@ -75,17 +78,23 @@ D=expired session.
 No surface may show "sign in" to C, "vault ready" to B, wallet caps in the
 demo banner, or demo numbers as personal numbers.
 
-## 5. Test enforcement (`npm test` runs all seven)
+## 5. Test enforcement (`npm test` runs all nine)
 
+- `selftest.js`: classifier/gate units (save-intent, conditions, research,
+  authFailure, census scope, chain-id pins).
+- `wallet.test.js` (71): auth/crypto/rate-limit + build-error classifier.
 - `routes.test.js`: demo-always-shared (anon AND signed-in session), demo
   read-only + redirect, vault-409 (never shared fallback), reserved-403,
   expired-401, budget caps + 429 shape, dashboard demo-vs-vault budgets.
-- `selftest.js`: classifier/gate units (save-intent, conditions, research,
-  authFailure, census scope, chain-id pins).
+- `stream.test.js` (6): SSE streaming (guard instant-JSON, keyless
+  chunk-stream, budget-once, 429 error event, demo read-only, parser units).
+- `stats.test.js` (12): usage/proof (anon-redacted).
+- `db.test.js` (7): SQLite store parity.
+- `window.test.js` (11): rolling-window math both stores + route contract.
+- `budget-keys.test.js` (9): canonical budget-key union (legacy + mixed-case
+  healing, chat/dashboard agreement, both stores).
 - `frontend.test.js`: no tunnel/URL prompt, no Coming-soon, no slang, no
   hardcoded caps, live-budget banner, reasoning block, re-link/fresh-start.
-- `wallet.test.js` (71): auth/crypto/rate-limit + build-error classifier.
-- `window.test.js` (11): rolling-window math both stores + route contract.
 - `eval` 30/30: guards + recall + A/B before/after.
 
 ## 6. Non-goals (explicitly out)

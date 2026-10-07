@@ -59,6 +59,7 @@ dev mode is never presented as Mainnet.
 | `GET` | `/` | — | Dark premium landing (hero, 3-step how-it-works, live evidence strip, Launch app → `/app`) |
 | `GET` | `/app` (+ `/app/*` fallback, static `/app/*` assets) | — | React SPA (hash routing; without a build falls back to the legacy server chat) |
 | `POST` | `/api/chat` | JSON `{userId, message}` (≤500 chars) | `{reply, recalled[], recalledMeta[], memoryScope, identity, savedBlob, mode, disclaimer}` — recalls top-5, coded allergy guard, LLM, gated auto-save. Signed-in wallet users read/write **their own vault** |
+| `POST` | `/api/chat/stream` | Same body as `/api/chat` (same pipeline, same budgets, same `chatLimiter`) | SSE live tokens: `thinking` → `token*` → `done` (guards stay instant JSON, keyless fallback is chunk-streamed — see below) |
 | `GET` | `/api/summary` | `?user=<id>` (default `demo-mom`) | `{user, mode, medications[], allergies[], routine[], familyAndCare[], blobCount, disclaimer}` from recall only |
 | `GET` | `/memory` | `?user=<id>` | HTML memory receipts page (wallet users see their own vault) |
 | `GET` | `/demo` | `?persona=day1\|day7` | LIVE before/after: real recall on empty `demo-day1` vs taught namespace |
@@ -84,11 +85,35 @@ curl 'localhost:3001/demo?persona=day7'
 print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom take?"}))
 ```
 
+### Streaming (`POST /api/chat/stream`)
+
+Same body, same pipeline (budget gate, identity, recall, guards, research,
+write gate — one shared handler, never forked), same `chatLimiter`. Only the
+delivery differs; `Content-Type` is `text/event-stream`:
+
+| Event | Payload | When |
+|---|---|---|
+| `thinking` | `{thinking[], recalledMeta[]}` (full reasoning trace + cited facts) | FIRST, before any token (sent twice on the keyless path: preliminary, then final with write entries) |
+| `token` | `{t:"..."}` (answer chunks; concatenated = `done.reply`) | Zero or more (never for safety verdicts) |
+| `done` | `{reply, recalled[], recalledMeta[], memoryScope, identity, savedBlob, memoryPersisted, memoryOff, thinking, mode, disclaimer, budget}` (same shapes as `/api/chat`) | LAST, exactly once |
+| `error` | Same JSON error contract as `/api/chat` (`401`/`403`/`409`/`429`/`503`, e.g. `{error, loginRequired, demoUser, remaining, resetsAt}`) with the same HTTP status | Instead of tokens, exactly once |
+
+Rules: STOP/CAUTION guard replies are deterministic templates — they arrive
+as immediate `thinking` + `done` with **no** `token` events (a safety verdict
+is never streamed token-by-token). The keyless/memory-fallback answer is
+chunk-streamed too, so the endpoint works with zero keys. Budget turns are
+consumed exactly once per request (same `touchUser` semantics as `/api/chat`).
+
+```bash
+curl -N -X POST localhost:3001/api/chat/stream -H 'Content-Type: application/json' \
+  -d '{"userId":"demo-mom","message":"What meds does mom take?"}'
+```
+
 ## Scripts
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stats.test.js && node --test src/frontend.test.js` | 393 checks (211 core + 71 wallet + 53 route + 12 stats + 7 db + 11 window + 28 frontend), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stream.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/window.test.js && node --test src/budget-keys.test.js && node --test src/frontend.test.js` | 418 checks (211 core + 71 wallet + 53 route + 6 stream + 12 stats + 7 db + 11 window + 9 budget-keys + 10 t3 + 28 frontend), no network |
 | `npm run stats` | `node src/stats.js` | **Judge command**: per-user memory counts → the ≥3 users × ≥10 memories requirement. `-- --live` reads Walrus itself; `-- --json` is machine-readable. Exit 0 = requirement met. Appends `evidence/USAGE-LEDGER.md` |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
@@ -121,7 +146,7 @@ print(post("/api/chat", {"userId": "demo-mom", "message": "What meds does mom ta
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
 - `src/verify.js` — Mainnet health + write/recall probe.
-- `src/selftest.js` — 211 offline tests (memory/safety/regression core + dead-credential tagging + chain-id pins + census scope + save-intent + research gate); `src/wallet.test.js` — 71 wallet/auth/crypto/rate-limit (+build-error classifier); `src/routes.test.js` — 53 HTTP-level (guards, identity, budgets, demo read-only, dashboard, thinking trace, seed-status honesty, explicit-save, demo-bypass, demo-hijack, scope matrix); `src/stats.test.js` — 12 usage/proof (anon-redacted); `src/db.test.js` — 7 SQLite store; `src/window.test.js` — 11 rolling-window units + route contract; `src/frontend.test.js` — 5 legacy + 23 SPA checks — `npm test` runs all seven = 393.
+- `src/selftest.js` — 211 offline tests (memory/safety/regression core + dead-credential tagging + chain-id pins + census scope + save-intent + research gate); `src/wallet.test.js` — 71 wallet/auth/crypto/rate-limit (+build-error classifier); `src/routes.test.js` — 53 HTTP-level (guards, identity, budgets, demo read-only, dashboard, thinking trace, seed-status honesty, explicit-save, demo-bypass, demo-hijack, scope matrix); `src/stream.test.js` — 6 SSE streaming (guard instant-JSON, keyless chunk-stream, budget-once, 429 error event, demo read-only, SSE parser units); `src/stats.test.js` — 12 usage/proof (anon-redacted); `src/db.test.js` — 7 SQLite store; `src/window.test.js` — 11 rolling-window units + route contract; `src/budget-keys.test.js` — 9 canonical-union units; `src/frontend.test.js` — 5 legacy + 23 SPA checks — `npm test` runs all ten = 418.
 - `api/index.js` + `vercel.json` + `DEPLOY.md` — Vercel deploy wiring (serverless entry, rewrites, 5-min guide; prod MUST be mainnet — serverless disk is ephemeral).
 
 ## Local vs Mainnet — honesty box

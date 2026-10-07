@@ -29,6 +29,12 @@ Planes (demo shared / personal anon / vault), four auth states, §3 rules
 (demo-always-shared, demo-never-writes, vault-default for owners, explicit
 demo bypass, no vault naming by anon, budget identities, per-reply budget
 object, fail-closed independence), §4 surface matrix, §5 test enforcement.
+Canonical budget key: a wallet vault owner's turns, memories, and guard
+receipts are keyed by the lowercase session address on both the chat and
+dashboard paths (pre-unification rows under the truncated id / vault-hash
+heal at read time — unioned, never dropped, never reset); demo ids share one
+key; guests spend per-browser guest key with memories attributed per
+namespace.
 
 ## 4. Memory pipeline (`app/src/memory.js`, local: `app/src/localClient.js`)
 
@@ -110,8 +116,8 @@ object, fail-closed independence), §4 surface matrix, §5 test enforcement.
 
 ## 10. Testing gates (all must be green, always)
 
-`npm test` = selftest + wallet + routes + stats + db + window + frontend
-(currently 386); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
+`npm test` = selftest + wallet + routes + stream + stats + db + window + budget-keys + frontend
+(currently 408); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
 boot smoke `:3001` + `:3114`-class scratch. Rules: TDD red-green for new
 behavior; extend-never-weaken; temp env paths in tests; no chain writes;
 no secrets in git/logs.

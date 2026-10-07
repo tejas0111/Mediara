@@ -79,6 +79,9 @@ export class UsageTracker {
   }
 
   touchUser(userId, { turn = false } = {}) {
+    // Key normalisation stays exact here (no case folding): wallet keys arrive
+    // already canonical and legacy case-variants heal in the read-time union
+    // (server.js resolveUnionKeys) — never by rewriting these rows.
     const u = String(userId || '').slice(0, 64);
     if (!u) return;
     let rec = this.users.get(u);
@@ -221,7 +224,10 @@ export class UsageTracker {
     this.#noteTurn(u, this.#nowMs(opts));
   }
   snapshot(userId) {
-    const id = String(userId);
+    // Slice to 64 exactly like the write paths (touchUser/recordMemory):
+    // a 66-char wallet address is stored under its 64-char prefix, so the
+    // read must normalise identically or it misses its own row.
+    const id = String(userId).slice(0, 64);
     const rec = this.users.get(id);
     if (!rec) return { userId: id, namespace: namespaceFor(id), turns: 0, memories: 0, firstSeen: null, lastSeen: null, blobs: [] };
     return {

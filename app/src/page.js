@@ -114,8 +114,16 @@ export function chatPage({ mode }) {
 // Premium dark hero for Mediara. Server-rendered, zero JS (CSP script-src
 // 'self' holds: no inline <script>). Dynamic numbers are escaped server-side.
 export function landingPage({ mode, demoBlobs, guardCount }) {
-  const blobs = Number.isFinite(Number(demoBlobs)) ? Number(demoBlobs) : 0;
-  const guards = Number.isFinite(Number(guardCount)) ? Number(guardCount) : 0;
+  // Unknown (null/undefined/NaN) renders as an em-dash, never a refuting 0; a
+  // genuinely-known zero stays numeric. Signature and markup unchanged.
+  // (Number(null) is 0, so null needs an explicit guard — not just isFinite.)
+  const toCount = (v) => {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const blobs = toCount(demoBlobs);
+  const guards = toCount(guardCount);
   const modeLabel = mode === 'mainnet' ? 'Walrus Mainnet' : 'Local demo';
   const demoNote = mode === 'mainnet'
     ? 'Live on Walrus Mainnet — memories are Seal-encrypted blobs you can verify on walruscan.'
@@ -163,8 +171,8 @@ h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacin
 <div class="strip" aria-label="Live evidence">
 <span class="pill">12/12 A/B memory checks</span>
 <span class="pill">30/30 eval gate</span>
-<span class="pill">${esc(String(blobs))} demo memories live</span>
-<span class="pill">${esc(String(guards))} guard stops on record</span>
+<span class="pill">${esc(blobs == null ? '—' : String(blobs))} demo memories live</span>
+<span class="pill">${esc(guards == null ? '—' : String(guards))} guard stops on record</span>
 </div>
 <p class="note">${esc(demoNote)} Guests chat instantly with personal memory — no wallet needed; sign in later for your own vault and a bigger budget.</p>
 </main>

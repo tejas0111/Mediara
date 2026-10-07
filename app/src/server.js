@@ -21,7 +21,7 @@ import { issueNonce, consumeNonce, verifyWalletSignature, issueSession, sessionF
 import { walletStatus, prepareCreateAccount, prepareLinkDelegate, completeOnboarding, relinkExisting, resetVault } from './onboarding.js';
 import { createDelegateClient } from './memory.js';
 import { getUser, registryStatus } from './userRegistry.js';
-import { limiter, clientKey } from './rateLimit.js';
+import { limiter, clientKey, deviceKey } from './rateLimit.js';
 import { encryptionEnabled } from './cryptoUtils.js';
 import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
 import { createStores, DEFAULT_DB_PATH } from './db.js';
@@ -62,7 +62,8 @@ const isReservedNs = (id) => /^user-(?:w-|vault-|tg-)/i.test(namespaceFor(id));
 //
 //   guestKey = 'guest:' + sha256(ip + '|' + deviceId).slice(0, 12)
 //
-// Usage-ledger keys stay readable: wallet users keep their full `safeUser`,
+// Usage-ledger keys stay readable: wallet vault owners keep their lowercase
+// session address (ONE canonical key on the chat AND dashboard paths),
 // demo namespaces keep the shared `safeUser` (existing demo rules), and every
 // other anonymous caller is budgeted under their `guest:<hash12>`. The device
 // id is client-rotatable (never a security boundary); the IP limiter below it
@@ -77,6 +78,131 @@ function guestKeyFor(req) {
   const ip = clientKey(req);
   return 'guest:' + crypto.createHash('sha256').update(`${ip}|${deviceIdFor(req)}`).digest('hex').slice(0, 12);
 }
+
+// Canonical budget identity (SPEC §3 rule 6): ONE key per identity, shared by
+// the chat enforcement path and the dashboard readout path.
+//   wallet vault owner → lowercase session address (verify() returns the
+//     derived address lowercased and new sessions are issued from it, but
+//     issueSession/readSession round-trip case-preservingly — the
+//     `.toLowerCase()` here is what pins the canonical key against
+//     mixed-case userIds and older sessions)
+//   shared demo id      → the demo id itself (existing demo rules, unchanged)
+//   everyone else       → per-browser guest key (existing guest rules, unchanged;
+//     guest memories stay namespace-keyed evidence — see unionSnapshot note)
+// Pre-unification wallet rows (truncated `safeUser` on the chat side,
+// `vault-<sha>` namespace suffix on the dashboard side) are healed at READ
+// time — unioned into every check/snapshot/count, never rewritten, never
+// dropped — so existing spend still enforces and still displays.
+function walletCanonical(sess) { return String(sess.address).toLowerCase(); }
+// Every key shape a wallet identity may already own rows under. safeUser is
+// the caller-typed (possibly mixed-case) 48-char prefix; the canonical slice
+// covers lowercase history; vaultId covers the dashboard-side namespace key.
+function walletKeySet({ canonical, safeUser = null, vaultId = null }) {
+  const keys = [];
+  for (const k of [canonical, safeUser, String(safeUser == null ? '' : safeUser).toLowerCase(), String(canonical).slice(0, 48), vaultId]) {
+    if (k && !keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
+// Union reads over primary + legacy keys. Each turn was recorded under exactly
+// one key, so summed `used` never double-counts; resetAt tracks the oldest
+// live turn (min) with its own resetInHrs. Shape matches checkDay exactly.
+// Keys resolve case-insensitively (resolveUnionKeys): pre-unification wallet
+// rows were keyed by caller-cased safeUser, so history can hold any casing of
+// the same letters — exact-only matching would orphan mixed-case legacy rows
+// on both paths. Resolution returns the requested keys first (read order and
+// empty-store shape unchanged) plus any stored id matching case-insensitively
+// that is not already present exactly — never two reads of the same stored
+// row, so sums stay exact.
+const lowerUnionKey = (k) => String(k).toLowerCase();
+// All userIds a store currently holds, or null when the impl is opaque (the
+// union then falls back to exact keys + their lowercase variants — the same
+// both-casings cover, no throw, no miss of the common shapes).
+function storedUsageIds(usage) {
+  try {
+    if (usage && usage.users instanceof Map) return [...usage.users.keys()];
+    if (usage && usage.db && typeof usage.db.prepare === 'function') {
+      return usage.db.prepare('SELECT userId FROM usage').all().map((r) => r.userId);
+    }
+  } catch { /* fail open — fall back to the requested keys */ }
+  return null;
+}
+function storedGuardIds(guardProof) {
+  try {
+    if (guardProof && Array.isArray(guardProof.entries)) return guardProof.entries.map((e) => e.userId);
+    if (guardProof && guardProof.db && typeof guardProof.db.prepare === 'function') {
+      return guardProof.db.prepare('SELECT DISTINCT userId FROM guards').all().map((r) => r.userId);
+    }
+  } catch { /* fail open — fall back to the requested keys */ }
+  return null;
+}
+// Merge requested keys with any stored case-variant of them (exact-deduped:
+// a stored id already present exactly is never read twice).
+function resolveUnionKeys(keys, storedIds) {
+  const out = [];
+  for (const k of keys) if (k && !out.includes(k)) out.push(k);
+  if (!storedIds) {
+    for (const k of keys.map(lowerUnionKey)) if (k && !out.includes(k)) out.push(k);
+    return out;
+  }
+  const want = new Set(keys.map(lowerUnionKey));
+  for (const id of storedIds) {
+    if (want.has(lowerUnionKey(id)) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+function unionCheck(usage, keys, cap, mode) {
+  const resolved = resolveUnionKeys(keys, storedUsageIds(usage));
+  let used = 0, reset = null, resetAt = null, resetInHrs = null;
+  for (const k of resolved) {
+    let c;
+    try { c = usage.checkDay(k, cap, mode); } catch { continue; }
+    used += Number(c.used || 0);
+    reset = reset || c.reset || null;
+    if (c.resetAt && (!resetAt || c.resetAt < resetAt)) { resetAt = c.resetAt; resetInHrs = c.resetInHrs ?? null; }
+  }
+  if (!reset) reset = new Date().toISOString().slice(0, 10);
+  return used < cap
+    ? { ok: true, used, remaining: cap - used, reset, resetAt, resetInHrs }
+    : { ok: false, used, remaining: 0, reset, resetAt, resetInHrs };
+}
+// Union snapshot: turns summed, memories unioned by blob id (never double-
+// counted), firstSeen min / lastSeen max. userId is always the primary
+// (canonical) key. Guest/dashboard callers pass a single key — identical to
+// a plain snapshot.
+function unionSnapshot(usage, keys, primary) {
+  const snaps = [];
+  for (const k of resolveUnionKeys(keys, storedUsageIds(usage))) { try { snaps.push(usage.snapshot(k)); } catch { /* fail open per key */ } }
+  if (!snaps.length) return { userId: primary, namespace: null, turns: 0, memories: 0, meetsMinimum: false, firstSeen: null, lastSeen: null, blobs: [] };
+  const seen = new Map();
+  let turns = 0, firstSeen = null, lastSeen = null;
+  for (const s of snaps) {
+    turns += Number(s.turns || 0);
+    for (const b of s.blobs || []) if (!seen.has(b.blobId)) seen.set(b.blobId, b);
+    if (s.firstSeen && (!firstSeen || s.firstSeen < firstSeen)) firstSeen = s.firstSeen;
+    if (s.lastSeen && (!lastSeen || s.lastSeen > lastSeen)) lastSeen = s.lastSeen;
+  }
+  const blobs = [...seen.values()];
+  return { userId: primary, namespace: snaps[0].namespace, turns, memories: blobs.length, meetsMinimum: blobs.length >= 10, firstSeen, lastSeen, blobs };
+}
+// Union guard-hit count over primary + legacy userIds. Keys resolve
+// case-insensitively like the usage union (same mixed-case legacy reason).
+// Works on both store impls (SQLite has countByUser; the JSON ledger filters
+// list()).
+function unionGuardCount(guardProof, keys) {
+  const resolved = resolveUnionKeys(keys, storedGuardIds(guardProof));
+  if (typeof guardProof.countByUser === 'function') {
+    let n = 0;
+    for (const k of resolved) { try { n += Number(guardProof.countByUser(k)) || 0; } catch { /* fail open per key */ } }
+    return n;
+  }
+  let list = [];
+  try { list = guardProof.list({ limit: 100000 }); } catch { return 0; }
+  const set = new Set(resolved);
+  return list.filter((e) => set.has(e.userId)).length;
+}
+// Exported for tests only: the union math must hold on both store impls.
+export const __budgetKeysForTest = { walletCanonical, walletKeySet, unionCheck, unionSnapshot, unionGuardCount };
 
 const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 
@@ -213,17 +339,19 @@ app.use('/app', express.static(WEB_DIST, { maxAge: '1y', index: false, immutable
 // larger is abuse. (Express's json parser rejects oversize with 413.)
 app.use(express.json({ limit: '16kb' }));
 
-// Rate limits (fixed-window, per IP).
-// Limits are env-overridable so tests can raise them (defaults are production).
+// Rate limits (fixed-window). Limits resolve per request so DD_* env overrides
+// take effect without a restart (judging-day tuning); defaults are production.
+// Chat + read limiters key on device+IP (one NAT room must not throttle
+// itself); auth-class limiters stay IP-only (abuse-sensitive, non-spoofable).
 const L = (name, dflt) => Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt;
-const authLimiter = limiter({ keyFn: (req) => `auth:${clientKey(req)}`, limit: L('DD_AUTH_LIMIT', 10), windowMs: 60_000 });
-const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientKey(req)}`, limit: L('DD_ONBOARD_LIMIT', 12), windowMs: 60_000 });
-const chatLimiter = limiter({ keyFn: (req) => `chat:${clientKey(req)}`, limit: L('DD_CHAT_LIMIT', 30), windowMs: 60_000 });
+const authLimiter = limiter({ keyFn: (req) => `auth:${clientKey(req)}`, limit: () => L('DD_AUTH_LIMIT', 10), windowMs: 60_000 });
+const onboardLimiter = limiter({ keyFn: (req) => `ob:${clientKey(req)}`, limit: () => L('DD_ONBOARD_LIMIT', 12), windowMs: 60_000 });
+const chatLimiter = limiter({ keyFn: (req) => `chat:${deviceKey(req)}`, limit: () => L('DD_CHAT_LIMIT', 30), windowMs: 60_000 });
 // Read routes fan out to several recall queries; cap them too (audit M9).
-const readLimiter = limiter({ keyFn: (req) => `read:${clientKey(req)}`, limit: L('DD_READ_LIMIT', 60), windowMs: 60_000 });
+const readLimiter = limiter({ keyFn: (req) => `read:${deviceKey(req)}`, limit: () => L('DD_READ_LIMIT', 60), windowMs: 60_000 });
 // Nonce minting is cheap but unbounded; cap it (the nonce Map would otherwise grow).
-const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientKey(req)}`, limit: L('DD_NONCE_LIMIT', 30), windowMs: 60_000 });
-const logoutLimiter = limiter({ keyFn: (req) => `logout:${clientKey(req)}`, limit: L('DD_LOGOUT_LIMIT', 30), windowMs: 60_000 });
+const nonceLimiter = limiter({ keyFn: (req) => `nonce:${clientKey(req)}`, limit: () => L('DD_NONCE_LIMIT', 30), windowMs: 60_000 });
+const logoutLimiter = limiter({ keyFn: (req) => `logout:${clientKey(req)}`, limit: () => L('DD_LOGOUT_LIMIT', 30), windowMs: 60_000 });
 
 // Bounded per-namespace conversation transcript so the model sees recent turns,
 // not just recalled facts (facts are durable; this is ephemeral context).
@@ -249,16 +377,155 @@ function rememberTurn(ns, role, content) {
   while (transcripts.size > 5000) transcripts.delete(transcripts.keys().next().value);
 }
 
+// ---- Live-token streaming (POST /api/chat/stream) -------------------------
+// The stream endpoint runs the IDENTICAL pipeline as /api/chat (one shared
+// handler below: same budget/identity/recall/guard/research/write code) and
+// differs only in how the answer is DELIVERED: safety verdicts stay instant
+// JSON, everything else streams as SSE events. No secrets are ever logged.
+// Parse one accumulated SSE text buffer into completed `data:` payloads.
+// Returns { tokens, done, rest }: `rest` is the trailing incomplete segment
+// the next network chunk must be prepended to. Malformed JSON is skipped,
+// comment keep-alives ignored, `[DONE]` ends the stream with no token.
+// Operates on strings (callers decode bytes with a streaming TextDecoder so
+// multi-byte chars are never split).
+function parseSSEBuffer(buffer) {
+  const tokens = [];
+  let done = false;
+  const rest0 = String(buffer);
+  const idx = rest0.lastIndexOf('\n');
+  if (idx === -1) return { tokens, done, rest: rest0 };
+  const complete = rest0.slice(0, idx + 1);
+  const rest = rest0.slice(idx + 1);
+  for (let line of complete.split('\n')) {
+    line = line.replace(/\r$/, '');
+    if (!line || line.startsWith(':') || !line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (payload === '[DONE]') { done = true; continue; }
+    try {
+      const obj = JSON.parse(payload);
+      const t = obj?.choices?.[0]?.delta?.content
+        ?? obj?.choices?.[0]?.message?.content
+        ?? (typeof obj?.text === 'string' ? obj.text : null);
+      if (typeof t === 'string' && t) tokens.push(t);
+    } catch { /* skip malformed JSON, the stream continues */ }
+  }
+  return { tokens, done, rest };
+}
+// Exported for tests only: split-line/[DONE]/malformed/keep-alive handling.
+export const __sseForTest = { parseSSEBuffer };
+// Affordable per-reply token bound: the free key can only afford ~282 tokens,
+// so 300 402s the whole chain (then every answer stalls ~25s and falls back
+// canned). 200 keeps replies inside budget.
+const LLM_MAX_TOKENS = 200;
+// Sync free check (no network): :free-suffixed ids, the openrouter/auto id,
+// and the verified static snapshot (which holds one non-suffixed free id).
+function isKnownFreeSync(id) {
+  if (typeof id !== 'string' || !id) return false;
+  if (/^openrouter\/free$/i.test(id)) return true;
+  if (/:free$/i.test(id)) return true;
+  return FREE_STATIC.includes(id);
+}
+// Ordered free-model fallback chain (SAME order the non-stream path uses).
+// Free-first always: a paid configured model (LLM_MODEL) is demoted to the
+// end, never position 0, so the chain never opens with a 402. Free wanteds
+// keep the exact historical order.
+function freeModelChain(modelOverride) {
+  const wanted = modelOverride || process.env.LLM_MODEL || FREE_DEFAULT;
+  const FREES = ['google/gemma-4-31b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'google/gemma-4-26b-a4b-it:free', 'liquid/lfm-2.5-2.6b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'openrouter/free'];
+  if (isKnownFreeSync(wanted)) return [wanted, ...FREES].filter((m, i, a) => a.indexOf(m) === i);
+  return [FREE_DEFAULT, ...FREES.filter((m) => m !== FREE_DEFAULT), wanted];
+}
+// Exported for tests only: token bound + chain order, provable without network.
+export const __llmForTest = { freeModelChain, LLM_MAX_TOKENS };
+// Write one SSE event. `obj` is JSON-encoded; it never carries secrets.
+function sseWrite(res, event, obj) {
+  res.write(`event: ${event}\ndata: ${JSON.stringify(obj)}\n\n`);
+}
+function ensureStreamHead(res, status) {
+  if (!res.headersSent) {
+    res.writeHead(status, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+  }
+}
+// Pre-answer failure on the stream endpoint: the SAME HTTP status + SAME JSON
+// body /api/chat would send, wrapped as a single `error` event.
+function sendStreamError(res, status, body) {
+  ensureStreamHead(res, status);
+  sseWrite(res, 'error', body);
+  res.end();
+}
+// Same-status JSON-or-SSE error branch shared by both chat endpoints.
+function sendError(res, streaming, status, body) {
+  if (streaming) return sendStreamError(res, status, body);
+  return res.status(status).json(body);
+}
+// Code-point-safe slicing so chunking never splits an emoji.
+function chunkText(text, size = 24) {
+  const pts = [...String(text)];
+  const out = [];
+  for (let i = 0; i < pts.length; i += size) out.push(pts.slice(i, i + size).join(''));
+  return out.length ? out : [''];
+}
+// Streaming LLM: same model order + same 25s chain budget as callLLM, but
+// requests `stream:true` and re-emits clean tokens via onToken. The first
+// model that yields at least one valid token wins; anything else falls
+// through to the next model. Returns { text, model, streamed };
+// { streamed:false } means the caller must use the deterministic memory
+// fallback (which the endpoint then chunks, so keyless demos stream too).
+async function streamLLM(system, userMessage, history = [], modelOverride, onToken) {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return { text: null, model: null, streamed: false };
+  const models = freeModelChain(modelOverride);
+  const deadline = Date.now() + 25_000;
+  for (const m of models) {
+    if (Date.now() > deadline) break;
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(Math.max(2000, Math.min(15_000, deadline - Date.now()))),
+        body: JSON.stringify({
+          model: m,
+          max_tokens: LLM_MAX_TOKENS,
+          stream: true,
+          messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: userMessage }],
+        }),
+      });
+      if (!res.ok || !res.body) continue;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '', text = '', sawDone = false;
+      for (;;) {
+        const { value, done: rd } = await reader.read();
+        if (value?.length) buf += decoder.decode(value, { stream: true });
+        if (rd) break;
+        const parsed = parseSSEBuffer(buf);
+        buf = parsed.rest;
+        for (const t of parsed.tokens) { text += t; try { onToken(t); } catch { /* client gone */ } }
+        if (parsed.done) { sawDone = true; break; }
+      }
+      buf += decoder.decode(); // flush the decoder, then drain any full lines
+      const tail = parseSSEBuffer(buf + '\n');
+      for (const t of tail.tokens) { text += t; try { onToken(t); } catch { /* client gone */ } }
+      try { await reader.cancel(); } catch { /* already closed */ }
+      if (text) return { text, model: m, streamed: true };
+      void sawDone;
+      // Zero usable tokens: fall through to the next model.
+    } catch (e) {
+      console.error(`LLM-stream ${m} failed: ${String((e && e.message) || e).slice(0, 120)}`);
+    }
+  }
+  return { text: null, model: null, streamed: false };
+}
+
 async function callLLM(system, userMessage, history = [], modelOverride) {
   // OpenRouter free-tier default (verified against the live /models free list;
   // all non-OpenAI/Anthropic, so Beyond-Big-Two eligible). Falls back to echo if no key.
   // Resilience: explicit max_tokens, then free-model fallback chain on 402/429
   // so the demo NEVER dies mid-judge-test. Errors stay graceful.
   const apiKey = process.env.OPENROUTER_API_KEY;
-  const model = modelOverride || process.env.LLM_MODEL || FREE_DEFAULT;
   if (!apiKey) return { text: '__NO_LLM__', model: null };
   // Free-model fallback chain (verified 2026-10-07 against the live free list).
-  const models = [model, 'google/gemma-4-31b-it:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'google/gemma-4-26b-a4b-it:free', 'liquid/lfm-2.5-2.6b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'openrouter/free'].filter((m, i, a) => a.indexOf(m) === i);
+  const models = freeModelChain(modelOverride);
   let lastErr = '';
   // Overall budget across the whole chain so one stalled provider can't run for
   // 6 × 15s; the socket timeout is 120s, so the handler must return well before.
@@ -272,7 +539,7 @@ async function callLLM(system, userMessage, history = [], modelOverride) {
         signal: AbortSignal.timeout(Math.max(2000, Math.min(15_000, deadline - Date.now()))),
         body: JSON.stringify({
           model: m,
-          max_tokens: 300,
+          max_tokens: LLM_MAX_TOKENS,
           messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: userMessage }],
         }),
       });
@@ -332,7 +599,11 @@ function memoryAnswer(recalled) {
   return `Here's what I remember about this person:\n- ${recalled.slice(0, 4).map((r) => String(r.text).replace(/^User\s+\S+:\s*/i, '')).join('\n- ')}\n\nConfirm with your doctor — this is not medical advice.`;
 }
 
-app.post('/api/chat', chatLimiter, async (req, res) => {
+// Shared chat pipeline for BOTH endpoints: POST /api/chat (streaming=false,
+// one JSON reply) and POST /api/chat/stream (streaming=true, SSE live
+// tokens). Every gate below — validation, identity, budget, recall, guards,
+// research, write gate — runs IDENTICALLY for both; only delivery differs.
+async function handleChat(req, res, streaming) {
   try {
     res.setHeader('Cache-Control', 'no-store');
     const { userId = 'anon', message = '', model: reqModel } = req.body;
@@ -340,7 +611,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     let model = undefined;
     if (reqModel !== undefined) {
       if (!(await isFreeModel(reqModel))) {
-        return res.status(400).json({ error: 'unknown model — pick one from the model list' });
+        return sendError(res, streaming, 400, { error: 'unknown model — pick one from the model list' });
       }
       model = reqModel;
     }
@@ -349,15 +620,15 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // can be shown with and without memory — the rubric's before/after.
     const memoryOff = req.body.memory === false || req.body.memory === 'off' || req.query.memory === 'off';
     if (typeof message !== 'string' || !message.trim() || message.length > 500) {
-      return res.status(400).json({ error: 'message must be 1-500 chars' });
+      return sendError(res, streaming, 400, { error: 'message must be 1-500 chars' });
     }
-    if (typeof userId !== 'string') return res.status(400).json({ error: 'userId must be a string' });
+    if (typeof userId !== 'string') return sendError(res, streaming, 400, { error: 'userId must be a string' });
     // A signed-in owner with an untouched default id chats as the session
     // address (SPEC §3.3: 0x{64} = 66 chars). The vault itself resolves from
     // the session cookie, never from this string — it only steers past the
     // demo branch. Every other id keeps the 64-char bound.
     const isSessionAddr = /^0x[0-9a-fA-F]{64}$/.test(userId);
-    if (userId.length > (isSessionAddr ? 66 : 64)) return res.status(400).json({ error: 'userId too long' });
+    if (userId.length > (isSessionAddr ? 66 : 64)) return sendError(res, streaming, 400, { error: 'userId too long' });
     // Strip control chars/newlines before the id is used as a namespace or a
     // stored fact label — otherwise it is a stored-prompt-injection primitive.
     const safeUser = normalizeUser(userId, 'anon');
@@ -376,13 +647,13 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // An expired session must NOT silently fall through to the shared channel —
     // that would write a signed-in user's private facts to a public namespace.
     if (!sess && hasSessionCookie(req)) {
-      return res.status(401).json({ error: 'Your session expired — sign in again to keep using your own vault.' });
+      return sendError(res, streaming, 401, { error: 'Your session expired — sign in again to keep using your own vault.' });
     }
     // Never silently downgrade a signed-in user to the shared channel — that would
     // write their private health facts into a world-readable namespace. Fail loud.
     // (Demo turns never reach this branch: demoShared bypasses the vault above.)
     if (sess && !walletClient && !demoShared) {
-      return res.status(409).json({ error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
+      return sendError(res, streaming, 409, { error: 'Your memory vault is not linked on this server. Reconnect your wallet to finish onboarding (or re-link), then retry.' });
     }
     // Shared demo namespaces are READ-ONLY for everyone: anyone may ask
     // (recall + guards run on premade memory), but nobody writes into the
@@ -404,10 +675,23 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     const cap = walletClient
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
       : (DEMO_PUBLIC.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
-    // Budget identity: wallet users spend as themselves, demo namespaces spend
-    // as the shared demo id (existing demo rules), everyone else spends as
-    // their per-browser guest key — one IP with N browsers gets N budgets.
-    const budgetKey = walletClient || DEMO_PUBLIC.has(safeUser) ? safeUser : guestKeyFor(req);
+    // Budget identity (SPEC §3 rule 6 — ONE canonical key per identity):
+    // wallet owners spend as their lowercase session address, demo namespaces
+    // spend as the shared demo id (existing demo rules), everyone else spends
+    // as their per-browser guest key — one IP with N browsers gets N budgets.
+    // budgetKeys unions the canonical key with pre-unification wallet rows so
+    // legacy spend still enforces (never silently orphaned); single-key for
+    // demo/guest, where chat and dashboard already agreed.
+    const budgetKey = walletClient ? walletCanonical(sess) : (DEMO_PUBLIC.has(safeUser) ? safeUser : guestKeyFor(req));
+    const budgetKeys = walletClient
+      ? walletKeySet({ canonical: budgetKey, safeUser, vaultId: String(walletClient.ns || '').replace(/^user-/, '') })
+      : [budgetKey];
+    // Memory/blob evidence: wallet rows move to the canonical key; guest/demo
+    // attribution stays namespace-keyed (/api/usage + stats evidence unchanged).
+    const memoryKey = walletClient ? budgetKey : safeUser;
+    // Guard receipts: wallet rows move to the canonical key (dashboard counts
+    // the union, so pre-unification receipts still count).
+    const guardUserId = walletClient ? budgetKey : safeUser;
     // Wallet stays on the UTC-day bucket; demo + anon roll on the 24h window.
     const budgetMode = walletClient ? { mode: 'daily' } : undefined;
     const nextUtcMidnightIso = () => {
@@ -417,11 +701,11 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     };
     let chk = { ok: true, used: 0, remaining: cap, reset: null, resetAt: null, resetInHrs: null };
     try {
-      chk = usage.checkDay(budgetKey, cap, budgetMode);
+      chk = unionCheck(usage, budgetKeys, cap, budgetMode);
     } catch { /* fail open on ledger errors — the IP limiter below still applies */ }
     if (!chk.ok) {
       const walletResetAt = nextUtcMidnightIso();
-      return res.status(429).json({
+      return sendError(res, streaming, 429, {
         error: walletClient
           ? `You've used your ${cap} daily messages — limit resets at UTC midnight.`
           : DEMO_PUBLIC.has(safeUser)
@@ -438,7 +722,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
     // must never be able to name one. Reserve the prefix for wallet sessions.
     if (!walletClient && isReservedNs(safeUser)) {
-      return res.status(400).json({ error: 'that userId is reserved' });
+      return sendError(res, streaming, 400, { error: 'that userId is reserved' });
     }
     const identity = walletClient ? { kind: 'wallet-owner', address: sess.address, ns: walletClient.ns } : { kind: 'shared-anon', ns: namespaceFor(safeUser) };
     const client = walletClient ? walletClient.client : clientFor(safeUser).client;
@@ -454,7 +738,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // instead of the generic "retry shortly" 503. Shared-channel outages keep
     // the honest 503 below. memoryOff never touches the delegate, unaffected.
     if (!memoryOff && walletClient && rr.authFailure) {
-      return res.status(409).json({
+      return sendError(res, streaming, 409, {
         error: 'Your vault link was rejected by the memory network — the delegate key on file is not registered on your account. Re-link your wallet (one signature) and retry.',
         needsRelink: true,
       });
@@ -478,7 +762,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // FAIL CLOSED: if memory is unreachable we cannot verify allergies or
     // interactions, so refuse medication questions rather than answer unguarded.
     if (rr.degraded && looksLikeMedicationQuestion(message) && !isRecap) {
-      return res.status(503).json({ error: 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.', retryable: true });
+      return sendError(res, streaming, 503, { error: 'Memory is temporarily unreachable, so I can\u2019t verify allergies or interactions right now. I won\u2019t answer a medication question until it loads \u2014 please retry shortly.', retryable: true });
     }
     if (rr.degraded && isRecap) {
       thinking.push({ label: 'Recall', detail: 'Memory unreachable — answering honestly instead of pretending to be empty.' });
@@ -488,9 +772,22 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       usage.touchUser(budgetKey, { turn: true });
       let recapBudget = { used: (chk.used || 0) + 1, cap, remaining: Math.max(0, cap - (chk.used || 0) - 1), resetAt: chk.resetAt || null };
       try {
-        const post = usage.checkDay(budgetKey, cap, budgetMode);
+        const post = unionCheck(usage, budgetKeys, cap, budgetMode);
         recapBudget = { used: post.used, cap, remaining: post.remaining, resetAt: post.resetAt || null };
       } catch { /* fail open — budget snapshot best-effort */ }
+      if (streaming) {
+        // Deterministic system notice, never token-streamed (same rule as guards).
+        ensureStreamHead(res, 200);
+        sseWrite(res, 'thinking', { thinking, recalledMeta: [] });
+        sseWrite(res, 'done', {
+          reply, recalled: [], recalledMeta: [], memoryScope: identity.ns,
+          identity: identity.kind, savedBlob: null, memoryPersisted: null,
+          memoryOff, thinking, mode: MODE,
+          disclaimer: 'Confirm with your doctor — this is not medical advice.',
+          budget: recapBudget,
+        });
+        return res.end();
+      }
       return res.json({
         reply, recalled: [], recalledMeta: [], memoryScope: identity.ns,
         identity: identity.kind, savedBlob: null, memoryPersisted: null,
@@ -517,9 +814,16 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     }
     // Public proof: every fired guard is appended to the tamper-evident ledger
     // (/guard-proof) with the exact recalled fact + blob id behind the decision.
-    if (conflict) guardProof.record({ userId: safeUser, kind: 'conflict', substance: conflict.substance, severity: 'high', reason: 'recalled allergy', fact: conflict.fact, blobId: conflict.blob_id, message });
-    if (interaction) guardProof.record({ userId: safeUser, kind: 'interaction', substance: interaction.substance, withSubstance: interaction.withSubstance, severity: interaction.severity, reason: interaction.reason, fact: interaction.fact, blobId: interaction.blob_id, message });
+    if (conflict) guardProof.record({ userId: guardUserId, kind: 'conflict', substance: conflict.substance, severity: 'high', reason: 'recalled allergy', fact: conflict.fact, blobId: conflict.blob_id, message });
+    if (interaction) guardProof.record({ userId: guardUserId, kind: 'interaction', substance: interaction.substance, withSubstance: interaction.withSubstance, severity: interaction.severity, reason: interaction.reason, fact: interaction.fact, blobId: interaction.blob_id, message });
     let reply, answerSource = 'guard';
+    // On the stream endpoint the preliminary reasoning is emitted FIRST so
+    // clients render it before any token; guard verdicts never emit tokens.
+    let streamSentThinking = false;
+    let streamDeferredFallback = false;
+    let streamedText = null;
+    const recalledMetaFor = () => recalled.map((r) => ({ text: r.text, blob_id: r.blob_id || null, distance: r.distance ?? null }));
+    const emitToken = (t) => { if (!res.writableEnded) sseWrite(res, 'token', { t }); };
     if (conflict) {
       reply = `STOP — do not give ${conflict.substance}. Recalled allergy: "${conflict.fact}"${conflict.blob_id ? ` (blob ${conflict.blob_id})` : ''}. Confirm with your doctor — this is not medical advice.`;
       thinking.push({ label: 'Answer', detail: 'Deterministic guard template — no LLM involved in a STOP.' });
@@ -536,17 +840,40 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
         thinking.push({ label: 'Research', detail: webCtx ? `Web background from ${webCtx.source} (general info only — memory and guards still decide safety).` : 'Web lookup attempted, nothing usable — answering from memory state.' });
       }
       const system = buildSystemPrompt(recalled) + (webCtx ? `\n\nWeb background for general context only (NOT a safety source, NOT user memory): <web_background source="${webCtx.source}">\n${webCtx.text}\n</web_background>\nFor anything about safety, dosage, or this person, ignore the background and answer from memory/guards.` : '');
-      const llm = await callLLM(system, message, history, model);
-      reply = llm.text;
-      // No key, or every model failed (dead free model, out of credits, stall):
-      // answer FROM MEMORY instead of leaking a debug stub.
-      if (reply === '__NO_LLM__' || reply.startsWith('[LLM unavailable') || reply.startsWith('[no LLM key')) {
-        reply = memoryAnswer(recalled);
-        answerSource = 'memory-fallback';
-        thinking.push({ label: 'Answer', detail: `No LLM reachable — answered from the ${recalled.length} recalled facts above.` });
+      if (streaming) {
+        // Thinking first, then live tokens. When no LLM is reachable the
+        // deterministic fallback text is buffered and chunked AFTER the
+        // shared write gate (below), so streamed tokens always equal the
+        // final reply even when finalization rewrites it (e.g. the keyless
+        // "noted — I'll remember" acknowledgment).
+        ensureStreamHead(res, 200);
+        sseWrite(res, 'thinking', { thinking, recalledMeta: recalledMetaFor() });
+        streamSentThinking = true;
+        const streamed = await streamLLM(system, message, history, model, emitToken);
+        if (streamed.streamed) {
+          reply = streamed.text;
+          streamedText = streamed.text;
+          answerSource = 'llm';
+          thinking.push({ label: 'Answer', detail: `${prettyModelName(streamed.model || effectiveModel)} answered live with the ${recalled.length} recalled facts in context (guards already ran first).` });
+        } else {
+          reply = memoryAnswer(recalled);
+          answerSource = 'memory-fallback';
+          thinking.push({ label: 'Answer', detail: `No LLM reachable — answered from the ${recalled.length} recalled facts above.` });
+          streamDeferredFallback = true;
+        }
       } else {
-        answerSource = 'llm';
-        thinking.push({ label: 'Answer', detail: `${prettyModelName(llm.model || effectiveModel)} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
+        const llm = await callLLM(system, message, history, model);
+        reply = llm.text;
+        // No key, or every model failed (dead free model, out of credits, stall):
+        // answer FROM MEMORY instead of leaking a debug stub.
+        if (reply === '__NO_LLM__' || reply.startsWith('[LLM unavailable') || reply.startsWith('[no LLM key')) {
+          reply = memoryAnswer(recalled);
+          answerSource = 'memory-fallback';
+          thinking.push({ label: 'Answer', detail: `No LLM reachable — answered from the ${recalled.length} recalled facts above.` });
+        } else {
+          answerSource = 'llm';
+          thinking.push({ label: 'Answer', detail: `${prettyModelName(llm.model || effectiveModel)} answered with the ${recalled.length} recalled facts in context (guards already ran first).` });
+        }
       }
     }
     rememberTurn(nsKey, 'user', message);
@@ -598,7 +925,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
               thinking.push({ label: 'Memory write', detail: 'Upload accepted — Walrus is still indexing, so no blob id yet. It will appear under Memory shortly.' });
               reply += ' (Saving to memory — it will appear under Memory shortly.)';
               // Record usage when the index lands (fire-and-forget, rejection-safe).
-              rec.done.then((b) => { if (b) usage.recordMemory(safeUser, { blobId: b, text: message }); }).catch(() => {});
+              rec.done.then((b) => { if (b) usage.recordMemory(memoryKey, { blobId: b, text: message }); }).catch(() => {});
             } else {
               memoryPersisted = false;
               thinking.push({ label: 'Memory write', detail: `Write failed (${rec.error || 'upload rejected'}) — surfaced, not silently kept.` });
@@ -629,17 +956,52 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     if (saved?.blob_id && /^I don't have any memories/i.test(reply)) {
       reply = `Noted \u2014 I'll remember: \u201c${message}\u201d. Confirm with your doctor \u2014 this is not medical advice.`;
     }
+    // Streaming delivery tail: the deferred fallback chunks the FINAL reply
+    // (so tokens reassemble exactly), and any finalization suffix appended
+    // after live tokens (demo redirect, save notice, lie-guard correction) is
+    // emitted as trailing tokens before `done`. The budget turn below is still
+    // touched exactly once — same as /api/chat.
+    if (streaming && !res.writableEnded) {
+      ensureStreamHead(res, 200);
+      if (streamDeferredFallback) {
+        sseWrite(res, 'thinking', { thinking, recalledMeta: recalledMetaFor() });
+        for (const c of chunkText(reply)) emitToken(c);
+      } else if (streamedText != null && reply !== streamedText && reply.startsWith(streamedText)) {
+        emitToken(reply.slice(streamedText.length));
+      }
+    }
     // Usage evidence: only REAL chat turns and only blobs Walrus actually
     // returned are counted — `npm run stats` reads this same ledger.
     usage.touchUser(budgetKey, { turn: true });
-    if (saved?.blob_id) usage.recordMemory(safeUser, { blobId: saved.blob_id, text: message });
+    if (saved?.blob_id) usage.recordMemory(memoryKey, { blobId: saved.blob_id, text: message });
     // Rolling budget snapshot for the client (best-effort — never fails chat).
     let turnBudget = { used: (chk.used || 0) + 1, cap, remaining: Math.max(0, cap - (chk.used || 0) - 1), resetAt: chk.resetAt || null };
     try {
-      const post = usage.checkDay(budgetKey, cap, budgetMode);
+      const post = unionCheck(usage, budgetKeys, cap, budgetMode);
       turnBudget = { used: post.used, cap, remaining: post.remaining, resetAt: post.resetAt || null };
     } catch { /* fail open — budget snapshot best-effort */ }
 
+    if (streaming) {
+      // Guard verdicts (and any other non-token path) arrive here with no
+      // tokens emitted: thinking + done back-to-back, never streamed.
+      ensureStreamHead(res, 200);
+      if (!streamSentThinking) sseWrite(res, 'thinking', { thinking, recalledMeta: recalledMetaFor() });
+      sseWrite(res, 'done', {
+        reply,
+        recalled: recalled.map((r) => r.text),
+        recalledMeta: recalledMetaFor(),
+        memoryScope: identity.ns,
+        identity: identity.kind,
+        savedBlob: saved?.blob_id || null,
+        memoryPersisted,
+        memoryOff,
+        thinking,
+        mode: MODE,
+        disclaimer: 'Confirm with your doctor — this is not medical advice.',
+        budget: turnBudget,
+      });
+      return res.end();
+    }
     res.json({
       reply,
       recalled: recalled.map((r) => r.text),
@@ -654,8 +1016,17 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
       budget: turnBudget,
     });
-  } catch (e) { fail(res, e); }
-});
+  } catch (e) {
+    if (streaming && res.headersSent) {
+      try { sseWrite(res, 'error', { error: 'Internal error' }); } catch { /* client gone */ }
+      try { res.end(); } catch { /* client gone */ }
+      return;
+    }
+    fail(res, e);
+  }
+}
+app.post('/api/chat', chatLimiter, (req, res) => handleChat(req, res, false));
+app.post('/api/chat/stream', chatLimiter, (req, res) => handleChat(req, res, true));
 
 app.get('/api/summary', readLimiter, async (req, res) => {
   // Doctor-visit summary compiled from recall ONLY — no chat history, no model memory.
@@ -700,12 +1071,17 @@ app.get('/memory', readLimiter, async (req, res) => {
 // Landing at / (server-rendered premium dark hero, zero JS) + the React SPA
 // at /app (vite base '/app/'; hash routing means /app + static /app/* cover
 // every view). Legacy compat routes (/memory, /demo, /print, …) untouched.
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    let demoBlobs = 0, guardCount = 0;
-    try { demoBlobs = usage.snapshot('demo-mom').memories || 0; } catch { /* evidence best-effort */ }
-    try { guardCount = guardProof.entries.length || 0; } catch { /* evidence best-effort */ }
+    // Same live source as /api/dashboard — never the local usage ledger, which
+    // self-refuted the census on mainnet. Null = genuinely unknown -> "—".
+    let demoBlobs = null, guardCount = null;
+    try { demoBlobs = await demoReadinessBlobs(); } catch { /* evidence best-effort */ }
+    try {
+      const n = guardProof.entries.length;
+      guardCount = n > 0 ? n : null; // an empty ledger is "no record", not "zero stops"
+    } catch { /* evidence best-effort */ }
     res.send(landingPage({ mode: MODE, demoBlobs, guardCount }));
   } catch {
     res.send(chatPage({ mode: MODE }));
@@ -765,6 +1141,40 @@ const ALL_QUERIES = [
   'blood sugar log target fasting',
   'warfarin sertraline statin nitrate blood thinner',
 ];
+
+// ---- Shared live demo-census (dashboard + landing pills, ONE source) -------
+// Mainnet reads the authoritative namespace census (TTL-cached below); every
+// other mode uses the same live recall read the dashboard already used (the
+// local stand-in has no census listing, so a census call there only returns
+// null). Returns a finite count, or null when genuinely unknown
+// (outage/degraded/empty) — callers render "—", never a refuting 0.
+const CENSUS_TTL_MS = 60_000;
+const censusCache = new Map(); // ns -> { at, value }
+// TTL cache around the mainnet census call ONLY (dashboard + landing pills).
+// Guard/recall/chat paths never go through here. Local/test callers pass
+// cacheable=false: the loader still runs live, nothing is stored.
+async function cachedCensus(ns, loader, cacheable) {
+  if (!cacheable) return loader();
+  const hit = censusCache.get(ns);
+  if (hit && Date.now() - hit.at < CENSUS_TTL_MS) return hit.value;
+  const v = await loader();
+  if (v !== null && v !== undefined) censusCache.set(ns, { at: Date.now(), value: v });
+  return v;
+}
+// Exported for tests only: TTL/keying/bypass semantics without network.
+export const __censusForTest = { cachedCensus, censusCache, CENSUS_TTL_MS };
+async function demoReadinessBlobs() {
+  const demoNs = namespaceFor('demo-mom');
+  try {
+    const c = await cachedCensus(demoNs, () => namespaceCensus(clientFor('demo-mom').client, demoNs), MODE === 'mainnet');
+    if (c && Number.isFinite(Number(c.totalBlobs))) return Number(c.totalBlobs);
+  } catch { /* fall through to the recall fallback below */ }
+  try {
+    const ra = await recallAllMeta(clientFor('demo-mom').client, ALL_QUERIES, 25);
+    if (!ra.degraded) return ra.facts.length;
+    return ra.facts.length ? ra.facts.length : null;
+  } catch { return null; }
+}
 
 async function namespaceView(req, res) {
   const sess = sessionFromReq(req);
@@ -893,29 +1303,37 @@ app.get('/api/dashboard', readLimiter, async (req, res) => {
     const cap = view.isVault
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
       : (isDemoNs ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
-    // Same budget identity as /api/chat: vault + demo namespaces spend as the
-    // user id, anonymous guests spend as their per-browser guest key. The
-    // personal turn/budget readout follows the SAME key (a guest sees their
-    // own activity); blob evidence stays keyed by namespace (recordMemory
-    // uses safeUser, so /api/usage + stats attribution is unchanged).
+    // Same canonical budget identity as /api/chat (SPEC §3 rule 6): a vault
+    // owner's readout follows the lowercase session address — the SAME key
+    // chat enforces — with pre-unification rows (truncated id, vault-hash)
+    // unioned in, never dropped. Demo namespaces read the shared demo id; a
+    // guest sees their own per-browser guest key. Blob evidence stays keyed
+    // by namespace for guests (recordMemory uses safeUser, so /api/usage +
+    // stats attribution is unchanged).
     // Wallet reads the UTC-day bucket; demo + anon read the 24h window.
-    const budgetKey = (view.isVault || isDemoNs) ? userId : guestKeyFor(req);
+    const dashSess = sessionFromReq(req);
+    const budgetKey = (view.isVault && dashSess) ? walletCanonical(dashSess) : ((view.isVault || isDemoNs) ? userId : guestKeyFor(req));
+    const budgetKeys = (view.isVault && dashSess)
+      ? walletKeySet({ canonical: budgetKey, vaultId: userId })
+      : [budgetKey];
     const budgetMode = view.isVault ? { mode: 'daily' } : undefined;
     let chk = { ok: true, used: 0, remaining: cap, reset: null, resetAt: null, resetInHrs: null };
-    try { chk = usage.checkDay(budgetKey, cap, budgetMode); } catch { /* fail open — budget unknown, not fatal */ }
-    const snap = usage.snapshot(budgetKey);
-    // guardHits works on both store impls (SQLite has countByUser; the JSON
-    // ledger is filtered from list()).
-    const guardHits = typeof guardProof.countByUser === 'function'
-      ? guardProof.countByUser(userId)
-      : guardProof.list({ limit: 100000 }).filter((e) => e.userId === userId).length;
-    // Demo readiness: the shared demo-mom namespace, read live (recall only).
-    let demoBlobs = 0;
-    try {
-      const ra = await recallAllMeta(clientFor('demo-mom').client, ALL_QUERIES, 25);
-      demoBlobs = ra.facts.length;
-    } catch { demoBlobs = 0; }
-    const sess = sessionFromReq(req);
+    try { chk = unionCheck(usage, budgetKeys, cap, budgetMode); } catch { /* fail open — budget unknown, not fatal */ }
+    let snap;
+    try { snap = unionSnapshot(usage, budgetKeys, budgetKey); }
+    catch { snap = { memories: 0, turns: 0 }; }
+    // guardHits works on both store impls and unions the canonical key with
+    // pre-unification wallet receipt ids (truncated id + vault-hash, via the
+    // same budgetKeys the budget/snapshot unions use — SQLite has countByUser;
+    // the JSON ledger is filtered from list()).
+    const guardHits = unionGuardCount(guardProof, (view.isVault && dashSess) ? budgetKeys : [userId]);
+    // Demo readiness: the shared demo-mom namespace via the same live source
+    // the landing pills use (mainnet census, cached 60s; live recall
+    // elsewhere). Null (genuinely unknown) reads as not-ready, never as a
+    // fake count.
+    let demoBlobs = await demoReadinessBlobs();
+    if (demoBlobs == null) demoBlobs = 0;
+    const sess = dashSess;
     res.json({
       user: userId,
       mode,
