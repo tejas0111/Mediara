@@ -101,10 +101,11 @@ export default function DashboardView({ userId }: { userId: string }) {
       <div className="dash-top">
         <h2 className="dash-title">Dashboard — {data.user || userId}</h2>
         <Badge variant={mode}>{data.mode || 'local'}</Badge>
-        {personal?.stale ? <Badge variant="warn">stale</Badge> : <Badge variant="ok">fresh</Badge>}
+        {personal?.stale ? <Badge variant="warn">stale</Badge> : <Badge variant="ok">updated</Badge>}
+        <Button size="sm" onClick={() => void load()}>Retry</Button>
       </div>
       <p className="dash-hint">
-        Every number below comes from the dashboard endpoint — no estimates, no placeholders.
+        Live from the dashboard endpoint; — means unavailable, Retry above.
       </p>
 
       <div className="dash-grid">
@@ -183,14 +184,18 @@ export default function DashboardView({ userId }: { userId: string }) {
                   {vault.signedIn ? 'signed in' : 'not signed in'}
                 </Badge>
                 <Badge variant={vault.onboarded ? 'ok' : 'default'}>
-                  {vault.onboarded ? 'vault ready' : 'vault not set up'}
+                  {vault.onboarded ? 'Vault ready' : 'vault not set up'}
                 </Badge>
               </div>
             ) : (
               <p className="dash-muted">Vault state unknown — the wallet endpoint did not respond.</p>
             )}
             {vault && vault.signedIn && vault.onboarded ? (
-              <p className="dash-muted">Your chats save to your own memory vault.</p>
+              personal?.stale ? (
+                <p className="dash-muted">Saving to your vault when memory is reachable.</p>
+              ) : (
+                <p className="dash-muted">Your chats save to your own memory vault.</p>
+              )
             ) : (
               <Button size="sm" variant="primary" onClick={() => navigate('wallet')}>
                 {vault?.signedIn ? 'Set up vault' : 'Sign in'}

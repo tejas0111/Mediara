@@ -7,7 +7,7 @@ Sources live in `docs/images/src/*.html` — edit the HTML, then re-render with:
 cd docs/images
 render() { chromium --headless=new --disable-gpu --no-sandbox --hide-scrollbars \
   --force-device-scale-factor=2 --window-size=$2 --screenshot="$1" "file://$PWD/src/$3"; }
-render banner-dosedaughter.png 1600,800 banner.html
+render banner-mediara.png 1600,800 banner.html
 render stop-receipt.png        1400,760 stop-receipt.html
 render before-after.png        1500,880 before-after.html
 render architecture.png        1600,840 architecture.html
@@ -17,7 +17,7 @@ render architecture.png        1600,840 architecture.html
 
 | File | Placed at | Job in the article |
 |---|---|---|
-| `banner-dosedaughter.png` | Top (hero) | 3-second pitch: title, Walrus mainnet proof chips (13 blobs / d=0.54 / STOP guard / 236 tests), a live chat snippet with a real blob id. Makes a scrolling judge stop. |
+| `banner-mediara.png` | Top (hero) | 3-second pitch: title, Walrus mainnet proof chips (13 blobs / d=0.54 / STOP guard / 236 tests), a live chat snippet with a real blob id. Makes a scrolling judge stop. |
 | `before-after.png` | "Side-by-side: before/after" section | The judged criterion #2 in one glance — Day1 (0 blobs, hedges) vs Day7 (13 blobs, STOP + receipt). Bars quantify it; quote cards make it emotional. |
 | `stop-receipt.png` | Allergy-trap section | The money shot as a terminal receipt: `STOP — do not give ibuprofen`, brand-name trap (Advil appears in no stored fact), walruscan verify link. Judges click things — this tells them what to click. |
 | `architecture.png` | "The integration" section | The recall→guard→generate→save loop with the two Walrus nodes highlighted. Shows the pattern is disciplined, not accidental. |

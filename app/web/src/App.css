@@ -336,7 +336,8 @@
 .main { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .only-mobile { display: none; }
 
-/* Demo-chat banner: slim read-only strip under the topbar. */
+/* Demo-chat banner: slim strip under the topbar. Always wraps — the live
+   budget label must never truncate into an ellipsis on narrow screens. */
 .demo-banner {
   flex: none;
   margin: 0;
@@ -346,12 +347,11 @@
   color: var(--text-2);
   background: var(--surface-2);
   border-bottom: 1px solid var(--border-soft);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 @media (max-width: 480px) {
-  .demo-banner { padding: 7px 12px; white-space: normal; }
+  .demo-banner { padding: 7px 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .demo-banner { transition: none; }
@@ -512,11 +512,6 @@
 .side-scroll .side-grow { flex: none; }
 .side-scroll .sess-list { overflow: visible; }
 /* environment */
-.soon-pill {
-  font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px;
-  background: var(--surface-3); border: 1px solid var(--border); color: var(--muted);
-  margin-left: 6px; white-space: nowrap;
-}
 .soon-copy { font-size: 14.5px; line-height: 1.65; color: var(--text-2); margin: 8px 0 16px; }
 
 /* wallet modal steps */
@@ -543,29 +538,38 @@
 .signed-line svg { width: 18px; height: 18px; flex: none; color: var(--ok); }
 /* dAppKit wallet chooser — forced into the charcoal system. dAppKit ships a
    light-only stylesheet ([data-dapp-kit] scope); without this the chooser
-   opens OS-white on a dark UI. Substring selectors: the hashes are build-bound. */
+   opens OS-white on a dark UI. Substring selectors: the hashes are build-bound.
+   Pinned against @mysten/dapp-kit ^1.1.17 (see web/package.json) — re-check
+   these selectors when bumping dAppKit. Colors come from tokens.css vars. */
 [data-dapp-kit] { color-scheme: dark; }
 div[class*="ConnectModal_overlay"] { background: rgb(0 0 0 / 0.65) !important; }
 div[class*="ConnectModal_content"] {
-  background: #14151b !important;
-  color: #f4f4f5 !important;
-  border: 1px solid rgb(255 255 255 / 0.1) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
 }
 div[class*="ConnectModal_viewContainer"],
 div[class*="ConnectModal_selectedViewContainer"] {
-  background: #14151b !important;
-  color: #f4f4f5 !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
 }
-div[class*="ConnectModal_title"] { color: #f4f4f5 !important; }
+div[class*="ConnectModal_title"] { color: var(--text) !important; }
 button[class*="WalletListItem_walletItem"],
 button[class*="ConnectModal_whatIsAWalletButton"],
 button[class*="ConnectModal_backButton"] {
-  background: #1a1c23 !important;
-  color: #f4f4f5 !important;
-  border-color: rgb(255 255 255 / 0.08) !important;
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
 }
 @media (max-width: 360px) {
   .wsteps { gap: 2px; }
   .wsteps li { font-size: 11.5px; }
   .dialog .btn-row > * { flex: 1 1 100%; }
+}
+
+/* PRINT: app chrome never reaches paper. PrintView keeps its own paper rules
+   (emergency card stays light); this global rule only removes the shell. */
+@media print {
+  .sidebar, .topbar, .demo-banner, .backdrop { display: none !important; }
+  .main-col, .main { overflow: visible !important; }
 }

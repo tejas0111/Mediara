@@ -148,7 +148,8 @@ test('SPA views share one aligned scroll column + env toggle wiring', () => {
   const api = wread('src/api.ts');
   assert.ok(api.includes('getApiBase') && api.includes('setApiBase') && api.includes('checkHealth'), 'api base routing exists');
   const app = wread('src/App.tsx');
-  assert.ok(app.includes('Coming soon') && app.includes('Environment'), 'Demo/Mainnet toggle + Coming-soon gate exist');
+  assert.ok(app.includes('Mainnet unreachable') && app.includes('Environment'), 'Demo/Mainnet toggle + honest unreachable gate exist');
+  assert.ok(!app.includes('Coming soon'), 'no coming-soon dead end for real Mainnet users');
   assert.ok(!app.includes('Mainnet server URL'), 'no dev-demo URL prompt anywhere');
 });
 
@@ -159,9 +160,24 @@ test('SPA wallet page is a clean flow, machinery hidden', () => {
   assert.ok(w.includes('Sign in as ') && w.includes('Check your wallet'), 'one-click sign-in with wallet prompt');
 });
 
-test('SPA prefills the live demo backend URL', () => {
+test('SPA never hardcodes a tunnel URL (Mainnet is probed, never prefilled)', () => {
   const app = wread('src/App.tsx');
-  assert.ok(app.includes('DEFAULT_MAINNET_URL') && app.includes('trycloudflare.com'), 'demo backend prefilled, one Test+Save away');
+  assert.ok(!app.includes('trycloudflare.com'), 'no hardcoded tunnel URL anywhere');
+  assert.ok(!app.includes('DEFAULT_MAINNET_URL'), 'no prefilled-URL constant');
+  assert.ok(!app.includes('window.prompt'), 'no URL prompt — unreachable Mainnet shows a dialog');
+  assert.ok(app.includes('Mainnet unreachable'), 'honest unreachable dialog with Retry');
+});
+
+test('SPA rename is inline and Mainnet/demo copy is honest', () => {
+  const app = wread('src/App.tsx');
+  assert.ok(app.includes('Rename chat') && app.includes('rename-input'), 'inline rename dialog with a real input');
+  assert.ok(!app.includes('soon-pill'), 'no Soon pill on the Mainnet toggle');
+  assert.ok(!app.includes('5 chats/day'), 'no hardcoded demo cap — banner reads the live budget');
+  assert.ok(!app.includes('user-{') && !app.includes('Memory namespace:'), 'no namespace internals in account copy');
+  assert.ok(!app.includes('wallet out') && !app.includes('sui out'), 'no wallet slang in account badges');
+  const dash = wread('src/views/DashboardView.tsx');
+  assert.ok(dash.includes('Vault ready'), 'vault badge uses the unified string');
+  assert.ok(!dash.includes("'fresh'") && !dash.includes('"fresh"'), 'no fresh badge — updated or stale only');
 });
 
 test('SPA renders the reasoning trace per reply', () => {
@@ -178,10 +194,15 @@ test('SPA model picker lives in the composer with clean names', () => {
   assert.ok(wread('src/api.ts').includes('/api/models'), 'list sourced from the server registry');
 });
 
-test('SPA demo gate: login prompt + one-click demo switch', () => {
+test('SPA demo gate: limit prompt + one-click demo switch + low-budget note', () => {
   const c = wread('src/ChatView.tsx');
-  assert.ok(c.includes('Demo budget used up') && c.includes("onSwitchUser?.('demo-mom')"), 'limit renders sign-in + demo actions');
+  assert.ok(c.includes('Message limit reached') && c.includes("onSwitchUser?.('demo-mom')"), 'limit renders sign-in + demo actions');
   assert.ok(c.includes('Explore the demo'), 'demo entry chip exists');
+  assert.ok(c.includes('budget-note') && c.includes('messages left') && c.includes('Last message'), 'subtle remaining note only when low');
+  assert.ok(c.includes('formatResetIn') && c.includes('Resets in'), '429 shows a reset countdown');
+  assert.ok(c.includes('Try a memory that already exists') && c.includes('What is she allergic to?'), 'demo greeting makes the premade memory discoverable in one click');
+  assert.ok(!/demo budget/i.test(c), 'no demo-budget wording in the UI');
+  assert.ok(!/free only|· free|free tier|free-tier/i.test(c), 'no free-tier wording in the UI');
   assert.ok(wread('src/api.ts').includes('loginRequired') || wread('src/api.ts').includes('data: Record'), '429 body survives on ApiError');
 });
 
@@ -200,6 +221,11 @@ test('SPA fresh-start path for retired-deployment vaults', () => {
   const w = wread('src/WalletView.tsx');
   assert.ok(w.includes('retiredDeployment') && w.includes('Start a fresh vault'), 'wallet offers an explicit fresh start, never a dead end');
   assert.ok(wread('src/api.ts').includes('/api/wallet/reset'), 'reset is in the typed client');
+});
+test('SPA wallet resumes a server-side pending step instead of resetting', () => {
+  const w = wread('src/WalletView.tsx');
+  assert.ok(w.includes('pendingPhase'), 'wallet reads the server pendingPhase');
+  assert.ok(w.includes("pending") && w.includes('regenerate'), 'wallet shows a resume action for a pending step');
 });
 test('SPA wallet modal guides connect -> sign -> vault -> chat', () => {
   const m = wread('src/WalletModal.tsx');

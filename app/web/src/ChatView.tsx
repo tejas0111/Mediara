@@ -10,6 +10,7 @@ import {
   shortBlob,
   walruscan,
 } from './api';
+import type { Budget } from './api';
 import type { ChatMsg, ChatSession } from './chat';
 import { msgId } from './chat';
 import { Alert, Badge, Button, IconShield, Spinner, cn } from './ui';
@@ -51,6 +52,34 @@ const SUGGESTIONS = [
   'What do you remember about her?',
   'Is ibuprofen okay with her medications?',
 ];
+
+// One-click discovery for the premade demo memory (demo-mom ships seeded, so
+// the greeting offers reads, not teaches).
+const DEMO_USERS = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
+const DEMO_SUGGESTIONS = [
+  'What do you remember about her?',
+  'What medications does she take?',
+  'What is she allergic to?',
+  'When are dinner and bedtime?',
+];
+
+// "3h 12m" countdown from an ISO resetAt; falls back to whole hours.
+export function formatResetIn(resetAt: string | null, resetInHrs?: number | null): string | null {
+  if (resetAt) {
+    const ms = Date.parse(resetAt) - Date.now();
+    if (Number.isFinite(ms) && ms > 0) {
+      const totalMin = Math.ceil(ms / 60000);
+      const h = Math.floor(totalMin / 60);
+      const m = totalMin % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m}m`;
+    }
+  }
+  if (typeof resetInHrs === 'number' && Number.isFinite(resetInHrs) && resetInHrs > 0) {
+    return `${Math.ceil(resetInHrs)}h`;
+  }
+  return null;
+}
 
 function reducedMotion(): boolean {
   try {
@@ -148,6 +177,10 @@ export default function ChatView(props: ChatViewProps) {
   const [needRelink, setNeedRelink] = React.useState<string | null>(null);
   const [lastFailed, setLastFailed] = React.useState<string | null>(null);
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
+  // Rolling chat budget from the last reply (subtle note only when low) and
+  // the 429 reset countdown (resetAt ISO + whole-hour fallback).
+  const [budget, setBudget] = React.useState<Budget | null>(null);
+  const [limitReset, setLimitReset] = React.useState<{ resetAt: string | null; resetInHrs: number | null } | null>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
   const boxRef = React.useRef<HTMLTextAreaElement>(null);
   // Guest identity: ensure the persisted device id exists before the first
@@ -163,6 +196,8 @@ export default function ChatView(props: ChatViewProps) {
   React.useEffect(() => {
     setError(null);
     setLastFailed(null);
+    setBudget(null);
+    setLimitReset(null);
     setInput('');
   }, [active?.id, userId]);
 
@@ -207,12 +242,22 @@ export default function ChatView(props: ChatViewProps) {
       props.pushMsg(target, asst);
       setMode(res.mode);
       props.onMode?.(res.mode);
+      setBudget(res.budget ?? null);
+      setLimitReset(null);
+      setNeedLogin(null);
       setLastFailed(null);
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
       const msg = e instanceof Error ? e.message : 'request failed';
       setLastFailed(text);
-      setNeedLogin(e instanceof ApiError && e.status === 429 && (e as ApiError).data?.loginRequired === true ? msg : null);
+      const data = e instanceof ApiError ? (e.data as Record<string, unknown>) : {};
+      setNeedLogin(e instanceof ApiError && e.status === 429 && data?.loginRequired === true ? msg : null);
+      setLimitReset(e instanceof ApiError && e.status === 429
+        ? {
+          resetAt: typeof data?.resetAt === 'string' ? (data.resetAt as string) : null,
+          resetInHrs: typeof data?.resetInHrs === 'number' ? (data.resetInHrs as number) : null,
+        }
+        : null);
       setNeedRelink(e instanceof ApiError && e.status === 409 && (e as ApiError).data?.needsRelink === true ? msg : null);
       const cleanMsg = msg.replace(/[.\u2026\s]+$/, '');
       setError(status === 503
@@ -228,6 +273,10 @@ export default function ChatView(props: ChatViewProps) {
   }
 
   const empty = msgs.length === 0;
+  const isDemo = DEMO_USERS.has(userId);
+  const suggestions = isDemo ? DEMO_SUGGESTIONS : SUGGESTIONS;
+  const lowBudget = budget && budget.remaining <= 3 && budget.remaining >= 1 ? budget : null;
+  const lowCountdown = lowBudget?.remaining === 1 ? formatResetIn(lowBudget.resetAt) : null;
 
   return (
     <div className="chat">
@@ -240,16 +289,21 @@ export default function ChatView(props: ChatViewProps) {
         {empty ? (
           <div className="greet">
             <Badge variant={memoryOn ? 'ok' : 'warn'}>{memoryOn ? 'Memory on' : 'Memory off'} · {userId}</Badge>
-            <h2>What can I remember for you today?</h2>
+            <h2>{isDemo ? 'Try a memory that already exists' : 'What can I remember for you today?'}</h2>
             <p className="greet-sub">
-              Tell me once — medications, allergies, routines — and I will keep it for {userId}.
-              Ask anything; safety checks run before every answer.
+              {isDemo ? (
+                <>This demo opens on a saved profile — ask what she takes, what she avoids, or when dinner is. One click, no setup.</>
+              ) : (
+                <>Tell me once — medications, allergies, routines — and I will keep it for {userId}. Ask anything; safety checks run before every answer.</>
+              )}
             </p>
             <div className="chips">
-              <button type="button" className="chip chip-demo" onClick={() => props.onSwitchUser?.('demo-mom')}>
-                Explore the demo — no setup
-              </button>
-              {SUGGESTIONS.map((s) => (
+              {!isDemo ? (
+                <button type="button" className="chip chip-demo" onClick={() => props.onSwitchUser?.('demo-mom')}>
+                  Explore the demo — no setup
+                </button>
+              ) : null}
+              {suggestions.map((s) => (
                 <button
                   key={s}
                   type="button"
@@ -322,10 +376,13 @@ export default function ChatView(props: ChatViewProps) {
 
       {needLogin ? (
         <Alert variant="warn" className="send-error" role="alert">
-          <span><strong>Demo budget used up.</strong> {needLogin} Or keep exploring the premade demo, no teaching needed.</span>
+          <span><strong>Message limit reached.</strong> {needLogin}{(() => {
+            const cd = formatResetIn(limitReset?.resetAt ?? null, limitReset?.resetInHrs ?? null);
+            return cd ? ` Resets in ${cd}.` : '';
+          })()}</span>
           <span className="btn-row">
-            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(null); if (props.onSignIn) props.onSignIn(); else window.location.hash = '#/wallet'; }}>Sign in</Button>
-            <Button size="sm" onClick={() => { setNeedLogin(null); props.onSwitchUser?.('demo-mom'); }}>Explore the demo</Button>
+            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(null); setLimitReset(null); if (props.onSignIn) props.onSignIn(); else window.location.hash = '#/wallet'; }}>Sign in</Button>
+            <Button size="sm" onClick={() => { setNeedLogin(null); setLimitReset(null); props.onSwitchUser?.('demo-mom'); }}>Explore the demo</Button>
           </span>
         </Alert>
       ) : null}
@@ -347,6 +404,13 @@ export default function ChatView(props: ChatViewProps) {
       ) : null}
 
       <p className="disclaimer">Confirm with your doctor — this is not medical advice. Safety checks run before every answer.</p>
+      {lowBudget ? (
+        <p className="budget-note" role="status">
+          {lowBudget.remaining === 1
+            ? `Last message${lowCountdown ? ` — limit resets in ${lowCountdown}` : ''}`
+            : `${lowBudget.remaining} messages left`}
+        </p>
+      ) : null}
 
       <form
         className="composer"

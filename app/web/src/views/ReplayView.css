@@ -9,6 +9,8 @@
 .replay { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; counter-reset: rp; min-width: 0; }
 .replay-item { display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border: 1px solid var(--border-soft); border-radius: var(--r-sm); background: var(--bg-soft); visibility: hidden; min-width: 0; overflow-wrap: anywhere; }
 .replay-item.is-shown { visibility: visible; animation: rp-in 0.2s ease-out; }
+/* Instant reveal path (reduced-motion): items appear with no animation. */
+.replay-calm .replay-item.is-shown { animation: none; }
 .replay-day { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .replay-text { display: block; margin-top: 2px; line-height: 1.55; font-size: 14px; overflow-wrap: anywhere; }
 .replay-cite { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; line-height: 1.5; margin: 4px 0 0; }

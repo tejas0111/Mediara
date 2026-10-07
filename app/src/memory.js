@@ -771,19 +771,29 @@ export async function recallAll(client, queries, limit = 20) {
 
 // Authoritative blob census (NOT a similarity-search result): paginate
 // listNamespaces on has_more. Returns null when the SDK/back-end lacks it.
-export async function namespaceCensus(client) {
+export async function namespaceCensus(client, ns = null) {
   try {
     if (!client || typeof client.listNamespaces !== 'function') return null;
-    let cursor, total = 0, count = 0;
+    let cursor, total = 0, count = 0, matched = 0;
     for (let i = 0; i < 20; i++) {
       const page = await client.listNamespaces(cursor ? { cursor } : {});
       const items = page?.namespaces || page?.items || [];
-      for (const n of items) { count++; total += Number(n?.blobCount ?? n?.blob_count ?? n?.count ?? 0); }
+      for (const n of items) {
+        // Scope to the requested namespace when given: the listing is
+        // account-wide (dozens of namespaces), and the relayer's count field
+        // is `memory_count` (not blobCount/blob_count/count — all read 0).
+        if (ns && n?.id !== ns && n?.name !== ns) continue;
+        matched++;
+        count++;
+        total += Number(n?.memory_count ?? n?.blobCount ?? n?.blob_count ?? n?.count ?? 0);
+      }
       const more = page?.has_more ?? page?.hasMore;
-      cursor = page?.cursor ?? page?.nextCursor;
+      cursor = page?.cursor ?? page?.nextCursor ?? page?.next_cursor;
       if (!more || !cursor) break;
     }
-    return { totalBlobs: total, namespaceCount: count };
+    // Requested namespace absent from the listing: report zero, not null —
+    // absence is a fact (nothing stored), unlike an unreachable listing.
+    return { totalBlobs: total, namespaceCount: ns ? matched : count };
   } catch { return null; }
 }
 

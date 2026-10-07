@@ -301,7 +301,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     let model = undefined;
     if (reqModel !== undefined) {
       if (!(await isFreeModel(reqModel))) {
-        return res.status(400).json({ error: 'unknown model — pick one from GET /api/models (free only)' });
+        return res.status(400).json({ error: 'unknown model — pick one from the model list' });
       }
       model = reqModel;
     }
@@ -337,38 +337,51 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // into the premade demo memory. Signed-in vault writes are unaffected.
     const DEMO_READONLY = new Set(['demo-mom', 'demo-day7', 'demo-day1']);
     const demoReadonly = !walletClient && DEMO_READONLY.has(safeUser);
-    // Daily budget gate: per-user rolling-UTC-day window so one user cannot
-    // burn the shared OpenRouter/Walrus budget (free tiers are rate-limited
-    // upstream). Anonymous shared channel: DD_DAY_LIMIT_ANON (default 20) —
-    // EXCEPT inside the shared demo namespaces (demo-mom/demo-day7/demo-day1),
-    // which cap at DD_DAY_LIMIT_DEMO (default 5) no matter how high
-    // DD_DAY_LIMIT_ANON is set, so the premade demo cannot be burned down.
-    // Signed-in vault users: DD_DAY_LIMIT_WALLET (default 200). Judges keep
-    // the ready-made demo namespace either way; the demo namespaces stay
-    // read-only for anonymous writers regardless of budget.
+    // Rolling budget gate: DEMO + ANON channels roll on a 24h sliding window
+    // (per-key turn timestamps, last 50 kept) so one user cannot burn the
+    // shared OpenRouter/Walrus budget (free tiers are rate-limited upstream).
+    // Anonymous shared channel: DD_DAY_LIMIT_ANON (default 20) — EXCEPT inside
+    // the shared demo namespaces (demo-mom/demo-day7/demo-day1), which cap at
+    // DD_DAY_LIMIT_DEMO (default 10) no matter how high DD_DAY_LIMIT_ANON is
+    // set, so the premade demo cannot be burned down. Signed-in vault users
+    // keep the legacy UTC-day bucket: DD_DAY_LIMIT_WALLET (default 200).
+    // Judges keep the ready-made demo namespace either way; the demo
+    // namespaces stay read-only for anonymous writers regardless of budget.
     // NOTE: current spend is $0 (sponsored writes + free models) — this gate
     // guards rate, not money. User-pays billing is a future decision, see docs.
     const dayCap = (name, dflt) => (Number(process.env[name]) > 0 ? Number(process.env[name]) : dflt);
     const cap = walletClient
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
-      : (DEMO_READONLY.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
+      : (DEMO_READONLY.has(safeUser) ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
     // Budget identity: wallet users spend as themselves, demo namespaces spend
     // as the shared demo id (existing demo rules), everyone else spends as
     // their per-browser guest key — one IP with N browsers gets N budgets.
     const budgetKey = walletClient || DEMO_READONLY.has(safeUser) ? safeUser : guestKeyFor(req);
-    let chk = { ok: true, used: 0, remaining: cap, reset: null };
+    // Wallet stays on the UTC-day bucket; demo + anon roll on the 24h window.
+    const budgetMode = walletClient ? { mode: 'daily' } : undefined;
+    const nextUtcMidnightIso = () => {
+      const d = new Date();
+      d.setUTCHours(24, 0, 0, 0);
+      return d.toISOString();
+    };
+    let chk = { ok: true, used: 0, remaining: cap, reset: null, resetAt: null, resetInHrs: null };
     try {
-      chk = usage.checkDay(budgetKey, cap);
+      chk = usage.checkDay(budgetKey, cap, budgetMode);
     } catch { /* fail open on ledger errors — the IP limiter below still applies */ }
     if (!chk.ok) {
+      const walletResetAt = nextUtcMidnightIso();
       return res.status(429).json({
         error: walletClient
-          ? `Daily budget used (${cap} chats/day) — resets UTC midnight.`
-          : `Daily demo budget used (${cap} chats/day on the shared channel) — sign in with your Sui wallet for a bigger budget and your own vault.`,
+          ? `You've used your ${cap} daily messages — limit resets at UTC midnight.`
+          : DEMO_READONLY.has(safeUser)
+            ? `You've used your ${cap} demo messages — sign in with your Sui wallet for a bigger budget and your own vault.`
+            : `You've used your ${cap} guest messages — sign in with your Sui wallet for a bigger budget and your own vault.`,
         loginRequired: !walletClient,
         demoUser: 'demo-mom',
         remaining: 0,
         resetsAt: chk.reset,
+        resetAt: walletClient ? walletResetAt : (chk.resetAt || null),
+        resetInHrs: walletClient ? Math.max(1, Math.ceil((Date.parse(walletResetAt) - Date.now()) / 3_600_000)) : (chk.resetInHrs ?? null),
       });
     }
     // Vault namespaces (w-<address>) are credential-scoped: an anonymous caller
@@ -422,11 +435,17 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       rememberTurn(nsKey, 'user', message);
       rememberTurn(nsKey, 'assistant', reply);
       usage.touchUser(budgetKey, { turn: true });
+      let recapBudget = { used: (chk.used || 0) + 1, cap, remaining: Math.max(0, cap - (chk.used || 0) - 1), resetAt: chk.resetAt || null };
+      try {
+        const post = usage.checkDay(budgetKey, cap, budgetMode);
+        recapBudget = { used: post.used, cap, remaining: post.remaining, resetAt: post.resetAt || null };
+      } catch { /* fail open — budget snapshot best-effort */ }
       return res.json({
         reply, recalled: [], recalledMeta: [], memoryScope: identity.ns,
         identity: identity.kind, savedBlob: null, memoryPersisted: null,
         memoryOff, thinking, mode: MODE,
         disclaimer: 'Confirm with your doctor — this is not medical advice.',
+        budget: recapBudget,
       });
     }
     // Coded safety nets FIRST, before any LLM output:
@@ -540,6 +559,12 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
     // returned are counted — `npm run stats` reads this same ledger.
     usage.touchUser(budgetKey, { turn: true });
     if (saved?.blob_id) usage.recordMemory(safeUser, { blobId: saved.blob_id, text: message });
+    // Rolling budget snapshot for the client (best-effort — never fails chat).
+    let turnBudget = { used: (chk.used || 0) + 1, cap, remaining: Math.max(0, cap - (chk.used || 0) - 1), resetAt: chk.resetAt || null };
+    try {
+      const post = usage.checkDay(budgetKey, cap, budgetMode);
+      turnBudget = { used: post.used, cap, remaining: post.remaining, resetAt: post.resetAt || null };
+    } catch { /* fail open — budget snapshot best-effort */ }
 
     res.json({
       reply,
@@ -553,6 +578,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
       thinking,
       mode: MODE,
       disclaimer: 'Confirm with your doctor — this is not medical advice.',
+      budget: turnBudget,
     });
   } catch (e) { fail(res, e); }
 });
@@ -676,6 +702,7 @@ async function namespaceView(req, res) {
   // namespace id is derivable from a public address, so it is not a secret.
   if (!mine && isReservedNs(userId)) { res.status(403).json({ error: 'That vault belongs to a wallet \u2014 sign in to view it.' }); return null; }
   const { client, mode } = mine ? { client: mine.client, mode: MODE } : clientFor(userId);
+  const ns = mine ? mine.ns : namespaceFor(userId);
   const ra = await recallAllMeta(client, ALL_QUERIES, 25);
   // Last-known-good cache: on an outage, serve the most recent successful read
   // (labelled stale) rather than a blank card — a safety product should show
@@ -689,7 +716,7 @@ async function namespaceView(req, res) {
     const lg = lastGood.get(userId);
     if (lg && Date.now() - lg.at < 10 * 60 * 1000) facts = lg.facts;
   }
-  return { userId, mode, recalled: facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null };
+  return { userId, mode, recalled: facts, degraded: ra.degraded, isVault: !!mine, address: sess?.address || null, ns, client };
 }
 
 // Printable emergency card + doctor-visit summary (recall only).
@@ -787,15 +814,17 @@ app.get('/api/dashboard', readLimiter, async (req, res) => {
     const isDemoNs = ['demo-mom', 'demo-day7', 'demo-day1'].includes(userId);
     const cap = view.isVault
       ? dayCap('DD_DAY_LIMIT_WALLET', 200)
-      : (isDemoNs ? dayCap('DD_DAY_LIMIT_DEMO', 5) : dayCap('DD_DAY_LIMIT_ANON', 20));
+      : (isDemoNs ? dayCap('DD_DAY_LIMIT_DEMO', 10) : dayCap('DD_DAY_LIMIT_ANON', 20));
     // Same budget identity as /api/chat: vault + demo namespaces spend as the
     // user id, anonymous guests spend as their per-browser guest key. The
     // personal turn/budget readout follows the SAME key (a guest sees their
     // own activity); blob evidence stays keyed by namespace (recordMemory
     // uses safeUser, so /api/usage + stats attribution is unchanged).
+    // Wallet reads the UTC-day bucket; demo + anon read the 24h window.
     const budgetKey = (view.isVault || isDemoNs) ? userId : guestKeyFor(req);
-    let chk = { ok: true, used: 0, remaining: cap, reset: null };
-    try { chk = usage.checkDay(budgetKey, cap); } catch { /* fail open — budget unknown, not fatal */ }
+    const budgetMode = view.isVault ? { mode: 'daily' } : undefined;
+    let chk = { ok: true, used: 0, remaining: cap, reset: null, resetAt: null, resetInHrs: null };
+    try { chk = usage.checkDay(budgetKey, cap, budgetMode); } catch { /* fail open — budget unknown, not fatal */ }
     const snap = usage.snapshot(budgetKey);
     // guardHits works on both store impls (SQLite has countByUser; the JSON
     // ledger is filtered from list()).
@@ -816,7 +845,13 @@ app.get('/api/dashboard', readLimiter, async (req, res) => {
       personal: {
         memories: snap.memories || 0,
         turns: snap.turns || 0,
-        budget: { used: chk.used || 0, cap, reset: chk.reset || null },
+        budget: {
+          used: chk.used || 0, cap,
+          remaining: chk.remaining ?? Math.max(0, cap - (chk.used || 0)),
+          reset: chk.reset || null,
+          resetAt: chk.resetAt || null,
+          resetInHrs: chk.resetInHrs ?? null,
+        },
         guardHits,
         stale: !!view.degraded,
       },
@@ -886,9 +921,10 @@ app.get('/api/seed-status', readLimiter, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const view = await namespaceView(req, res);
     if (!view) return;
-    // Real census (listNamespaces), not the recall result — the recall count is
-    // filtered/deduped/capped and would under-report the blob count a judge checks.
-    const census = view.mode === 'mainnet' ? await namespaceCensus(clientFor(view.userId).client) : null;
+    // Real census (listNamespaces), scoped to THIS namespace — the listing is
+    // account-wide, and unscoped sums misreport (plus recall is capped, so it
+    // can't serve as the blob count a judge checks either).
+    const census = view.mode === 'mainnet' ? await namespaceCensus(view.client, view.ns) : null;
     res.json({
       user: view.userId, mode: view.mode,
       agentId: process.env.MEMWAL_ACCOUNT_ID || null,

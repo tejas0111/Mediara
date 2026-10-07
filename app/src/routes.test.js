@@ -294,6 +294,11 @@ test('/api/seed-status reports a real census field', async () => {
   const j = await (await get('/api/seed-status?user=demo-mom')).json();
   assert.equal(typeof j.recalledCount, 'number');
   assert.ok('censusAvailable' in j && 'meetsMinimum' in j);
+  // Local stand-in has no namespace listing: must say so honestly instead of
+  // reporting a cross-namespace blobCount of 0 (the old code summed every
+  // namespace with the wrong count field, so meetsMinimum lied).
+  assert.equal(j.censusAvailable, false, 'local mode has no census — must not fake one');
+  assert.ok(!('blobCount' in j) || j.blobCount === null || typeof j.blobCount === 'number');
 });
 
 test('/api/nudge caps unauthenticated fan-out at 5 users', async () => {

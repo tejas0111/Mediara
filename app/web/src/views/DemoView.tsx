@@ -91,7 +91,7 @@ export default function DemoView({ userId }: { userId: string }) {
   if (error) {
     return (
       <Alert variant="danger">
-        <p style={{ margin: 0 }}>Could not load the demo: {error}. Retry before presenting this view.</p>
+        <p style={{ margin: 0 }}>Could not load the demo: {error}. Retry to reload the demo.</p>
         <div style={{ marginTop: 10 }}>
           <Button size="sm" onClick={load}>Retry</Button>
         </div>
@@ -100,7 +100,14 @@ export default function DemoView({ userId }: { userId: string }) {
   }
 
   if (!before || !after) {
-    return <Empty title="No demo data">Demo namespaces are empty — seed demo data, then reload this view.</Empty>;
+    return (
+      <Empty
+        title="No demo data"
+        action={<Button size="sm" variant="primary" onClick={load}>Retry</Button>}
+      >
+        Demo namespaces are empty right now.
+      </Empty>
+    );
   }
 
   return (
@@ -116,7 +123,9 @@ export default function DemoView({ userId }: { userId: string }) {
       </div>
       <p className="demo-hint">
         The same fixed question is answered before and after a week of remembered facts.
-        Both sides cite their Walrus blob receipts.
+        {after.mode === 'mainnet' || before.mode === 'mainnet'
+          ? ' Both sides cite their Walrus blob receipts.'
+          : ' Both sides cite their local demo ids — on Mainnet these are Walrus blob receipts.'}
       </p>
       <p className="demo-q">Fixed question: &ldquo;{QUESTION}&rdquo;</p>
       <p className="demo-q demo-ns">

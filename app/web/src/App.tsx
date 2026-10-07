@@ -22,7 +22,7 @@ import {
   titleFor,
 } from './chat';
 import type { ChatMsg, ChatSession, Route, ViewKey } from './chat';
-import { authLogout, checkHealth, getApiBase, getDeviceId, setApiBase, walletStatus } from './api';
+import { authLogout, checkHealth, getApiBase, getDashboard, getDeviceId, setApiBase, walletStatus } from './api';
 import type { WalletStatus } from './api';
 import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
 import {
@@ -78,6 +78,40 @@ function loadMemoryOn(): boolean {
   }
 }
 
+// Shared-demo strip under the topbar. The guest cap is read live from the
+// dashboard budget; when the endpoint is missing the strip says so honestly
+// instead of quoting a stale hardcoded number.
+function DemoBanner() {
+  const [label, setLabel] = React.useState('Shared demo · guests get personal budgets');
+  React.useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const d = await getDashboard('demo-mom');
+        const b = d?.personal?.budget;
+        const cap = typeof b?.cap === 'number' && b.cap > 0 ? b.cap : null;
+        const used = typeof b?.used === 'number' && b.used >= 0 ? b.used : null;
+        if (!live) return;
+        setLabel(
+          cap !== null && used !== null
+            ? `Shared demo · ${used}/${cap} guest chats used today`
+            : 'Shared demo · guests get personal budgets',
+        );
+      } catch {
+        if (live) setLabel('Shared demo · guests get personal budgets');
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (
+    <p className="demo-banner" role="note">
+      {label}
+    </p>
+  );
+}
+
 export default function App() {
   const [userId, setUserId] = React.useState('demo-mom');
   const [draftId, setDraftId] = React.useState('demo-mom');
@@ -96,13 +130,13 @@ export default function App() {
   const [sameOriginMode, setSameOriginMode] = React.useState<'local' | 'mainnet' | null>(null);
   const [envChoice, setEnvChoice] = React.useState<'demo' | 'mainnet'>(() => (getApiBase() ? 'mainnet' : 'demo'));
   const [envError, setEnvError] = React.useState<string | null>(null);
-  // Mainnet candidate backends, first reachable wins. The tunnel URL is
-  // ephemeral (dies with its sandbox); the saved base persists per browser.
-  // Nothing here is user-editable — no URL prompt anywhere in the UI.
-  const DEFAULT_MAINNET_URL = 'https://cannon-followed-offers-chubby.trycloudflare.com';
+  // Mainnet has no prefilled URL anywhere in the UI: the probe tries the
+  // saved base first, then same-origin health. Unreachable means an honest
+  // error with Retry — never a URL prompt, never a silent dead end.
   const [mainnetLive, setMainnetLive] = React.useState(false);
   const [comingOpen, setComingOpen] = React.useState(false);
   const [wmodal, setWmodal] = React.useState(false);
+  const [renameTarget, setRenameTarget] = React.useState<{ id: string; value: string } | null>(null);
   const [comingNote, setComingNote] = React.useState<string | null>(null);
   // dAppKit wallet connection (client-side) vs server session (signed-in):
   // no wallet = ConnectButton opens the chooser modal directly,
@@ -142,7 +176,7 @@ export default function App() {
     try { getDeviceId(); } catch { /* keyless guests still chat — server falls back to 'anon' */ }
     // Initial backend state: same-origin mode decides toggle visibility;
     // active-base health decides the badge. A saved base is re-verified;
-    // otherwise the default candidate is probed (never auto-switched).
+    // with no saved base Mainnet is simply unreachable until one is set.
     void (async () => {
       try {
         const same = await checkHealth('');
@@ -157,8 +191,7 @@ export default function App() {
         setMainnetLive(h.ok);
         if (!h.ok) setApiBase('');
       } else {
-        const h = await checkHealth(DEFAULT_MAINNET_URL);
-        setMainnetLive(h.ok);
+        setMainnetLive(false);
       }
       await refreshEffectiveMode(getApiBase());
     })();
@@ -246,9 +279,13 @@ export default function App() {
   }
 
   function handleRename(id: string, current: string) {
-    const next = window.prompt('Rename chat', current);
-    if (next === null) return;
-    setSessions(renSess(chatUser, id, next));
+    setRenameTarget({ id, value: current });
+  }
+
+  function commitRename() {
+    if (!renameTarget) return;
+    setSessions(renSess(chatUser, renameTarget.id, renameTarget.value));
+    setRenameTarget(null);
   }
 
   function handleMode(m: 'local' | 'mainnet') {
@@ -271,8 +308,8 @@ export default function App() {
   }
 
   // --- Demo|Mainnet environment switch (same-origin local server only) ---
-  // Mainnet is selectable only while a candidate backend is reachable.
-  // Otherwise it opens the Coming-soon panel — never a URL prompt.
+  // Mainnet is attempted only against the saved base. When it does not
+  // answer, the honest unreachable panel opens — never a URL prompt.
   function switchToDemo() {
     setApiBase('');
     setEnvChoice('demo');
@@ -282,17 +319,12 @@ export default function App() {
     void refreshWallet();
   }
 
-  function mainnetCandidate(): string | null {
-    const saved = getApiBase().trim();
-    return saved || DEFAULT_MAINNET_URL;
-  }
-
   async function switchToMainnet() {
     setEnvError(null);
-    const h = await checkHealth(mainnetCandidate() ?? '');
-    if (h.ok && h.mode) {
-      const url = getApiBase().trim() || DEFAULT_MAINNET_URL;
-      setApiBase(url);
+    const saved = getApiBase().trim();
+    const h = await checkHealth(saved);
+    if (saved && h.ok && h.mode) {
+      setApiBase(saved);
       setMainnetLive(true);
       setComingOpen(false);
       setEnvChoice('mainnet');
@@ -456,7 +488,6 @@ export default function App() {
                   onClick={() => void switchToMainnet()}
                 >
                   Mainnet
-                  {mainnetLive ? null : <span className="soon-pill">Soon</span>}
                 </button>
               </div>
             ) : null}
@@ -493,11 +524,7 @@ export default function App() {
             )}
           </div>
         </header>
-        {view === 'demo' ? (
-          <p className="demo-banner" role="note">
-            Shared demo — reads premade memory, writes need sign-in. 5 chats/day anonymous.
-          </p>
-        ) : null}
+        {view === 'demo' ? <DemoBanner /> : null}
         <main id="main" className="main" tabIndex={-1}>
           {view === 'chat' ? (
             <ChatView
@@ -551,23 +578,48 @@ export default function App() {
         </main>
       </div>
       {comingOpen ? (
-        <Dialog title="Mainnet" onClose={() => setComingOpen(false)}>
-          <p className="eyebrow">Coming soon</p>
-          <p className="soon-copy">
-            The shared Mainnet backend — real Walrus memory, wallet vaults, and
-            an always-on server — is not live yet. This demo runs on a local
-            stand-in, and everything you see works fully against it.
-          </p>
-          {comingNote ? <Alert variant="warn">{comingNote}</Alert> : null}
-          <div className="btn-row">
-            <Button variant="primary" onClick={switchToDemo}>
-              Back to Demo
-            </Button>
+        <Dialog title="Mainnet unreachable" onClose={() => setComingOpen(false)}>
+          <div className="stack">
+            <p className="soon-copy">
+              The Mainnet backend did not answer just now — staying on Demo,
+              nothing was switched. Check your connection or try again.
+            </p>
+            {comingNote ? <Alert variant="warn">{comingNote}</Alert> : null}
+            <div className="btn-row">
+              <Button variant="primary" onClick={() => void switchToMainnet()}>
+                Retry
+              </Button>
+              <Button onClick={switchToDemo}>
+                Back to Demo
+              </Button>
+            </div>
           </div>
         </Dialog>
       ) : null}
       {wmodal ? (
         <WalletModal onClose={() => setWmodal(false)} onAuth={() => void refreshWallet()} />
+      ) : null}
+      {renameTarget ? (
+        <Dialog title="Rename chat" onClose={() => setRenameTarget(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              commitRename();
+            }}
+          >
+            <FieldLabel htmlFor="rename-input">Chat name</FieldLabel>
+            <div className="uid-row">
+              <Input
+                id="rename-input"
+                value={renameTarget.value}
+                onChange={(e) => setRenameTarget({ id: renameTarget.id, value: e.target.value })}
+                placeholder="Chat name"
+                maxLength={80}
+              />
+              <Button size="sm" variant="primary" type="submit">Save</Button>
+            </div>
+          </form>
+        </Dialog>
       ) : null}
       {acctOpen ? (
         <Dialog title="Account" onClose={() => setAcctOpen(false)}>
@@ -581,7 +633,7 @@ export default function App() {
             />
             <Button size="sm" variant="primary" onClick={applyUser}>Apply</Button>
           </div>
-          <FieldHint>Memory namespace: user-{draftId.trim() || userId}. Chats are per browser + user.</FieldHint>
+          <FieldHint>Your memories are private to this ID. Chats are per browser + user.</FieldHint>
           <Separator />
           <FieldLabel>Environment</FieldLabel>
           <div className="foot-row">
@@ -608,10 +660,10 @@ export default function App() {
           <Separator />
           <div className="foot-row">
             <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
-              {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'wallet out'}
+              {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'Not connected'}
             </Badge>
             <Badge variant={suiAccount ? 'mainnet' : 'default'}>
-              {suiAccount ? `sui ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)}` : 'sui out'}
+              {suiAccount ? `sui ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)}` : 'Not connected'}
             </Badge>
             <Button
               size="sm"

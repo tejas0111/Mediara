@@ -136,17 +136,63 @@ export const Empty = ({ title, children, action }: { title: string; children?: R
 );
 
 // -------------------------------------------------------------- Dialog ---
-export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+// Focus trap + restore focus to the trigger + aria-describedby.
+// Esc and overlay-click still close (behavior unchanged).
+function useOverlayFocus(onClose: () => void) {
+  const boxRef = React.useRef<HTMLDivElement>(null);
+  const descId = React.useId();
+  const prevFocus = React.useRef<Element | null>(null);
   React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    prevFocus.current = document.activeElement;
+    const box = boxRef.current;
+    const focusables = () =>
+      box
+        ? Array.from(
+            box.querySelectorAll<HTMLElement>(
+              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+            ),
+          )
+        : [];
+    // Focus the first control so keyboard users land inside the dialog.
+    (focusables()[0] ?? box)?.focus?.();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !box) return;
+      const items = focusables();
+      if (items.length === 0) {
+        e.preventDefault();
+        box.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      (prevFocus.current as HTMLElement | null)?.focus?.();
+    };
   }, [onClose]);
+  return { boxRef, descId };
+}
+
+export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const { boxRef, descId } = useOverlayFocus(onClose);
   return (
     <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={boxRef} tabIndex={-1} className="dialog" role="dialog" aria-modal="true" aria-label={title} aria-describedby={descId}>
         <div className="card-h"><h3 className="card-t">{title}</h3></div>
-        <div className="card-c">{children}</div>
+        <div className="card-c" id={descId}>{children}</div>
       </div>
     </div>
   );
@@ -154,16 +200,12 @@ export function Dialog({ title, onClose, children }: { title: string; onClose: (
 
 // --------------------------------------------------------------- Sheet ---
 export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const { boxRef, descId } = useOverlayFocus(onClose);
   return (
     <div className="sheet-wrap" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={boxRef} tabIndex={-1} className="sheet" role="dialog" aria-modal="true" aria-label={title} aria-describedby={descId}>
         <div className="card-h"><h3 className="card-t">{title}</h3></div>
-        <div className="card-c">{children}</div>
+        <div className="card-c" id={descId}>{children}</div>
       </div>
     </div>
   );

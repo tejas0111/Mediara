@@ -125,11 +125,13 @@ export default function MemoryView({ userId }: { userId: string }) {
       <div className="mem-top">
         <h2 className="mem-title">Memory — {data.user}</h2>
         <Badge variant={mode}>{data.mode}</Badge>
-        {stale ? <Badge variant="warn">stale</Badge> : <Badge variant="ok">fresh</Badge>}
+        {stale ? <Badge variant="warn">stale</Badge> : <Badge variant="ok">updated</Badge>}
         {!data.allergiesKnown ? <Badge variant="danger">allergies unconfirmed</Badge> : null}
       </div>
       <p className="mem-hint">
-        Every fact below carries its Walrus blob receipt. Allergies are quoted verbatim — confirm with the patient or carer before acting.
+        {mode === 'mainnet'
+          ? 'Every fact below carries its Walrus blob receipt. Allergies are quoted verbatim — confirm with the patient or carer before acting.'
+          : 'Every fact below carries its local demo id — on Mainnet these are Walrus blob receipts. Allergies are quoted verbatim — confirm with the patient or carer before acting.'}
       </p>
 
       {stale ? (

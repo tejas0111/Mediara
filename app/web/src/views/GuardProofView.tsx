@@ -1,5 +1,6 @@
 import React from 'react';
 import { ApiError, clean, getGuardProof, shortBlob, walruscan, type GuardProofResponse } from '../api';
+import { navigate } from '../chat';
 import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Empty, Skeleton } from '../ui';
 import './GuardProofView.css';
 
@@ -49,7 +50,14 @@ export default function GuardProofView({ userId }: { userId: string }) {
   }
 
   if (!data) {
-    return <Empty title="No guard data" />;
+    return (
+      <Empty
+        title="No guard data"
+        action={<Button size="sm" variant="primary" onClick={() => navigate('chat')}>Ask a question in chat</Button>}
+      >
+        No safety blocks recorded yet — the guard fires when a risky question matches a remembered fact.
+      </Empty>
+    );
   }
 
   const entries = [...data.entries].sort((x, y) => y.n - x.n);

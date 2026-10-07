@@ -22,13 +22,11 @@ export default function ReplayView({ userId }: { userId: string }) {
   const [error, setError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [shown, setShown] = React.useState(0);
-  const [playing, setPlaying] = React.useState(false);
 
   const load = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     setShown(0);
-    setPlaying(false);
     try {
       setData(await getExport(userId));
     } catch (e) {
@@ -45,17 +43,9 @@ export default function ReplayView({ userId }: { userId: string }) {
 
   const n = data?.facts.length ?? 0;
   const done = n > 0 && shown >= n;
-
-  React.useEffect(() => {
-    if (!playing || done) return;
-    if (reducedMotion()) {
-      setShown(n);
-      setPlaying(false);
-      return;
-    }
-    const t = window.setTimeout(() => setShown((s) => Math.min(s + 1, n)), 420);
-    return () => window.clearTimeout(t);
-  }, [playing, shown, done, n]);
+  // Reduced-motion users get the same instant result — there is no timed
+  // stepping to suppress, so this view is calm by construction.
+  const calm = reducedMotion();
 
   if (loading) {
     return (
@@ -93,12 +83,9 @@ export default function ReplayView({ userId }: { userId: string }) {
 
   function play() {
     if (done) setShown(0);
-    if (reducedMotion()) {
-      setShown(facts.length);
-      setPlaying(false);
-    } else {
-      setPlaying(true);
-    }
+    // Instant reveal: the full history appears at once — no simulated
+    // stepping, no timers. Day labels stay proportional via dayFor.
+    setShown(facts.length);
   }
 
   return (
@@ -108,14 +95,10 @@ export default function ReplayView({ userId }: { userId: string }) {
         <h2 className="replay-title">Replay — {data.user}</h2>
         <Badge variant={data.mode === 'mainnet' ? 'mainnet' : 'local'}>{data.mode}</Badge>
         <div className="replay-controls">
-          {playing ? (
-            <Button variant="primary" size="sm" onClick={() => setPlaying(false)}>Pause</Button>
-          ) : (
-            <Button variant="primary" size="sm" onClick={play}>
-              {done ? 'Replay again' : shown > 0 ? 'Resume' : 'Play'}
-            </Button>
-          )}
-          <Button size="sm" onClick={() => { setPlaying(false); setShown(0); }}>Reset</Button>
+          <Button variant="primary" size="sm" onClick={play}>
+            {done ? 'Replay again' : shown > 0 ? 'Show all' : 'Play'}
+          </Button>
+          <Button size="sm" onClick={() => { setShown(0); }}>Reset</Button>
         </div>
       </div>
       <p className="replay-hint">
@@ -137,7 +120,7 @@ export default function ReplayView({ userId }: { userId: string }) {
         {shown > 0 ? ` · up to Day ${dayFor(Math.max(shown - 1, 0), facts.length)} of 90` : ' · press Play to begin'}
       </p>
 
-      <ol className="replay">
+      <ol className={calm ? 'replay replay-calm' : 'replay'}>
         {facts.map((f, i) => {
           const visible = i < shown;
           const short = shortBlob(f.blob_id);

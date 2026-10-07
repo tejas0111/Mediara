@@ -77,7 +77,13 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
     setLoading(true);
     setStatusError(null);
     try {
-      setStatus(await walletStatus());
+      const st = await walletStatus();
+      setStatus(st);
+      // Resume: a tab closed mid-flow leaves a server-side pending step. Point
+      // the wizard at it so the next action (regenerate + sign + submit) is
+      // visible instead of silently resetting to step 1.
+      if (st.pendingPhase === 'link') setStep(1);
+      else if (st.pendingPhase === 'create') setStep(0);
     } catch (e) {
       setStatusError(errText(e));
     } finally {
@@ -398,6 +404,11 @@ export default function WalletView({ userId, onAuth }: { userId: string; onAuth:
           <CardContent>
             <div className="stack">
               <FieldHint>Onboarding submits real Sui mainnet transactions from your wallet (you pay gas). The server prepares each transaction; your wallet signs; the server submits and verifies onchain. No fake success is shown — every step reports the exact server result.</FieldHint>
+              {status?.pendingPhase ? (
+                <Alert variant="warn">
+                  You have a pending {status.pendingPhase} transaction from an earlier visit — press {status.pendingPhase === 'link' ? '“Next: link account”' : '“Start: create account”'} again to regenerate it (old bytes are replaced, nothing is lost), then sign and submit.
+                </Alert>
+              ) : null}
               {!addrMatch ? (
                 <Alert variant="warn">
                   {account

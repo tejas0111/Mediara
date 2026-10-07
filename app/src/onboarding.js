@@ -28,6 +28,31 @@ function buildClient() {
 // route returns 4xx, not a misleading 500.
 function clientError(message, status = 409, data = null) { const e = new Error(message); e.status = status; e.expose = true; if (data) e.data = data; return e; }
 
+// Map a tx-BUILD failure to an actionable client error when the cause is
+// user-actionable, otherwise null (caller rethrows the original).
+//   - gas: the wallet has no SUI for gas — funding fixes it, never a retry loop.
+//   - retired: a stored account from a RETIRED deployment fails the Move type
+//     check (old-typed objects vs current-package entry funs). Permanent for
+//     this account — the UI offers a fresh vault instead of a dead end.
+export function classifyBuildError(e, { accountId = null } = {}) {
+  const msg = String((e && e.message) || e);
+  if (accountId && /resolution failed|invalid command argument|moveabort/i.test(msg)) {
+    return clientError(
+      'This vault was created under a retired Walrus Memory deployment and can no longer link — start a fresh vault (create + link) to use the live deployment. Memories in the old vault are not transferable.',
+      409,
+      { retiredDeployment: true },
+    );
+  }
+  if (/insufficient.*sui|insufficient funds|gas selection|no gas|empty.*coin|not enough.*gas/i.test(msg)) {
+    return clientError(
+      'This wallet has no SUI for gas — fund it with a little SUI on Sui mainnet, then press the step again to regenerate the transaction.',
+      409,
+      { needsFunding: true },
+    );
+  }
+  return null;
+}
+
 function keypairFromHexPrivateKey(hex) {
   return Ed25519Keypair.fromSecretKey(Uint8Array.from(Buffer.from(String(hex).replace(/^0x/, ''), 'hex')));
 }
@@ -74,7 +99,14 @@ export async function prepareCreateAccount(address) {
   const delegate = await generateDelegateKey();
   const delegatePublicKeyHex = Buffer.from(delegate.publicKey).toString('hex');
   const tx = buildCreateAccountTx(address);
-  const bytes = await tx.build({ client: buildClient() });
+  let bytes;
+  try {
+    bytes = await tx.build({ client: buildClient() });
+  } catch (e) {
+    // A 0-SUI wallet fails gas selection here: fund-and-retry (409), never a
+    // bare 500/"Internal error" with no next action.
+    throw classifyBuildError(e, { accountId: raw?.accountId ?? null }) || e;
+  }
   const txBytesBase64 = Buffer.from(bytes).toString('base64');
   // Persist BEFORE the signature is requested. If the tab closes mid-flow,
   // the delegate keypair is already durably stored; a re-prepare regenerates
@@ -116,19 +148,10 @@ export async function prepareLinkDelegate(address) {
   try {
     bytes = await tx.build({ client: buildClient() });
   } catch (e) {
-    // A stored account from a RETIRED deployment fails the Move type check
-    // (old-typed objects vs current-package entry funs). That is permanent
-    // for this account — say so (409 + flag) instead of a bare 500, so the
-    // UI can offer a fresh vault. Transient/network failures rethrow masked.
-    const msg = String((e && e.message) || e);
-    if (accountId && /resolution failed|invalid command argument|moveabort/i.test(msg)) {
-      throw clientError(
-        'This vault was created under a retired Walrus Memory deployment and can no longer link — start a fresh vault (create + link) to use the live deployment. Memories in the old vault are not transferable.',
-        409,
-        { retiredDeployment: true },
-      );
-    }
-    throw e;
+    // Retired-typed accounts fail the Move type check permanently (409 + flag
+    // so the UI can offer a fresh vault); 0-SUI wallets fail gas selection
+    // (409 fund-and-retry). Transient/network failures rethrow masked.
+    throw classifyBuildError(e, { accountId }) || e;
   }
   const txBytesBase64 = Buffer.from(bytes).toString('base64');
   // Persist the account id with the pending phase: if the user signs but
@@ -170,7 +193,9 @@ export async function completeOnboarding(address, signatureBase64) {
       throw clientError(`Transaction ${digest || ''} landed but the AccountCreated event is not indexed yet — retry /api/wallet/status in a few seconds`, 409);
     }
     const check = await verifyAccount(account.accountId, { expectOwner: address });
-    if (!check.ok) throw new Error(`Account verification failed: ${check.reason}`);
+    // The tx landed but the object read does not match yet: almost always
+    // indexer lag, never a bricked vault — retryable, with the reason shown.
+    if (!check.ok) throw clientError(`Account verification failed (${check.reason}) — the transaction landed; retry /api/wallet/status in a few seconds`, 409);
     markAccountLinked(address, account.accountId);
     upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
     return { stage: 'created', accountId: account.accountId, digest, nextStep: 'link' };
@@ -178,12 +203,14 @@ export async function completeOnboarding(address, signatureBase64) {
 
   // link phase: the delegate key must now be registered on the account.
   const accountId = user.accountId || (await accountForOwner(address))?.accountId;
-  if (!accountId) throw new Error('Account not found after link transaction — unexpected state');
+  if (!accountId) throw clientError('Account not found after link transaction — press the link step again to regenerate it, then retry', 409);
   const check = await verifyAccount(accountId, {
     expectOwner: address,
     expectDelegateAddress: user.delegateAddress,
   });
-  if (!check.ok) throw new Error(`Link verification failed: ${check.reason}`);
+  // Landed-but-unindexed reads retry cleanly; a delegate that never appears
+  // means the link tx did not register it — re-prepare the link step.
+  if (!check.ok) throw clientError(`Link verification failed (${check.reason}) — retry in a few seconds, or press the link step again to regenerate the transaction`, 409);
   upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
   return { stage: 'linked', accountId, digest, nextStep: null };
 }

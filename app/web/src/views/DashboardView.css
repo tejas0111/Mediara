@@ -18,8 +18,11 @@
   .dash-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 360px) {
+  .dash-wrap { padding: 18px 10px; }
   .dash-title { font-size: 18px; }
   .dash-num { font-size: 22px; }
+  .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .dash-links .btn { flex: 1 1 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .dash-wrap *, .dash-wrap *::before, .dash-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }

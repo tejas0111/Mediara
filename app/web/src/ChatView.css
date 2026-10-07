@@ -150,6 +150,16 @@
   overflow-wrap: break-word;
 }
 
+/* Rolling chat budget: whisper-quiet, only rendered when <=3 remain. */
+.budget-note {
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 0 16px 6px;
+  overflow-wrap: break-word;
+}
+
 .composer {
   display: flex;
   align-items: flex-end;

@@ -190,5 +190,28 @@ import path from 'node:path';
   delete process.env.DD_REGISTRY_PATH;
 }
 
+// --- onboarding build-error classifier (offline: synthetic errors, no network) ---
+{
+  const ob = await import('./onboarding.js');
+  ok(typeof ob.classifyBuildError === 'function', 'classifyBuildError is exported for tests');
+  // Gas failures (exact SDK wording seen live) -> actionable 409 fund-and-retry.
+  for (const msg of [
+    'Invalid argument: Unable to perform gas selection due to insufficient SUI balance (in address balance or coins) for account 0xab.. to satisfy required budget 4121144.',
+    'insufficient funds for gas',
+    'No gas coins found (empty coin set)',
+  ]) {
+    const mapped = ob.classifyBuildError(new Error(msg), { accountId: null });
+    ok(mapped && mapped.status === 409 && mapped.expose === true && mapped.data?.needsFunding === true, `gas maps to 409 needsFunding: ${msg.slice(0, 40)}`);
+  }
+  // Retired-typed accounts -> actionable 409 fresh-start flag (all 3 patterns).
+  for (const msg of ['Move resolution failed: object type mismatch', 'Invalid command argument: expected MemWalAccount', 'MoveAbort in add_delegate_key']) {
+    const mapped = ob.classifyBuildError(new Error(msg), { accountId: '0x' + 'ee'.repeat(32) });
+    ok(mapped && mapped.status === 409 && mapped.data?.retiredDeployment === true, `retired maps to 409 retiredDeployment: ${msg.slice(0, 40)}`);
+  }
+  ok(ob.classifyBuildError(new Error('MoveAbort in add_delegate_key')) === null, 'retired pattern without an accountId does not map (avoids mislabeling)');
+  ok(ob.classifyBuildError(new Error('graphql 500')) === null, 'transient failures pass through unmapped');
+  ok(ob.classifyBuildError('plain string failure') === null, 'non-Error input handled, unmapped');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

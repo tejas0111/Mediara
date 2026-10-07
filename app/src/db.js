@@ -47,6 +47,11 @@ export function openDb(dbPath = DEFAULT_DB_PATH) {
       turns INTEGER NOT NULL DEFAULT 0,
       dayDate TEXT, dayCount INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS turns(
+      userId TEXT NOT NULL,
+      at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS turns_user_at ON turns(userId, at);
     CREATE TABLE IF NOT EXISTS memories(
       userId TEXT NOT NULL, blobId TEXT NOT NULL,
       text TEXT NOT NULL DEFAULT '', at TEXT,
@@ -63,18 +68,77 @@ export function openDb(dbPath = DEFAULT_DB_PATH) {
   return db;
 }
 
-// UTC day bucket. Same rule as UsageTracker.todayStr; `dayOverride` (a
-// 'YYYY-MM-DD' string) exists so tests can exercise persist+rollover without
-// faking the clock — pass it to checkDay/noteDay.
+// UTC day bucket. Same rule as UsageTracker.todayStr; a plain 'YYYY-MM-DD'
+// string passed as dayOverride keeps exercising persist+rollover without
+// faking the clock. An object { mode, now, day } selects the rolling 24h
+// window (default) or the legacy UTC-day bucket (wallet channel).
 export const todayStr = (d = new Date()) => d.toISOString().slice(0, 10);
+
+export const WINDOW_MS = 24 * 60 * 60 * 1000;
+const WINDOW_KEEP = 50;
+
+function normOpts(modeOrDay) {
+  if (typeof modeOrDay === 'string') return { mode: 'daily', day: modeOrDay, now: undefined };
+  if (modeOrDay && typeof modeOrDay === 'object') {
+    return {
+      mode: modeOrDay.mode === 'daily' ? 'daily' : 'rolling',
+      day: typeof modeOrDay.day === 'string' ? modeOrDay.day : null,
+      now: typeof modeOrDay.now === 'number' && Number.isFinite(modeOrDay.now) ? modeOrDay.now : undefined,
+    };
+  }
+  return { mode: 'rolling', day: null, now: undefined };
+}
 
 // ---------------------------------------------------------------------------
 // SqliteUsage — UsageTracker-compatible usage evidence over SQLite.
 // ---------------------------------------------------------------------------
 export class SqliteUsage {
-  constructor({ dbPath = DEFAULT_DB_PATH, db = null } = {}) {
+  constructor({ dbPath = DEFAULT_DB_PATH, db = null, now = null } = {}) {
     this.dbPath = db ? null : String(dbPath || DEFAULT_DB_PATH);
     this.db = db || openDb(this.dbPath);
+    this.now = typeof now === 'function' ? now : null;
+    try {
+      this.db.exec('CREATE TABLE IF NOT EXISTS turns(userId TEXT NOT NULL, at INTEGER NOT NULL)');
+      this.db.exec('CREATE INDEX IF NOT EXISTS turns_user_at ON turns(userId, at)');
+    } catch { /* table exists on older handles — openDb already created it */ }
+  }
+
+  #nowMs(optsNow) {
+    if (typeof optsNow === 'number' && Number.isFinite(optsNow)) return optsNow;
+    if (this.now) {
+      try {
+        const n = this.now();
+        if (typeof n === 'number' && Number.isFinite(n)) return n;
+      } catch { /* fall through to the clock */ }
+    }
+    return Date.now();
+  }
+
+  #liveTurns(u, nowMs) {
+    const cutoff = nowMs - WINDOW_MS;
+    this.db.prepare('DELETE FROM turns WHERE userId = ? AND at <= ?').run(u, cutoff);
+    // Cap the stored list (last 50): keep the newest rows per key.
+    this.db.prepare(
+      'DELETE FROM turns WHERE userId = ? AND rowid NOT IN (SELECT rowid FROM turns WHERE userId = ? ORDER BY at DESC, rowid DESC LIMIT ?)',
+    ).run(u, u, WINDOW_KEEP);
+    return this.db.prepare('SELECT at FROM turns WHERE userId = ? ORDER BY at ASC').all(u).map((r) => r.at);
+  }
+
+  #recordTurn(u, nowMs) {
+    this.db.prepare('INSERT INTO turns(userId, at) VALUES(?,?)').run(u, nowMs);
+    this.#liveTurns(u, nowMs);
+  }
+
+  #windowCheck(cap, live, nowMs) {
+    const used = live.length;
+    const reset = todayStr(new Date(nowMs));
+    if (!used) return { ok: true, used: 0, remaining: cap, reset, resetAt: null, resetInHrs: null };
+    const oldest = live[0];
+    const resetAt = new Date(oldest + WINDOW_MS).toISOString();
+    const resetInHrs = Math.max(1, Math.ceil((oldest + WINDOW_MS - nowMs) / 3_600_000));
+    return used < cap
+      ? { ok: true, used, remaining: cap - used, reset, resetAt, resetInHrs }
+      : { ok: false, used, remaining: 0, reset, resetAt, resetInHrs };
   }
 
   #row(userId) {
@@ -92,16 +156,18 @@ export class SqliteUsage {
     return u;
   }
 
-  touchUser(userId, { turn = false } = {}) {
+  touchUser(userId, { turn = false, now = undefined } = {}) {
     const nowIso = new Date().toISOString();
     const u = this.#ensure(userId, nowIso);
     if (!u) return;
     if (turn) {
+      const nowMs = this.#nowMs(now);
       const today = todayStr();
       const r = this.#row(u);
       const sameDay = r && r.dayDate === today;
       this.db.prepare('UPDATE usage SET turns = turns + 1, lastSeen = ?, dayDate = ?, dayCount = ? WHERE userId = ?')
         .run(nowIso, today, sameDay ? Number(r.dayCount || 0) + 1 : 1, u);
+      this.#recordTurn(u, nowMs);
     } else {
       this.db.prepare('UPDATE usage SET lastSeen = ? WHERE userId = ?').run(nowIso, u);
     }
@@ -119,24 +185,39 @@ export class SqliteUsage {
     return !had;
   }
 
-  checkDay(userId, cap, dayOverride = null) {
+  checkDay(userId, cap, modeOrDay = null) {
     const u = String(userId || '').slice(0, 64);
-    const today = dayOverride || todayStr();
-    const r = u ? this.#row(u) : null;
-    const used = r && r.dayDate === today ? Number(r.dayCount || 0) : 0;
-    return used < cap
-      ? { ok: true, used, remaining: cap - used, reset: today }
-      : { ok: false, used, remaining: 0, reset: today };
+    const opts = normOpts(modeOrDay);
+    if (opts.mode === 'daily') {
+      const today = opts.day || todayStr();
+      const r = u ? this.#row(u) : null;
+      const used = r && r.dayDate === today ? Number(r.dayCount || 0) : 0;
+      return used < cap
+        ? { ok: true, used, remaining: cap - used, reset: today, resetAt: null, resetInHrs: null }
+        : { ok: false, used, remaining: 0, reset: today, resetAt: null, resetInHrs: null };
+    }
+    const nowMs = this.#nowMs(opts.now);
+    const live = u ? this.#liveTurns(u, nowMs) : [];
+    return this.#windowCheck(cap, live, nowMs);
   }
 
-  noteDay(userId, dayOverride = null) {
+  noteDay(userId, modeOrDay = null) {
     const nowIso = new Date().toISOString();
     const u = this.#ensure(userId, nowIso);
     if (!u) return;
-    const today = dayOverride || todayStr();
+    const opts = normOpts(modeOrDay);
+    if (opts.mode === 'daily' && opts.day) {
+      const r = this.#row(u);
+      this.db.prepare('UPDATE usage SET dayDate = ?, dayCount = ? WHERE userId = ?')
+        .run(opts.day, r && r.dayDate === opts.day ? Number(r.dayCount || 0) + 1 : 1, u);
+      return;
+    }
+    const nowMs = this.#nowMs(opts.now);
+    const today = todayStr();
     const r = this.#row(u);
     this.db.prepare('UPDATE usage SET dayDate = ?, dayCount = ? WHERE userId = ?')
       .run(today, r && r.dayDate === today ? Number(r.dayCount || 0) + 1 : 1, u);
+    this.#recordTurn(u, nowMs);
   }
 
   snapshot(userId) {

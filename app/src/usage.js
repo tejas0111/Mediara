@@ -58,6 +58,7 @@ export class UsageTracker {
       const raw = JSON.parse(fs.readFileSync(this.persistPath, 'utf8'));
       for (const [u, rec] of Object.entries(raw.users || {})) {
         rec.memories = new Map(Object.entries(rec.memories || {}));
+        if (!Array.isArray(rec.window)) rec.window = [];
         this.users.set(u, rec);
       }
       this.startedAt = raw.startedAt || null;
@@ -87,6 +88,11 @@ export class UsageTracker {
     }
     if (turn) {
       rec.turns += 1;
+      if (!Array.isArray(rec.window)) rec.window = [];
+      let nowMs = Date.now();
+      try { const n = this.now(); if (typeof n === 'number' && Number.isFinite(n)) nowMs = n; } catch { /* clock fallback */ }
+      rec.window.push(nowMs);
+      if (rec.window.length > UsageTracker.WINDOW_KEEP) rec.window = rec.window.slice(-UsageTracker.WINDOW_KEEP);
       const today = UsageTracker.todayStr();
       if (!rec.day || rec.day.date !== today) rec.day = { date: today, count: 1 };
       else rec.day = { date: today, count: Number(rec.day.count || 0) + 1 };
@@ -109,34 +115,110 @@ export class UsageTracker {
     return !had;
   }
 
-  // Rolling-day budget: abuse protection for the LLM + Walrus write path.
-  // Spend today is $0 (sponsored Walrus writes + free OpenRouter models), so
-  // these caps guard RATE (upstream throttles, relayer fairness), not money.
-  // Stored on the user record ({...rec} spread persists it automatically);
-  // rows written before this feature simply have no `day` and start at 0.
+  // Rolling 24h sliding-window budget: abuse protection for the LLM + Walrus
+  // write path. Spend today is $0 (sponsored Walrus writes + free OpenRouter
+  // models), so these caps guard RATE (upstream throttles, relayer fairness),
+  // not money.
+  //
+  // DEMO + ANON channels roll on a 24h sliding window: each key stores its turn
+  // timestamps (ms epoch, capped at the last 50) and usedInWindow counts only
+  // timestamps within the last 24h. The WALLET channel (200/day UTC) keeps the
+  // legacy UTC-day bucket — pass { mode: 'daily' } (or the legacy positional
+  // dayOverride string) to checkDay/noteDay for that path.
+  //
+  // checkDay(userId, cap, opts?) -> { ok, used, remaining, reset, resetAt, resetInHrs }
+  //   opts: undefined (rolling now) | 'YYYY-MM-DD' (legacy daily override) |
+  //         { mode: 'rolling'|'daily', now?, day? }
+  //   reset = legacy UTC-day string (compat); resetAt = ISO of when the oldest
+  //   in-window turn expires (null when empty); resetInHrs = ceiling hours to
+  //   resetAt (null when empty).
   static todayStr(d = new Date()) {
     return d.toISOString().slice(0, 10); // UTC day bucket
   }
-  checkDay(userId, cap) {
-    const u = String(userId || '').slice(0, 64);
-    const today = UsageTracker.todayStr();
-    const rec = this.users.get(u);
-    const used = rec && rec.day && rec.day.date === today ? Number(rec.day.count || 0) : 0;
-    return used < cap
-      ? { ok: true, used, remaining: cap - used, reset: today }
-      : { ok: false, used, remaining: 0, reset: today };
+  static WINDOW_MS = 24 * 60 * 60 * 1000;
+  static WINDOW_KEEP = 50;
+  #nowMs(opts) {
+    if (opts && typeof opts.now === 'number' && Number.isFinite(opts.now)) return opts.now;
+    try {
+      const n = this.now();
+      return typeof n === 'number' && Number.isFinite(n) ? n : Date.now();
+    } catch { return Date.now(); }
   }
-  noteDay(userId) {
+  static #normOpts(modeOrDay) {
+    if (typeof modeOrDay === 'string') return { mode: 'daily', day: modeOrDay };
+    if (modeOrDay && typeof modeOrDay === 'object') {
+      return {
+        mode: modeOrDay.mode === 'daily' ? 'daily' : 'rolling',
+        day: typeof modeOrDay.day === 'string' ? modeOrDay.day : null,
+        now: modeOrDay.now,
+      };
+    }
+    return { mode: 'rolling', day: null, now: undefined };
+  }
+  #prune(rec, nowMs) {
+    if (!Array.isArray(rec.window)) rec.window = [];
+    const cutoff = nowMs - UsageTracker.WINDOW_MS;
+    rec.window = rec.window.filter((t) => typeof t === 'number' && t > cutoff);
+    if (rec.window.length > UsageTracker.WINDOW_KEEP) {
+      rec.window = rec.window.slice(-UsageTracker.WINDOW_KEEP);
+    }
+    return rec.window;
+  }
+  #windowCheck(rec, cap, nowMs) {
+    const live = rec ? this.#prune(rec, nowMs) : [];
+    const used = live.length;
+    if (!used) {
+      return { ok: true, used: 0, remaining: cap, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt: null, resetInHrs: null };
+    }
+    const oldest = Math.min(...live);
+    const resetAt = new Date(oldest + UsageTracker.WINDOW_MS).toISOString();
+    const resetInHrs = Math.max(1, Math.ceil((oldest + UsageTracker.WINDOW_MS - nowMs) / 3_600_000));
+    return used < cap
+      ? { ok: true, used, remaining: cap - used, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt, resetInHrs }
+      : { ok: false, used, remaining: 0, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt, resetInHrs };
+  }
+  checkDay(userId, cap, modeOrDay) {
     const u = String(userId || '').slice(0, 64);
-    if (!u) return;
+    const opts = UsageTracker.#normOpts(modeOrDay);
+    if (opts.mode === 'daily') {
+      const today = opts.day || UsageTracker.todayStr();
+      const rec = this.users.get(u);
+      const used = rec && rec.day && rec.day.date === today ? Number(rec.day.count || 0) : 0;
+      return used < cap
+        ? { ok: true, used, remaining: cap - used, reset: today, resetAt: null, resetInHrs: null }
+        : { ok: false, used, remaining: 0, reset: today, resetAt: null, resetInHrs: null };
+    }
+    const nowMs = this.#nowMs(opts);
+    return this.#windowCheck(this.users.get(u), cap, nowMs);
+  }
+  #ensureRec(u) {
     let rec = this.users.get(u);
     if (!rec) {
-      rec = { firstSeen: new Date().toISOString(), lastSeen: null, turns: 0, memories: new Map() };
+      rec = { firstSeen: new Date().toISOString(), lastSeen: null, turns: 0, memories: new Map(), window: [] };
       this.users.set(u, rec);
     }
-    const today = UsageTracker.todayStr();
+    if (!Array.isArray(rec.window)) rec.window = [];
+    return rec;
+  }
+  #noteTurn(u, nowMs) {
+    const rec = this.#ensureRec(u);
+    rec.window.push(nowMs);
+    this.#prune(rec, nowMs);
+    const today = UsageTracker.todayStr(new Date(nowMs));
     if (!rec.day || rec.day.date !== today) rec.day = { date: today, count: 1 };
     else rec.day = { date: today, count: Number(rec.day.count || 0) + 1 };
+  }
+  noteDay(userId, modeOrDay) {
+    const u = String(userId || '').slice(0, 64);
+    if (!u) return;
+    const opts = UsageTracker.#normOpts(modeOrDay);
+    if (opts.mode === 'daily' && opts.day) {
+      const rec = this.#ensureRec(u);
+      if (!rec.day || rec.day.date !== opts.day) rec.day = { date: opts.day, count: 1 };
+      else rec.day = { date: opts.day, count: Number(rec.day.count || 0) + 1 };
+      return;
+    }
+    this.#noteTurn(u, this.#nowMs(opts));
   }
   snapshot(userId) {
     const id = String(userId);

@@ -11,7 +11,7 @@
 
 Wallet users (the full-stack path): each visitor connects a Sui wallet, signs a
 personal message (free), then creates their OWN MemWalAccount onchain (two
-signed transactions they pay for) and registers DoseDaughter's delegate key.
+signed transactions they pay for) and registers Mediara's delegate key.
 After that, chat memory lands in THEIR account — the app wallet is never used
 for user data. `MEMWAL_ACCOUNT_ID`/`MEMWAL_PRIVATE_KEY` remain for the shared
 demo channel and the Telegram bot only.

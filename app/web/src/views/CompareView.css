@@ -30,3 +30,9 @@
 @media (max-width: 480px) {
   .cmp-wrap { padding: 20px 12px; }
 }
+@media (max-width: 360px) {
+  .cmp-wrap { padding: 18px 10px; }
+  .cmp-grid { gap: 10px; }
+  .cmp-form { gap: 10px; }
+  .cmp-fact { padding: 8px 10px; }
+}

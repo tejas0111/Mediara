@@ -109,6 +109,26 @@ export const walruscan = (id: string | null) =>
     ? `https://walruscan.com/mainnet/blob/${id}`
     : null;
 
+// ------------------------------------------------------------ budget ---
+// Rolling 24h sliding-window budget (demo + anon channels). resetAt = ISO of
+// when the oldest in-window turn expires (null when empty); remaining counts
+// down to 0, at which point the server answers 429 with RateLimitBody.
+export interface Budget {
+  used: number;
+  cap: number;
+  remaining: number;
+  resetAt: string | null;
+}
+export interface RateLimitBody {
+  error: string;
+  loginRequired?: boolean;
+  demoUser?: string;
+  remaining: number;
+  resetsAt?: string;
+  resetAt: string | null;
+  resetInHrs: number | null;
+}
+
 // ---------------------------------------------------------------- chat ---
 export interface RecalledMeta {
   text: string;
@@ -131,6 +151,7 @@ export interface ChatResponse {
   memoryOff: boolean;
   mode: 'local' | 'mainnet';
   disclaimer: string;
+  budget?: Budget;
 }
 export const postChat = (userId: string, message: string, memory: boolean, model?: string) =>
   req<ChatResponse>('/api/chat', {
@@ -338,7 +359,10 @@ export interface DashboardDemo {
 export interface DashboardBudget {
   used: number;
   cap: number;
-  reset: string;
+  remaining: number;
+  reset: string | null;
+  resetAt: string | null;
+  resetInHrs: number | null;
 }
 export interface DashboardPersonal {
   memories: number;

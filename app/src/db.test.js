@@ -2,9 +2,9 @@
 // server WITHOUT DD_USAGE_LEDGER/DD_GUARD_PROOF, so it exercises the SQLite
 // path (DD_DB_PATH); routes.test.js / stats.test.js keep the JSON path.
 // Run: node --test src/db.test.js  (part of `npm test`)
-// Covers: day-budget persist+rollover, guard record+verify, snapshot counts,
+// Covers: rolling-window budget persist+rollover, guard record+verify, snapshot counts,
 // /api/usage redaction + /api/dashboard on the SQLite store, and the demo/normal
-// day-cap split at its default (5 vs DD_DAY_LIMIT_ANON).
+// day-cap split at its default (10 vs DD_DAY_LIMIT_ANON).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -101,17 +101,19 @@ test('SQLite path: /api/usage redacts blob texts for anonymous callers', async (
   for (const b of me.blobs) assert.equal(b.text, null, 'text redacted for anon');
 });
 
-test('SQLite path: demo namespaces hit the 5/day cap even with high DD_DAY_LIMIT_ANON', async () => {
-  for (let i = 0; i < 5; i++) {
+test('SQLite path: demo namespaces hit the 10/rolling-24h cap even with high DD_DAY_LIMIT_ANON', async () => {
+  for (let i = 0; i < 10; i++) {
     const r = await post('/api/chat', { userId: 'demo-mom', message: `hello number ${i}` });
     assert.equal(r.status, 200, `demo turn ${i + 1} allowed`);
   }
   const r = await post('/api/chat', { userId: 'demo-mom', message: 'one more please' });
-  assert.equal(r.status, 429, '6th demo turn refused at the default demo cap of 5');
+  assert.equal(r.status, 429, '11th demo turn refused at the default demo cap of 10');
   const j = await r.json();
   assert.equal(j.loginRequired, true);
   assert.equal(j.demoUser, 'demo-mom');
-  assert.match(j.resetsAt, /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(j.remaining, 0);
+  assert.ok(j.resetAt && !Number.isNaN(Date.parse(j.resetAt)), 'resetAt is an ISO date');
+  assert.ok(typeof j.resetInHrs === 'number' && j.resetInHrs >= 1, 'human resetInHrs present');
   // A normal namespace still enjoys the high ANON cap.
   const ok = await post('/api/chat', { userId: `db-nondemo-${Date.now()}`, message: 'hello there' });
   assert.equal(ok.status, 200);

@@ -16,7 +16,9 @@
   --muted: #a1a1aa;
   --faint: #71717a;
   --accent: #f4f4f5;
-  --accent-hover: #ffffff;
+  /* Hover is the brand highlight token — never a raw #fff, so a theme
+     change flows through instead of leaving a hardcoded white behind. */
+  --accent-hover: var(--brand-hi);
   --accent-text: #0c0d10;
   --danger: #f87171;
   --danger-border: rgb(248 113 113 / 0.35);

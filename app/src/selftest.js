@@ -19,6 +19,23 @@ ok(namespaceFor('demo-mom') === 'user-demo-mom', 'namespace basic');
   ok(chain.REGISTRY_ID === '0x8bf82c9e09e36b8d1c38298f68b7cb68e7b8762887e7592add9986d5e9cf199f', 'chain: registry id tracks the live deployment');
   ok(chain.PACKAGE_IDS.includes('0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd50958a24c6'), 'chain: retired package kept for event lookup');
 }
+// Census scoping (live bug: unscoped sums + wrong count field -> blobCount 0
+// while recall shows 13). Fake client, no network.
+{
+  const mem = await import('./memory.js');
+  const fake = { listNamespaces: async () => ({ namespaces: [
+    { id: 'user-demo-mom', name: 'user-demo-mom', memory_count: 14 },
+    { id: 'user-other', name: 'user-other', memory_count: 6 },
+  ], has_more: false }) };
+  const scoped = await mem.namespaceCensus(fake, 'user-demo-mom');
+  ok(scoped && scoped.totalBlobs === 14 && scoped.namespaceCount === 1, 'census: scoped to the requested namespace with memory_count');
+  const absent = await mem.namespaceCensus(fake, 'user-nobody');
+  ok(absent && absent.totalBlobs === 0, 'census: absent namespace reports zero, not null');
+  const broken = await mem.namespaceCensus({ listNamespaces: async () => { throw new Error('down'); } }, 'user-demo-mom');
+  ok(broken === null, 'census: unreachable listing stays null (fallback path)');
+  const legacy = await mem.namespaceCensus({ listNamespaces: async () => ({ namespaces: [{ id: 'user-x', blobCount: 3 }], has_more: false }) }, 'user-x');
+  ok(legacy && legacy.totalBlobs === 3, 'census: legacy blobCount field still read');
+}
 ok(namespaceFor('  Priya S! ') === 'user-priyas', 'namespace sanitizes');
 ok(namespaceFor('') === 'user-anon', 'namespace empty -> anon');
 const long = 'x'.repeat(600);
