@@ -441,25 +441,26 @@ export default function ChatView(props: ChatViewProps) {
       } catch (e) {
         // A NETWORK-level failure (fetch itself threw: DNS, blocked host,
         // rejected preflight, offline) carries no HTTP status — there is no
-        // server verdict to show and no charge to protect. Retry the SAME
-        // turn once through the same-origin proxy (/api/* → Railway), which
-        // carries the session cookie and cannot be blocked cross-origin.
-        // A REAL status (429 budget, 401 session) IS a server verdict: the
-        // direct path reached the API, so a proxy retry would charge the turn
-        // twice. Show it instead.
-        const networkLevel = !(e instanceof ApiError) || e.status === 0 || e.status === 404;
-        if (networkLevel) {
+        // server verdict to show and no charge to protect. The same holds for
+        // 502/503/504: the turn never completed, and the non-stream path
+        // charges at the TAIL — so an incomplete turn was never charged and a
+        // retry cannot double-spend it. Retry the SAME turn once through the
+        // same-origin proxy (/api/* → Railway), which cannot be blocked
+        // cross-origin and reuses the now-warm relayer session (fast).
+        // A REAL verdict (429 budget, 401 session, 4xx guard outcomes) IS an
+        // answer from the server: retrying would charge the turn twice.
+        // Show it instead.
+        const retryable = !(e instanceof ApiError) || [0, 404, 502, 503, 504].includes(e.status);
+        if (retryable) {
+          // Retry as ONE buffered REST turn through the same-origin proxy:
+          // long-lived SSE bodies get truncated on this path (proxy cuts the
+          // stream, reader sees no `done`), but a single JSON body survives.
+          // It costs a second budget turn; a dead end costs the user everything.
           try {
-            const res = await chatStream(userId, text, {
+            const res = await chat(userId, text, {
               model: model || undefined,
               memory: memoryOn,
-            }, {
-              onThinking: (thinking, recalledMeta) =>
-                patchStream((s) => ({ ...s, thinking, recalled: recalledMeta })),
-              onToken: (t) => {
-                patchStream((s) => ({ ...s, text: s.text + t }));
-              },
-            }, '');
+            });
             finish(res);
             setBusy(false);
             return;
