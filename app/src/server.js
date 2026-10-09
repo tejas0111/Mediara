@@ -25,8 +25,9 @@ import { limiter, clientKey, deviceKey, deviceId } from './rateLimit.js';
 import { encryptionEnabled } from './cryptoUtils.js';
 import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
 import { createStores, DEFAULT_DB_PATH } from './db.js';
+import { srcDir } from './srcDir.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = srcDir(import.meta.url);
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 // esc (HTML escaping) lives in page.js — single definition, no drift.
 // Map an error to a status. Client-state errors carry `status` (e.g. 409 from

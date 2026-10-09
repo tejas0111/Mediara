@@ -9,8 +9,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encryptSecret, decryptSecret, encryptionEnabled } from './cryptoUtils.js';
+import { srcDir } from './srcDir.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = srcDir(import.meta.url);
 // Overridable per-call (tests): set DD_REGISTRY_PATH to a temp file.
 const storePath = () => process.env.DD_REGISTRY_PATH || path.join(__dirname, '..', '.wallet-registry.json');
 

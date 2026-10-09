@@ -8,8 +8,9 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { srcDir } from './srcDir.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = srcDir(import.meta.url);
 // Overridable for tests (DD_LOCAL_STORE) so route tests never mutate the demo store.
 // Read dynamically (not once at import) so selftest/eval pick up a temp store
 // even when the env var is set after import.

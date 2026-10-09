@@ -4,7 +4,8 @@ export const esc = (s) => String(s ?? '').replace(/[&<>\"']/g, (c) => ({ '&': '&
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-const __pdir = path.dirname(fileURLToPath(import.meta.url));
+import { srcDir } from './srcDir.js';
+const __pdir = srcDir(import.meta.url);
 let ASSET_V = '10';
 try { ASSET_V = String(Math.floor(fs.statSync(path.join(__pdir, '..', 'public', 'app.css')).mtimeMs)); } catch {}
 

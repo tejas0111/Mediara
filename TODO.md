@@ -33,7 +33,7 @@ Gates: mainnet memory ✅ / 3×10 usage 🔴FAIL (1 persona) / live deploy ⚠�
 - [ ] S5: promo post third-party community — OWNER-GATED
 - [ ] S6: throttle-math paragraph (delegate-key throughput + keyless guards under 429) for article/resilience story
 - Press: coded pre-LLM STOPs, A/B 12/12 + 0/5 FP, hash-chained ledger, Sui vaults, proactive cross-checks, gradeable honesty infra
-- Number freeze: ONE truth (693/693 + eval 30/30) everywhere — README, SPEC-FULL, app/README, article, form. Re-sweep before submit, never reword after.
+- Number freeze: ONE truth (695/695 + eval 30/30) everywhere — README, SPEC-FULL, app/README, article, form. Re-sweep before submit, never reword after.
 - Judge-start-here block at README top: agent id, `user-demo-mom`, one STOP-receipt walruscan link, `/guard-proof` URL (owner/UI)
 - `submission/` mirror pack: form answers, ~700w article (compress, keep blob ids), X kit + timeline, demo script, bug tickets #966-968, 5-entry judge QA (owner)
 - S7 lessons: no live-edit number drift; 3 REAL users × 10 (family teaches on mainnet + CHAT-LOGS, not just seeded personas); human tail (URL, video, article, users) is the whole game — code already beats S7 winners
@@ -55,4 +55,4 @@ DO NOT COMMIT; report DONE + test evidence + concerns.
 - [ ] GATE WAVE 8: G2 changes + G3 CERTIFIED CLEAN + G1 pending — batch, then wave 9
 - [ ] Personal-chat login gate (SPEC §4/A): POST /api/chat + /stream anon-personal → 401 `{loginRequired, action: sign-in}` pre-budget, demo open, reads untouched — IMPLEMENTED in tree (server.js handleChat gate; routes 79 + stream 12 green; guest chat cap vestigial)
 
-- [ ] FINAL GATE: Judge PASS (693/693 + 30/30) + Reviewer Approved (Spec ✅) + Hunter CERTIFY NONE FOUND — THREE GREENS, loop stopped, tree left dirty for owner review (no commit per rule) — REOPENED: re-close only with T1 + wave-8 evidence
+- [ ] FINAL GATE: Judge PASS (695/695 + 30/30) + Reviewer Approved (Spec ✅) + Hunter CERTIFY NONE FOUND — THREE GREENS, loop stopped, tree left dirty for owner review (no commit per rule) — REOPENED: re-close only with T1 + wave-8 evidence

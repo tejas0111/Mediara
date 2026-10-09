@@ -25,3 +25,6 @@ app/src/guard-proof.json
 
 # --- submission packet (local only, owner copy-pastes) ---
 submission/
+
+# Local Netlify folder
+.netlify

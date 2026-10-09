@@ -6,7 +6,7 @@
 > "MAINNET E2E" and "MAINNET SEED COMPLETE" sections ARE real Walrus Mainnet,
 > with real blob IDs.
 >
-> **Current suite:** `npm test` = 693 passed (317 core + 71 wallet/crypto + 79 route-level + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene); `npm run eval` = 30/30 guard+recall probes.
+> **Current suite:** `npm test` = 695 passed (317 core + 71 wallet/crypto + 79 route-level + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 72 hardening + 4 loghygiene); `npm run eval` = 30/30 guard+recall probes.
 
 ## E2E probes — 2026-09-20 ~22:46 UTC, `PORT=3001 node src/server.js`, MEMWAL_MODE unset → local, no LLM key
 

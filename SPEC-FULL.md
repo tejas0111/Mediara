@@ -124,7 +124,7 @@ sign-in since the §4/A login gate — the guest chat cap is vestigial).
 ## 10. Testing gates (all must be green, always)
 
 `npm test` = selftest + wallet + routes + stream + stats + db + window + budget-keys + frontend + t3 + gatewave5 + gatewave8 + hardening + loghygiene
-(currently 693); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
+(currently 695); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
 boot smoke `:3001` + `:3114`-class scratch. Rules: TDD red-green for new
 behavior; extend-never-weaken; temp env paths in tests; no chain writes;
 no secrets in git/logs.

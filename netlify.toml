@@ -19,7 +19,10 @@
 
 [functions]
   directory = "netlify/functions"
-  node_bundler = "esbuild"
+  # nft (no transpilation) instead of esbuild: esbuild's CJS output breaks
+  # import.meta.url and mangles node:sqlite. nft ships real node_modules and
+  # Node 22 runs the ESM sources natively.
+  node_bundler = "nft"
   included_files = ["src/**", "web/dist/**"]
 
 # Static files under web/dist (the /app SPA bundle) are served directly by

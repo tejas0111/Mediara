@@ -35,7 +35,7 @@ git clone https://github.com/tejas0111/mediara.git
 cd mediara/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 693 checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene), no network
+npm test                    # 695 checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 72 hardening + 4 loghygiene), no network
 npm run dev                 # server on :3001
 ```
 
@@ -95,7 +95,7 @@ Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.
 ## Repository layout
 
 ```
-app/                  Express server (API + React SPA at /), Telegram bot, MemWal wrapper, seeder, 693 offline checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene)
+app/                  Express server (API + React SPA at /), Telegram bot, MemWal wrapper, seeder, 695 offline checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 72 hardening + 4 loghygiene)
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -110,7 +110,7 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 693/693 offline checks pass (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene) | `npm test` — run it yourself |
+| 695/695 offline checks pass (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 72 hardening + 4 loghygiene) | `npm test` — run it yourself |
 | **Real-use requirement (≥3 users × ≥10 memories) — judged from Walrus, not vibes** | `npm run stats` (`--live` reads the relayer; every blob id links to walruscan) · [`/api/usage`](app/README.md) |
 | **Every STOP/CAUTION is public and tamper-evident** | [`/guard-proof`](app/src/page.js) — append-only hash-chain ledger; `/api/guard-proof` includes a chain verification |
 | **Memory that reaches out** | morning med brief + nightly interaction cross-check over the whole namespace — `/api/proactive` (on demand), `/api/nudge` (per-user tick), 6-hourly scheduler in dev |
@@ -132,7 +132,7 @@ Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df
 
 ## UI
 
-The chat interface is **hand-written** (HTML/CSS/JS, no framework, no build step) and served from `app/public/` — no UI library is vendored, and the Content-Security-Policy allows scripts only from `'self'`. Third-party runtime dependencies are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+The primary UI is a **React + Vite SPA** (`app/web/src`, served at `/app` from the built `app/web/dist` bundle — rebuild with `npm run build:web`). Legacy shareable HTML views (memory, print, replay, guard-proof, compare) are server-rendered from `app/src/page.js` with hand-written CSS from `app/public/`. No UI library is vendored beyond React, and the Content-Security-Policy allows scripts only from `'self'`. Third-party runtime dependencies are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
 ## Medical disclaimer
 
