@@ -174,14 +174,23 @@ export interface StreamHandlers {
  *   event: done      data: full ChatResponse
  *   event: error     data: same JSON body as the REST error
  * and terminates with data: [DONE].
+ *
+ * The stream bypasses the Netlify 200-proxy (which buffers the whole body
+ * and would defeat word-by-word delivery): on the hosted UI origin it goes
+ * direct to the API host with credentials, same as a user override.
  */
+const streamBase = (): string =>
+  apiBase ||
+  (typeof location !== 'undefined' && location.hostname.endsWith('.netlify.app')
+    ? 'https://mediara-production.up.railway.app'
+    : '');
 export async function chatStream(
   userId: string,
   message: string,
   opts: ChatOpts,
   handlers: StreamHandlers,
 ): Promise<ChatResponse> {
-  const r = await fetch(`${apiBase}/api/chat/stream`, {
+  const r = await fetch(`${streamBase()}/api/chat/stream`, {
     method: 'POST',
     headers: headers(),
     credentials: 'include',

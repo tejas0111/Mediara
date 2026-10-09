@@ -630,6 +630,7 @@ app.use((req, res, next) => {
     const same = hostname === (req.headers.host || '').split(':')[0];
     if (!same && !UI_ORIGINS.has(hostname)) return res.status(403).json({ error: 'cross-origin request blocked' });
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Vary', 'Origin');
   }
   if (req.method === 'OPTIONS') {
@@ -1418,7 +1419,14 @@ async function handleChat(req, res, streaming) {
         ensureStreamHead(res, 200);
         sseWrite(res, 'thinking', { thinking, recalledMeta: recalledMetaFor() });
         streamSentThinking = true;
-        const streamed = await streamLLM(system, message, history, model, emitToken, streamAbortCtrl ? streamAbortCtrl.signal : null);
+        // Word-split live provider chunks (never re-chunked or timed beyond
+        // this): sentence-sized provider flushes would otherwise paint all at
+        // once. Concatenation is byte-identical, so tokens still reassemble to
+        // the full reply in order. Whole-at-once replies (fallback / whole
+        // provider body / tail suffix) bypass this and stay single honest
+        // tokens via emitToken below.
+        const wordSplit = (t) => { for (const w of String(t ?? '').match(/\S+\s+|\S+|\s+/g) || []) emitToken(w); };
+        const streamed = await streamLLM(system, message, history, model, wordSplit, streamAbortCtrl ? streamAbortCtrl.signal : null);
         if (streamed.streamed) {
           reply = streamed.text;
           streamedText = streamed.text;
