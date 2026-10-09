@@ -132,7 +132,7 @@ Demo namespace on mainnet: `user-demo-mom` · Agent ID: `0x8c66ca90cc9b282f028df
 
 ## UI
 
-The primary UI is a **React + Vite SPA** (`app/web/src`, served at `/app` from the built `app/web/dist` bundle — rebuild with `npm run build:web`). Legacy shareable HTML views (memory, print, replay, guard-proof, compare) are server-rendered from `app/src/page.js` with hand-written CSS from `app/public/`. No UI library is vendored beyond React, and the Content-Security-Policy allows scripts only from `'self'`. Third-party runtime dependencies are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+The primary UI is a **React + Vite SPA** (`app/web/src`, served at `/app` from the built `app/web/dist` bundle — rebuild with `npm run build:web`). Legacy shareable HTML views (memory, print, replay, guard-proof, compare) are server-rendered from `app/src/page.js` with hand-written CSS from `app/public/`. No UI library is vendored beyond React, and the Content-Security-Policy allows scripts only from `'self'`.
 
 ## Medical disclaimer
 

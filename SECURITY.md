@@ -8,7 +8,7 @@ days and keep you posted as a fix lands.
 What counts as in scope: the Express server (`app/src/server.js`), wallet
 sign-in and session handling (`walletAuth.js`, cookies), the per-user delegate
 registry and its encryption (`userRegistry.js`, `cryptoUtils.js`), the
-namespace and budget guards (`SPEC.md` scope rules), and the Telegram bot
+namespace and budget guards (namespace and budget scope rules), and the Telegram bot
 (`telegram.js`). Out of scope: the hosted Walrus relayer, Sui mainnet itself,
 and OpenRouter or any LLM provider. Those are upstream services with their own
 disclosure paths.
