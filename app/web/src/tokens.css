@@ -1,269 +1,88 @@
-/* Mediara SPA design tokens — charcoal dark premium, default everywhere.
-   Semantic tokens: components must use these, never raw values.
-   Print stays PAPER (see @media print override at the bottom). */
+/* Mediara design tokens — single source of truth for color, radius, shadow,
+   motion. Components reference tokens only, never raw values. */
 :root {
-  color-scheme: dark;
+  /* Charcoal palette */
   --bg: #0c0d10;
-  --bg-soft: #121318;
-  --sidebar: #101116;
   --surface: #14151b;
-  --surface-2: #1a1c23;
-  --surface-3: #23262f;
-  --border: rgb(255 255 255 / 0.08);
-  --border-soft: rgb(255 255 255 / 0.06);
-  --text: #f4f4f5;
-  --text-2: #d4d4d8;
-  --muted: #a1a1aa;
-  --faint: #71717a;
-  --accent: #f4f4f5;
-  /* Hover is the brand highlight token — never a raw #fff, so a theme
-     change flows through instead of leaving a hardcoded white behind. */
-  --accent-hover: var(--brand-hi);
-  --accent-text: #0c0d10;
-  --danger: #f87171;
-  --danger-border: rgb(248 113 113 / 0.35);
-  --danger-soft: rgb(248 113 113 / 0.1);
-  --warn: #fbbf24;
-  --warn-border: rgb(251 191 36 / 0.35);
-  --warn-soft: rgb(251 191 36 / 0.1);
-  --ok: #4ade80;
-  --ok-soft: rgb(74 222 128 / 0.1);
-  --ok-border: rgb(74 222 128 / 0.35);
-  --link: #f4f4f5;
-  --brand-hi: #fafafa;
-  --brand-lo: #52525b;
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 20px;
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.5);
-  --shadow-2: 0 12px 40px rgb(0 0 0 / 0.55);
-  --font: "Inter", -apple-system, blinkmacsystemfont, "Segoe UI", roboto,
-    "Helvetica Neue", arial, sans-serif;
-  --mono: ui-monospace, "SF Mono", sfmono-regular, menlo, consolas, monospace;
-  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --surface-2: #1a1c24;
+  --surface-3: #20232d;
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+
+  /* Ink */
+  --ink: #eceef3;
+  --ink-dim: #a2a8b6;
+  --ink-faint: #6b7180;
+
+  /* Semantic */
+  --danger: #e5484d;
+  --danger-soft: rgba(229, 72, 77, 0.12);
+  --caution: #ffb224;
+  --caution-soft: rgba(255, 178, 36, 0.12);
+  --ok: #46a758;
+  --ok-soft: rgba(70, 167, 88, 0.14);
+  --info: #7c8cf8;
+  --info-soft: rgba(124, 140, 248, 0.12);
+
+  /* Brand: light primary on charcoal, grey-gradient brand moments */
+  --btn: #eceef3;
+  --btn-ink: #14151b;
+  --brand-grad: linear-gradient(135deg, #eceef3 0%, #9aa0ad 100%);
+
+  /* Shape */
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-lg: 20px;
+  --shadow: 0 10px 34px rgba(0, 0, 0, 0.42);
+  --shadow-sm: 0 3px 12px rgba(0, 0, 0, 0.3);
+
+  /* Motion — transform/opacity only, routine UI under 300ms */
+  --ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-move: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur-fast: 140ms;
+  --dur-med: 240ms;
+
+  /* Type */
+  --font:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
 }
 
-* { box-sizing: border-box; }
-html, body, #root { height: 100%; }
+html {
+  color-scheme: dark;
+}
+
+/* Viewport-locked shell: the document never scrolls — inner columns do. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+}
+
 body {
   margin: 0;
-  font-family: var(--font);
   background: var(--bg);
-  color: var(--text);
-  -webkit-font-smoothing: antialiased;
-  font-size: 15px;
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14.5px;
   line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
 }
-button { font: inherit; }
-a { color: var(--link); text-underline-offset: 2px; }
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 8px;
-}
-.skip {
-  position: absolute;
-  left: -9999px;
-  top: 0;
-  background: var(--accent);
-  color: var(--accent-text);
-  padding: 8px 14px;
-  border-radius: 0 0 10px 0;
-  z-index: 100;
-}
-.skip:focus { left: 0; }
 
-/* ---- primitives (shadcn-style composition, hand-vendored) ---- */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: var(--r-sm);
-  padding: 8px 14px;
-  font-weight: 550;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.15s var(--ease), border-color 0.15s var(--ease),
-    transform 0.05s var(--ease);
-  white-space: nowrap;
-}
-.btn:hover { background: var(--surface-2); }
-.btn:active { transform: scale(0.98); }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.btn-primary:hover { background: var(--accent-hover); }
-.btn-danger { background: var(--danger); border-color: var(--danger); color: var(--accent-text); }
-.btn-sm { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
-.btn-icon { padding: 7px; border-radius: 8px; }
-.btn > svg { width: 16px; height: 16px; flex: none; }
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-1);
-}
-.card-h { padding: 16px 18px 0; }
-.card-t { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
-.card-d { margin: 4px 0 0; font-size: 13.5px; color: var(--muted); }
-.card-c { padding: 14px 18px 18px; }
-.card-f { padding: 0 18px 16px; }
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 600;
-  padding: 2px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-2);
-  white-space: nowrap;
-}
-.badge-local { background: var(--surface-2); }
-.badge-mainnet { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.badge-danger { background: var(--danger-soft); border-color: var(--danger-border); color: var(--danger); }
-.badge-warn { background: var(--warn-soft); border-color: var(--warn-border); color: var(--warn); }
-.badge-ok { background: var(--ok-soft); border-color: var(--ok-border); color: var(--ok); }
-.mono { font-family: var(--mono); font-size: 0.86em; }
-
-.input, .textarea, .select {
-  width: 100%;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  border-radius: var(--r-sm);
-  padding: 9px 12px;
-  font: inherit;
-  font-size: 14px;
-}
-.input:focus, .textarea:focus, .select:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgb(244 244 245 / 0.12);
-}
-.textarea { resize: vertical; min-height: 76px; }
-.field-label { display: block; font-size: 13px; font-weight: 600; margin: 0 0 6px; color: var(--text-2); }
-.field-hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
-.field-invalid { border-color: var(--danger); }
-
-.sep { border: none; border-top: 1px solid var(--border-soft); margin: 14px 0; }
-
-.alert {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--faint);
-  background: var(--bg-soft);
-  border-radius: var(--r-sm);
-  padding: 12px 14px;
-  font-size: 14px;
-}
-.alert-danger { border-color: var(--danger-border); border-left-color: var(--danger); background: var(--danger-soft); }
-.alert-warn { border-color: var(--warn-border); border-left-color: var(--warn); background: var(--warn-soft); }
-.alert-ok { border-color: var(--ok-border); border-left-color: var(--ok); background: var(--ok-soft); }
-
-.skel {
-  border-radius: 8px;
-  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
-  background-size: 200% 100%;
-  animation: sk 1.2s infinite;
-  min-height: 14px;
-}
-@keyframes sk { to { background-position: -200% 0; } }
-.spin {
-  width: 16px; height: 16px; flex: none;
-  border-radius: 50%;
-  border: 2px solid var(--border);
-  border-top-color: var(--text);
-  animation: sp 0.7s linear infinite;
-}
-@keyframes sp { to { transform: rotate(360deg); } }
-
-.empty {
-  text-align: center;
-  padding: 44px 20px;
-  color: var(--muted);
-  border: 1px dashed var(--border);
-  border-radius: var(--r-md);
-  background: var(--bg-soft);
-}
-.empty h3 { margin: 0 0 6px; color: var(--text-2); font-size: 15px; }
-.empty p { margin: 0; font-size: 13.5px; }
-
-/* dialogs + sheets need Titles for a11y; overlay handles its own stacking */
-.overlay {
-  position: fixed; inset: 0;
-  background: rgb(0 0 0 / 0.6);
-  display: flex; align-items: center; justify-content: center;
-  padding: 20px;
-  animation: fade 0.15s var(--ease);
-}
-@keyframes fade { from { opacity: 0; } }
-.dialog {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-2);
-  width: min(480px, 100%);
-  max-height: 88vh;
-  overflow: auto;
-  animation: pop 0.18s var(--ease);
-}
-@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
-.sheet-wrap { position: fixed; inset: 0; display: flex; justify-content: flex-end; background: rgb(0 0 0 / 0.6); }
-.sheet {
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  width: min(420px, 94vw);
-  height: 100%;
-  overflow: auto;
-  box-shadow: var(--shadow-2);
-  animation: slide 0.2s var(--ease);
-}
-@keyframes slide { from { transform: translateX(30px); opacity: 0; } }
-
+/* Reduced motion: every animation and transition dies here */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
-}
-
-/* ---- shell additions (additive only; existing tokens untouched) ---- */
-:root {
-  --topbar-from: #14151b;
-  --topbar-to: #0c0d10;
-  --ring: 0 0 0 3px rgb(244 244 245 / 0.12);
-}
-
-/* Eyebrow labels for view section headers: one caps usage, always 11px. */
-.eyebrow {
-  margin: 0;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-}
-
-/* Tabular numerals for counts, ids, progress. */
-.mono, .tnum { font-variant-numeric: tabular-nums; }
-
-/* Grey gradient brand moment (white-grey to dark-grey) for premium surfaces. */
-.brand-gradient {
-  background: linear-gradient(135deg, var(--brand-hi), var(--brand-lo));
-}
-
-/* PRINT stays PAPER: white bg, dark text — emergency cards print light. */
-@media print {
-  :root { color-scheme: light; }
-  html, body, #root {
-    background: #ffffff !important;
-    color: #111111 !important;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

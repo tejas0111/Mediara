@@ -1,31 +1,71 @@
-.dash-wrap { display: flex; flex-direction: column; gap: 14px; min-width: 0; max-width: 100%; }
-.dash-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.dash-title { margin: 0; font-size: 20px; font-weight: 750; letter-spacing: -0.02em; overflow-wrap: anywhere; min-width: 0; }
-.dash-hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--muted); max-width: 72ch; overflow-wrap: break-word; }
-.dash-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; min-width: 0; }
-.dash-num { margin: 0 0 10px; font-size: 26px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.dash-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; min-width: 0; }
-.dash-muted { margin: 0 0 10px; font-size: 13px; line-height: 1.6; color: var(--muted); overflow-wrap: break-word; }
-.dash-muted:last-child { margin-bottom: 0; }
-.dash-meter { height: 8px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border); overflow: hidden; margin: 0 0 10px; }
-.dash-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.2s ease-out; }
-.dash-links { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.dash-foot { font-variant-numeric: tabular-nums; }
+/* Dashboard — honest live numbers. */
 
-/* Page column: scroll inside .main, centered 860px, chat side-padding rhythm. */
-.dash-wrap { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: 860px; margin: 0 auto; padding: 28px 20px; }
-@media (max-width: 480px) {
-  .dash-wrap { padding: 20px 12px; }
-  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+.dash-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 22px 18px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
-@media (max-width: 360px) {
-  .dash-wrap { padding: 18px 10px; }
-  .dash-title { font-size: 18px; }
-  .dash-num { font-size: 22px; }
-  .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .dash-links .btn { flex: 1 1 100%; }
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
 }
-@media (prefers-reduced-motion: reduce) {
-  .dash-wrap *, .dash-wrap *::before, .dash-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
-  .dash-fill { transition: none; }
+
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 13.5px;
+  color: var(--ink-dim);
+}
+.stat-row b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.stat-sub {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  margin-top: 6px;
+}
+
+.vault-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ok);
+}
+.vault-line b {
+  color: var(--ink);
+}
+
+.dash-cta {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--info);
+  font-size: 13.5px;
+}
+
+.dash-note {
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+  padding: 9px 13px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+.dash-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }

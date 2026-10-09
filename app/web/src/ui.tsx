@@ -1,232 +1,359 @@
-// Hand-vendored shadcn-style primitives (MIT, zero deps).
-// Rules followed: cn() for conditionals, flex+gap (never space-*), size-*
-// for square icons, full Card composition, Dialog/Sheet always with Title,
-// Badge variants (never raw colors), Skeleton for loading, Separator, Empty,
-// Alert for callouts. Chat bubbles live in ChatView (Bubble equivalent).
-import React from 'react';
+/* Shared UI primitives — shadcn-style composition (cn + Card/Dialog parts),
+   hand-written against tokens.css. No inline-script, no native prompts. */
 
-/** Conditional classes without ternaries. */
-export const cn = (...parts: Array<string | false | null | undefined>) =>
-  parts.filter(Boolean).join(' ');
+import {
+  ButtonHTMLAttributes,
+  HTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  useEffect,
+  useRef,
+} from 'react';
 
-// ------------------------------------------------------------- Button ---
-type BtnVariant = 'default' | 'primary' | 'danger';
-type BtnSize = 'default' | 'sm' | 'icon';
+export function cn(...parts: (string | false | null | undefined)[]): string {
+  return parts.filter(Boolean).join(' ');
+}
+
+/* ------------------------------------------------------------------ card */
+
+export function Card({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('card', className)} {...rest} />;
+}
+export function CardHeader({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('card-head', className)} {...rest} />;
+}
+export function CardTitle({ className, ...rest }: HTMLAttributes<HTMLHeadingElement>) {
+  return <h3 className={cn('card-title', className)} {...rest} />;
+}
+export function CardContent({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('card-body', className)} {...rest} />;
+}
+export function CardFooter({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn('card-foot', className)} {...rest} />;
+}
+
+/* ---------------------------------------------------------------- button */
+
+type BtnVariant = 'primary' | 'ghost' | 'danger' | 'quiet';
+
 export function Button({
-  variant = 'default',
-  size = 'default',
   className,
+  variant = 'ghost',
   ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: BtnVariant;
-  size?: BtnSize;
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: BtnVariant }) {
+  return <button type="button" className={cn('btn', `btn-${variant}`, className)} {...rest} />;
+}
+
+/* ----------------------------------------------------------------- badge */
+
+export function Badge({
+  className,
+  tone = 'neutral',
+  ...rest
+}: HTMLAttributes<HTMLSpanElement> & {
+  tone?: 'neutral' | 'ok' | 'caution' | 'danger' | 'info';
+}) {
+  return <span className={cn('badge', `badge-${tone}`, className)} {...rest} />;
+}
+
+/* ---------------------------------------------------------------- switch */
+
+export function Switch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
 }) {
   return (
     <button
-      className={cn(
-        'btn',
-        variant === 'primary' && 'btn-primary',
-        variant === 'danger' && 'btn-danger',
-        size === 'sm' && 'btn-sm',
-        size === 'icon' && 'btn-icon',
-        className,
-      )}
-      {...rest}
-    />
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className={cn('switch', checked && 'on')}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="knob" aria-hidden="true" />
+    </button>
   );
 }
 
-// --------------------------------------------------------------- Card ---
-export const Card = ({ className, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('card', className)} {...rest} />
-);
-export const CardHeader = ({ className, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('card-h', className)} {...rest} />
-);
-export const CardTitle = ({ className, ...rest }: React.HTMLAttributes<HTMLHeadingElement>) => (
-  <h3 className={cn('card-t', className)} {...rest} />
-);
-export const CardDescription = ({ className, ...rest }: React.HTMLAttributes<HTMLParagraphElement>) => (
-  <p className={cn('card-d', className)} {...rest} />
-);
-export const CardContent = ({ className, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('card-c', className)} {...rest} />
-);
-export const CardFooter = ({ className, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('card-f', className)} {...rest} />
-);
+/* ----------------------------------------------------------------- field */
 
-// -------------------------------------------------------------- Badge ---
-type BadgeVariant = 'default' | 'local' | 'mainnet' | 'danger' | 'warn' | 'ok';
-export const Badge = ({
-  variant = 'default',
+export function TextInput({
   className,
   ...rest
-}: React.HTMLAttributes<HTMLSpanElement> & { variant?: BadgeVariant }) => (
-  <span
-    className={cn(
-      'badge',
-      variant === 'local' && 'badge-local',
-      variant === 'mainnet' && 'badge-mainnet',
-      variant === 'danger' && 'badge-danger',
-      variant === 'warn' && 'badge-warn',
-      variant === 'ok' && 'badge-ok',
-      className,
-    )}
-    {...rest}
-  />
-);
+}: InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={cn('input', className)} {...rest} />;
+}
 
-// -------------------------------------------------------------- Field ---
-export const FieldLabel = ({ htmlFor, children }: { htmlFor?: string; children: React.ReactNode }) => (
-  <label className="field-label" htmlFor={htmlFor}>{children}</label>
-);
-export const FieldHint = ({ children }: { children: React.ReactNode }) => (
-  <p className="field-hint">{children}</p>
-);
-export const Input = React.forwardRef<
-  HTMLInputElement,
-  React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }
->(function Input({ invalid, className, ...rest }, ref) {
-  return <input ref={ref} aria-invalid={invalid || undefined} className={cn('input', invalid && 'field-invalid', className)} {...rest} />;
-});
-export const Textarea = React.forwardRef<
-  HTMLTextAreaElement,
-  React.TextareaHTMLAttributes<HTMLTextAreaElement>
->(function Textarea({ className, ...rest }, ref) {
-  return <textarea ref={ref} className={cn('textarea', className)} {...rest} />;
-});
+/* ---------------------------------------------------------------- dialog */
 
-// ---------------------------------------------------------- Separator ---
-export const Separator = () => <hr className="sep" />;
+const FOCUSABLE =
+  'a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex="-1"])';
 
-// --------------------------------------------------------------- Alert ---
-type AlertVariant = 'default' | 'danger' | 'warn' | 'ok';
-export const Alert = ({
-  variant = 'default',
-  className,
-  ...rest
-}: React.HTMLAttributes<HTMLDivElement> & { variant?: AlertVariant }) => (
-  <div
-    role={variant === 'danger' || variant === 'warn' ? 'alert' : undefined}
-    className={cn(
-      'alert',
-      variant === 'danger' && 'alert-danger',
-      variant === 'warn' && 'alert-warn',
-      variant === 'ok' && 'alert-ok',
-      className,
-    )}
-    {...rest}
-  />
-);
+export function Dialog({
+  open,
+  onClose,
+  title,
+  children,
+  wide,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const prevFocus = useRef<Element | null>(null);
 
-// ------------------------------------------------------------ Skeleton ---
-export const Skeleton = ({ className, style }: { className?: string; style?: React.CSSProperties }) => (
-  <div className={cn('skel', className)} style={style} aria-hidden="true" />
-);
-export const Spinner = () => <span className="spin" role="status" aria-label="Loading" />;
-
-// --------------------------------------------------------- Empty state ---
-export const Empty = ({ title, children, action }: { title: string; children?: React.ReactNode; action?: React.ReactNode }) => (
-  <div className="empty">
-    <h3>{title}</h3>
-    {children ? <p>{children}</p> : null}
-    {action ? <div style={{ marginTop: 14 }}>{action}</div> : null}
-  </div>
-);
-
-// -------------------------------------------------------------- Dialog ---
-// Focus trap + restore focus to the trigger + aria-describedby.
-// Esc and overlay-click still close (behavior unchanged).
-function useOverlayFocus(onClose: () => void) {
-  const boxRef = React.useRef<HTMLDivElement>(null);
-  const descId = React.useId();
-  const prevFocus = React.useRef<Element | null>(null);
-  React.useEffect(() => {
+  useEffect(() => {
+    if (!open) return;
     prevFocus.current = document.activeElement;
-    const box = boxRef.current;
-    const focusables = () =>
-      box
-        ? Array.from(
-            box.querySelectorAll<HTMLElement>(
-              'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-            ),
-          )
-        : [];
-    // Focus the first control so keyboard users land inside the dialog.
-    (focusables()[0] ?? box)?.focus?.();
+    const root = ref.current;
+    const first = root?.querySelector<HTMLElement>(FOCUSABLE);
+    (first ?? root)?.focus();
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.stopPropagation();
         onClose();
         return;
       }
-      if (e.key !== 'Tab' || !box) return;
-      const items = focusables();
-      if (items.length === 0) {
+      if (e.key !== 'Tab' || !root) return;
+      const items = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (!items.length) return;
+      const firstEl = items[0];
+      const lastEl = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
         e.preventDefault();
-        box.focus();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
         e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
+        firstEl.focus();
       }
     };
-    document.addEventListener('keydown', onKey);
+    document.addEventListener('keydown', onKey, true);
     return () => {
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
       (prevFocus.current as HTMLElement | null)?.focus?.();
     };
-  }, [onClose]);
-  return { boxRef, descId };
-}
+  }, [open, onClose]);
 
-export function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  const { boxRef, descId } = useOverlayFocus(onClose);
+  if (!open) return null;
   return (
-    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={boxRef} tabIndex={-1} className="dialog" role="dialog" aria-modal="true" aria-label={title} aria-describedby={descId}>
-        <div className="card-h"><h3 className="card-t">{title}</h3></div>
-        <div className="card-c" id={descId}>{children}</div>
+    <div className="dlg-backdrop" onMouseDown={onClose}>
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className={cn('dlg', wide && 'dlg-wide')}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="dlg-head">
+          <h2 className="dlg-title">{title}</h2>
+          <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
+            <CloseIcon />
+          </button>
+        </div>
+        <div className="dlg-body">{children}</div>
       </div>
     </div>
   );
 }
 
-// --------------------------------------------------------------- Sheet ---
-export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  const { boxRef, descId } = useOverlayFocus(onClose);
+/* ----------------------------------------------------------------- icons */
+
+type IconProps = { size?: number };
+
+const svg = (size: number) => ({
+  width: size,
+  height: size,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.8,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+});
+
+export function ShieldIcon({ size = 16 }: IconProps) {
   return (
-    <div className="sheet-wrap" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={boxRef} tabIndex={-1} className="sheet" role="dialog" aria-modal="true" aria-label={title} aria-describedby={descId}>
-        <div className="card-h"><h3 className="card-t">{title}</h3></div>
-        <div className="card-c" id={descId}>{children}</div>
-      </div>
-    </div>
+    <svg data-icon="shield" {...svg(size)}>
+      <path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3z" />
+      <path d="M9.5 12l2 2 3.5-4" />
+    </svg>
   );
 }
 
-// --------------------------------------------------------------- Icons ---
-// Lucide-style stroke icons, inline SVG (no dep). Size via CSS, never classes.
-const I = ({ children }: { children: React.ReactNode }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{children}</svg>
-);
-export const IconPlus = () => (<I><path d="M12 5v14M5 12h14" /></I>);
-export const IconSend = () => (<I><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></I>);
-export const IconMenu = () => (<I><path d="M4 6h16M4 12h16M4 18h16" /></I>);
-export const IconX = () => (<I><path d="M18 6 6 18M6 6l12 12" /></I>);
-export const IconChat = () => (<I><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></I>);
-export const IconShield = () => (<I><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></I>);
-export const IconTrash = () => (<I><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /></I>);
-export const IconPrint = () => (<I><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></I>);
-export const IconWallet = () => (<I><rect x="2" y="6" width="20" height="14" rx="2" /><path d="M2 10h20" /></I>);
-export const IconSearch = () => (<I><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></I>);
-export const IconPlay = () => (<I><polygon points="6 3 20 12 6 21 6 3" /></I>);
-export const IconCheck = () => (<I><path d="M20 6 9 17l-5-5" /></I>);
-export const IconAlert = () => (<I><path d="m12 9-1 4h2l-1-4z" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 17h.01" /></I>);
+export function WarnIcon({ size = 16 }: IconProps) {
+  return (
+    <svg data-icon="warn" {...svg(size)}>
+      <path d="M12 4L2.5 20h19L12 4z" />
+      <path d="M12 10v4M12 17.2v.3" />
+    </svg>
+  );
+}
+
+export function CheckIcon({ size = 16 }: IconProps) {
+  return (
+    <svg data-icon="check" {...svg(size)}>
+      <path d="M4.5 12.5l5 5L19.5 7" />
+    </svg>
+  );
+}
+
+export function CloseIcon({ size = 16 }: IconProps) {
+  return (
+    <svg data-icon="close" {...svg(size)}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
+export function MenuIcon({ size = 18 }: IconProps) {
+  return (
+    <svg data-icon="menu" {...svg(size)}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </svg>
+  );
+}
+
+export function ChevronIcon({ size = 14 }: IconProps) {
+  return (
+    <svg data-icon="chevron" className="chev" {...svg(size)}>
+      <path d="M9 5l7 7-7 7" />
+    </svg>
+  );
+}
+
+export function SearchIcon({ size = 15 }: IconProps) {
+  return (
+    <svg data-icon="search" {...svg(size)}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="M16 16l4.5 4.5" />
+    </svg>
+  );
+}
+
+export function SendIcon({ size = 16 }: IconProps) {
+  return (
+    <svg data-icon="send" {...svg(size)}>
+      <path d="M4 12l16-7-5 16-3.5-6.5L4 12z" />
+    </svg>
+  );
+}
+
+export function ExternalIcon({ size = 13 }: IconProps) {
+  return (
+    <svg data-icon="external" {...svg(size)}>
+      <path d="M10 5H5v14h14v-5M14 4h6v6M20 4L11 13" />
+    </svg>
+  );
+}
+
+export function PrintIcon({ size = 15 }: IconProps) {
+  return (
+    <svg data-icon="print" {...svg(size)}>
+      <path d="M7 8V3h10v5M7 17H4v-7h16v7h-3M7 14h10v7H7v-7z" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ size = 14 }: IconProps) {
+  return (
+    <svg data-icon="trash" {...svg(size)}>
+      <path d="M4 7h16M9 7V4h6v3M6.5 7l1 13h9l1-13" />
+    </svg>
+  );
+}
+
+export function LinkIcon({ size = 13 }: IconProps) {
+  return (
+    <svg data-icon="link" {...svg(size)}>
+      <path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1.5 1.5" />
+      <path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1.5-1.5" />
+    </svg>
+  );
+}
+
+export function PenIcon({ size = 13 }: IconProps) {
+  return (
+    <svg data-icon="pen" {...svg(size)}>
+      <path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 013 3L8 19l-4 1z" />
+      <path d="M14.5 6.5l3 3" />
+    </svg>
+  );
+}
+
+export function SparkIcon({ size = 16 }: IconProps) {
+  return (
+    <svg data-icon="spark" {...svg(size)}>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M18 6l-2.5 2.5M8.5 15.5L6 18" />
+    </svg>
+  );
+}
+
+/* ---------------------------------------------------------- data scope */
+
+/** Shared-demo namespaces (case-insensitive, any `user-` prefix depth). */
+export function isDemoNamespace(id?: string | null): boolean {
+  if (id == null) return false;
+  let cur = String(id);
+  for (let i = 0; i < 12; i++) {
+    const l = cur.toLowerCase();
+    if (l === 'demo-mom' || l === 'demo-day7' || l === 'demo-day1') return true;
+    const nxt = cur.replace(/^user-/i, '');
+    if (nxt === cur) return false;
+    cur = nxt;
+  }
+  return false;
+}
+
+export type ScopeKind = 'personal' | 'demo' | 'public';
+
+export function ScopeBadge({
+  scope,
+  user,
+}: {
+  scope?: ScopeKind;
+  user?: string | null;
+}) {
+  const s: ScopeKind =
+    scope ?? (user != null && isDemoNamespace(user) ? 'demo' : 'personal');
+  if (s === 'demo') {
+    return (
+      <Badge
+        tone="neutral"
+        title="Premade shared profile — nothing here is yours. Anyone can view it; nobody can change it."
+      >
+        Shared demo
+      </Badge>
+    );
+  }
+  if (s === 'public') {
+    return (
+      <Badge
+        tone="info"
+        title="Global public record — same for everyone, not tied to your vault."
+      >
+        Public record
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      tone="ok"
+      title="Private — only your wallet vault can open this."
+    >
+      Personal vault
+    </Badge>
+  );
+}

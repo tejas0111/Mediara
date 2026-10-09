@@ -71,16 +71,28 @@
   from = "/assets/*"
   to = "https://mediara-production.up.railway.app/assets/:splat"
   status = 200
+
+# Site root = the static landing page. The SPA bundle keeps its /app/ base,
+# so the app is ONLY served under /app — serving it at / would 404 its
+# /app/assets/* bundle and leave #root empty.
+[[redirects]]
+  from = "/"
+  to = "/landing.html"
+  status = 200
   force = true
 
-# Old SPA path (/app#/demo links in article/forms) → SPA now served at root.
-# Browsers preserve the #fragment across the redirect.
+# SPA at /app (hash routing inside; bundle assets honored under /app/).
+[[redirects]]
+  from = "/app/assets/*"
+  to = "/assets/:splat"
+  status = 200
+
 [[redirects]]
   from = "/app"
-  to = "/"
-  status = 301
+  to = "/index.html"
+  status = 200
 
 [[redirects]]
   from = "/app/*"
-  to = "/"
-  status = 301
+  to = "/index.html"
+  status = 200

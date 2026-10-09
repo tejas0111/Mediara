@@ -1,0 +1,84 @@
+/* Account page — one width-capped scrolling column of cards. The wrap joins
+   the shared shell column (see App.css); motion is transform/opacity only. */
+
+.ap-sec {
+  margin-bottom: 14px;
+  animation: ap-rise var(--dur-med) var(--ease-enter) both;
+}
+
+.ap-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ap-row:last-child {
+  margin-bottom: 0;
+}
+
+.ap-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ap-wrap {
+  flex-wrap: wrap;
+}
+
+.ap-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ap-note {
+  margin: 0 0 10px;
+  color: var(--ink-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ap-note:last-child {
+  margin-bottom: 0;
+}
+
+.ap-status {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+/* Embedded views: the route components render their own width-capped
+   scroll wraps — inside a card they drop the scroller and padding so the
+   account column stays the single scroller with one card rhythm. */
+.ap-embed {
+  border-top: 1px solid var(--hairline);
+  padding-top: 12px;
+  margin: 4px 0 12px;
+}
+.ap-embed .mem-wrap,
+.ap-embed .replay-wrap,
+.ap-embed .gp-wrap,
+.ap-embed .print-wrap,
+.ap-embed .dash-wrap,
+.ap-embed .cmp-wrap,
+.ap-embed .st-wrap {
+  overflow: visible;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+}
+
+@keyframes ap-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ap-sec {
+    animation: none;
+  }
+}

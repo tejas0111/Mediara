@@ -1,182 +1,134 @@
-import React from 'react';
-import { ApiError, clean, getExport, shortBlob, walruscan, type ExportResponse } from '../api';
-import { Alert, Badge, Button, Card, CardContent, CardHeader, CardTitle, Empty, Skeleton, cn } from '../ui';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { exportMemory, ExportFact } from '../api';
+import { Button, ScopeBadge, isDemoNamespace } from '../ui';
 import './ReplayView.css';
 
-/** Proportional day label across a 90-day arc. */
-export const dayFor = (i: number, n: number): number =>
-  n <= 1 ? 90 : Math.round(1 + (89 * i) / (n - 1));
-
-function reducedMotion(): boolean {
-  try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  } catch {
-    return true;
-  }
+/** Map a fact's position in the timeline onto a proportional day number. */
+function dayFor(index: number, total: number): number {
+  if (total <= 1) return 1;
+  return Math.round(1 + (index / (total - 1)) * 89); // Day 1 .. Day 90
 }
 
-const STOP_QUESTION = 'Can she take ibuprofen for her headache?';
+/**
+ * Day 1 → Day 90 replay: the household's memory accumulating, one day at a
+ * time. Facts stay aria-hidden until played. Honors prefers-reduced-motion by
+ * showing the full timeline immediately.
+ */
+export default function ReplayView({ user }: { user: string }) {
+  const [facts, setFacts] = useState<ExportFact[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [pos, setPos] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-export default function ReplayView({ userId }: { userId: string }) {
-  const [data, setData] = React.useState<ExportResponse | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [shown, setShown] = React.useState(0);
+  const reducedMotion = useMemo(
+    () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    [],
+  );
 
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setShown(0);
+  const load = useCallback(async () => {
+    setFailed(false);
     try {
-      setData(await getExport(userId));
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'request failed');
-      setData(null);
-    } finally {
-      setLoading(false);
+      const d = await exportMemory(user);
+      const list = d.facts ?? d.memories ?? [];
+      setFacts(list);
+      setPos(reducedMotion ? list.length : 0);
+    } catch {
+      setFacts(null);
+      setFailed(true);
     }
-  }, [userId]);
+  }, [user, reducedMotion]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     load();
   }, [load]);
 
-  const n = data?.facts.length ?? 0;
-  const done = n > 0 && shown >= n;
-  // Reduced-motion users get the same instant result — there is no timed
-  // stepping to suppress, so this view is calm by construction.
-  const calm = reducedMotion();
+  useEffect(() => {
+    if (!playing || !facts) return;
+    timer.current = setInterval(() => {
+      setPos((p) => {
+        if (p >= facts.length) {
+          setPlaying(false);
+          return p;
+        }
+        return p + 1;
+      });
+    }, 900);
+    return () => {
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, [playing, facts]);
 
-  if (loading) {
-    return (
-      <div className="replay-wrap" aria-busy="true">
-        <Skeleton style={{ height: 24, width: '40%' }} />
-        <Skeleton style={{ height: 160 }} />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <Alert variant="danger">
-        <p style={{ margin: 0 }}>Could not load replay for {userId}: {error}. The timeline below may be incomplete — retry first.</p>
-        <div style={{ marginTop: 10 }}>
-          <Button size="sm" onClick={load}>Retry</Button>
-        </div>
-      </Alert>
-    );
-  }
-
-  if (!data) {
-    return <Empty title="No replay data" />;
-  }
-
-  if (data.facts.length === 0) {
-    return <Empty title="No facts to replay">Nothing stored for {userId} yet — add facts in chat, then replay their history.</Empty>;
-  }
-
-  const facts: ExportResponse['facts'] = data.facts;
-  const pct = Math.round((shown / facts.length) * 100);
-  const allergyMatch = facts.find((f) => /allerg|penicillin/i.test(f.text));
-  const allergyFact = allergyMatch ?? facts[0];
-  const stopShort = shortBlob(allergyFact.blob_id);
-  const stopLink = walruscan(allergyFact.blob_id);
-
-  function play() {
-    if (done) setShown(0);
-    // Instant reveal: the full history appears at once — no simulated
-    // stepping, no timers. Day labels stay proportional via dayFor.
-    setShown(facts.length);
-  }
+  const total = facts?.length ?? 0;
 
   return (
     <div className="replay-wrap">
-      <p className="eyebrow">History</p>
-      <div className="replay-top">
-        <h2 className="replay-title">Replay — {data.user}</h2>
-        <Badge variant={data.mode === 'mainnet' ? 'mainnet' : 'local'}>{data.mode}</Badge>
-        <div className="replay-controls">
-          <Button variant="primary" size="sm" onClick={play}>
-            {done ? 'Replay again' : shown > 0 ? 'Show all' : 'Play'}
-          </Button>
-          <Button size="sm" onClick={() => { setShown(0); }}>Reset</Button>
+      <p className="view-note">
+        <ScopeBadge user={user} />{' '}
+        {isDemoNamespace(user)
+          ? 'Premade shared profile — nothing here is yours.'
+          : 'Only your own care record is shown here.'}{' '}
+        Watch memory accumulate for <code>{user}</code> — and the day a guard
+        stops a dangerous dose because of what it already knows.
+      </p>
+
+      {failed && (
+        <div className="view-empty" role="status">
+          The timeline couldn't be loaded right now.
         </div>
-      </div>
-      <p className="replay-hint">
-        Watch how remembered facts accumulated — each step is a fact saved from a chat turn,
-        with its blob receipt — then see the guard refuse a risky question on the final day.
-      </p>
+      )}
 
-      <div
-        className="replay-bar"
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={facts.length}
-        aria-valuenow={shown}
-        aria-label="Replay progress"
-      >
-        <div className="replay-fill" style={{ width: `${pct}%` }} />
-      </div>
-      <p className="replay-caption">
-        Showing {shown} of {facts.length} facts
-        {shown > 0 ? ` · up to Day ${dayFor(Math.max(shown - 1, 0), facts.length)} of 90` : ' · press Play to begin'}
-      </p>
+      {facts && total === 0 && (
+        <div className="view-empty">No stored days to replay yet.</div>
+      )}
 
-      <ol className={calm ? 'replay replay-calm' : 'replay'}>
-        {facts.map((f, i) => {
-          const visible = i < shown;
-          const short = shortBlob(f.blob_id);
-          const link = walruscan(f.blob_id);
-          return (
-            <li
-              key={i}
-              className={cn('replay-item', visible && 'is-shown')}
-              aria-hidden={!visible ? 'true' : undefined}
+      {facts && total > 0 && (
+        <>
+          <div className="replay-controls">
+            <Button
+              variant="primary"
+              onClick={() => {
+                if (pos >= total) setPos(0);
+                setPlaying((p) => !p);
+              }}
             >
-              <span className="replay-day">Day {dayFor(i, facts.length)}</span>
-              <span className="replay-text">{clean(f.text)}</span>
-              {short ? (
-                <span className="replay-cite">
-                  <code className="mono">{short}</code>
-                  {link ? (
-                    <>
-                      {' '}<a href={link} target="_blank" rel="noreferrer">walruscan</a>
-                    </>
-                  ) : null}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ol>
+              {playing ? 'Pause' : pos >= total ? 'Replay' : 'Play'}
+            </Button>
+            <Button
+              onClick={() => {
+                setPlaying(false);
+                setPos(0);
+              }}
+            >
+              Restart
+            </Button>
+            <span className="replay-day" aria-live="polite">
+              Day {dayFor(Math.max(0, pos - 1), total)}
+            </span>
+            <span className="replay-count">
+              {pos}/{total} facts
+            </span>
+          </div>
 
-      {done ? (
-        <div className="replay-stop" role="alert">
-          <Card>
-            <CardHeader>
-              <CardTitle>STOP — final day refusal</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="replay-stop-q">Question: &ldquo;{STOP_QUESTION}&rdquo;</p>
-              <p className="replay-stop-a">No — ibuprofen is refused. {allergyMatch ? <>Allergy on record: &ldquo;{clean(allergyFact.text)}&rdquo;</> : <>On record: &ldquo;{clean(allergyFact.text)}&rdquo;</>}</p>
-              {stopShort ? (
-                <p className="replay-cite">
-                  Source blob <code className="mono">{stopShort}</code>
-                  {stopLink ? (
-                    <>
-                      {' '}<a href={stopLink} target="_blank" rel="noreferrer">walruscan</a>
-                    </>
-                  ) : null}
-                  {' '}<a href="#/proof">guard proof</a>
-                </p>
-              ) : (
-                <p className="replay-cite"><a href="#/proof">guard proof</a></p>
-              )}
-              <p className="replay-stop-note">Confirm with your doctor — this is not medical advice.</p>
-            </CardContent>
-          </Card>
-        </div>
-      ) : null}
+          <ol className="timeline">
+            {facts.map((f, i) => {
+              const shown = i < pos;
+              return (
+                <li
+                  key={i}
+                  className={`tl-item ${shown ? 'shown' : ''}`}
+                  aria-hidden={!shown}
+                >
+                  <span className="tl-day">Day {dayFor(i, total)}</span>
+                  <span className="tl-text">{shown ? f.text : '…'}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </>
+      )}
     </div>
   );
 }

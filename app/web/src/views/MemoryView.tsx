@@ -1,251 +1,151 @@
-import React from 'react';
-import { ApiError, clean, getExport, getSummary, shortBlob, walruscan, type SummaryResponse } from '../api';
-import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Empty, Skeleton } from '../ui';
+import { useCallback, useEffect, useState } from 'react';
+import { exportMemory, ExportFact } from '../api';
+import { shortBlob } from '../chat';
+import { Button, ExternalIcon, ScopeBadge, isDemoNamespace } from '../ui';
 import './MemoryView.css';
 
-function FactRow({ text, blobId, allergy }: { text: string; blobId: string | null; allergy?: boolean }) {
-  const short = shortBlob(blobId);
-  const link = walruscan(blobId);
-  return (
-    <li className={allergy ? 'mem-fact mem-allergy' : 'mem-fact'}>
-      <span className="mem-fact-text">{allergy ? <>&ldquo;{clean(text)}&rdquo;</> : clean(text)}</span>
-      {short ? (
-        <span className="mem-cite">
-          <code className="mono">{short}</code>
-          {link ? (
-            <>
-              {' '}<a href={link} target="_blank" rel="noreferrer">walruscan</a>
-            </>
-          ) : null}
-        </span>
-      ) : null}
-    </li>
-  );
-}
-
-function Section({
-  title,
-  items,
-  blobOf,
-  stale,
-  allergy,
-  emptyUnknown,
-  emptyNone,
-  badge,
+/**
+ * Every stored fact with its Walrus blob id. The server redacts fact text for
+ * anyone who isn't the owner — counts stay public, text stays private.
+ * Export reuses the same /api/export payload (same redaction), so the file
+ * never contains text the viewer couldn't already see here.
+ */
+export default function MemoryView({
+  user,
+  mainnet,
 }: {
-  title: string;
-  items: string[];
-  blobOf: (t: string) => string | null;
-  stale: boolean;
-  allergy?: boolean;
-  emptyUnknown: string;
-  emptyNone: string;
-  badge?: React.ReactNode;
+  user: string;
+  mainnet: boolean;
 }) {
-  return (
-    <section className="mem-section" aria-label={title}>
-      <h3 className="mem-h">{title}{badge}</h3>
-      {items.length > 0 ? (
-        <ul className="mem-list">
-          {items.map((t, i) => (
-            <FactRow key={i} text={t} blobId={blobOf(t)} allergy={allergy} />
-          ))}
-        </ul>
-      ) : stale ? (
-        <p className="mem-unknown">{emptyUnknown}</p>
-      ) : (
-        <p className="mem-muted">{emptyNone}</p>
-      )}
-    </section>
-  );
-}
+  const [facts, setFacts] = useState<ExportFact[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [expBusy, setExpBusy] = useState(false);
+  const [expFailed, setExpFailed] = useState(false);
 
-export default function MemoryView({ userId }: { userId: string }) {
-  const [data, setData] = React.useState<SummaryResponse | null>(null);
-  const [blobOf, setBlobOf] = React.useState<(t: string) => string | null>(() => () => null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
-
-  const load = React.useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const load = useCallback(async () => {
+    setFailed(false);
     try {
-      const [s, e] = await Promise.all([getSummary(userId), getExport(userId)]);
-      const m = new Map<string, string | null>();
-      for (const f of e.facts) {
-        if (!m.has(f.text)) m.set(f.text, f.blob_id);
-        const c = clean(f.text);
-        if (!m.has(c)) m.set(c, f.blob_id);
-      }
-      setBlobOf(() => (t: string) => m.get(t) ?? m.get(clean(t)) ?? null);
-      setData(s);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'request failed');
-      setData(null);
-    } finally {
-      setLoading(false);
+      const d = await exportMemory(user);
+      setFacts(d.facts ?? d.memories ?? []);
+    } catch {
+      setFacts(null);
+      setFailed(true);
     }
-  }, [userId]);
+  }, [user]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     load();
   }, [load]);
 
-  if (loading) {
-    return (
-      <div className="mem-wrap" aria-busy="true">
-        <Skeleton style={{ height: 24, width: '40%' }} />
-        <Skeleton style={{ height: 120 }} />
-        <Skeleton style={{ height: 120 }} />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <Alert variant="danger">
-        <p style={{ margin: 0 }}>Could not load memory for {userId}: {error}. Nothing shown may be incomplete — retry before relying on it.</p>
-        <div style={{ marginTop: 10 }}>
-          <Button size="sm" onClick={load}>Retry</Button>
-        </div>
-      </Alert>
-    );
-  }
-
-  if (!data) {
-    return <Empty title="No memory yet">Nothing stored for {userId} yet — add a fact in chat to get started.</Empty>;
-  }
-
-  const stale = data.stale || !data.allergiesKnown;
-  const mode = data.mode === 'mainnet' ? 'mainnet' : 'local';
+  /** Download the /api/export payload as mediara-memories-<user>.json. */
+  const exportJson = async () => {
+    setExpBusy(true);
+    setExpFailed(false);
+    try {
+      const d = await exportMemory(user);
+      const list = d.facts ?? d.memories ?? [];
+      const blob = new Blob(
+        [
+          JSON.stringify(
+            {
+              user: d.user ?? user,
+              exportedAt: new Date().toISOString(),
+              facts: list.map((f) => ({
+                text: f.text,
+                ...(f.blobId ? { blobId: f.blobId } : {}),
+                ...(f.createdAt ? { createdAt: f.createdAt } : {}),
+              })),
+            },
+            null,
+            2,
+          ),
+        ],
+        { type: 'application/json' },
+      );
+      const url = URL.createObjectURL(blob);
+      const safe = user.replace(/[^a-zA-Z0-9-_]+/g, '-').slice(0, 64) || 'user';
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mediara-memories-${safe}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setExpFailed(true);
+    } finally {
+      setExpBusy(false);
+    }
+  };
 
   return (
     <div className="mem-wrap">
-      <p className="eyebrow">Care summary</p>
-      <div className="mem-top">
-        <h2 className="mem-title">Memory — {data.user}</h2>
-        <Badge variant={mode}>{data.mode}</Badge>
-        {stale ? <Badge variant="warn">stale</Badge> : <Badge variant="ok">updated</Badge>}
-        {!data.allergiesKnown ? <Badge variant="danger">allergies unconfirmed</Badge> : null}
+      <div className="mem-head">
+        <ScopeBadge user={user} />
+        <span className="mem-count" role="status">
+          {facts === null
+            ? 'Loading…'
+            : `${facts.length} ${facts.length === 1 ? 'memory' : 'memories'}`}
+        </span>
+        <Button
+          onClick={exportJson}
+          disabled={expBusy || facts === null || facts.length === 0}
+        >
+          {expBusy ? 'Exporting…' : 'Export memories'}
+        </Button>
       </div>
-      <p className="mem-hint">
-        {mode === 'mainnet'
-          ? 'Every fact below carries its Walrus blob receipt. Allergies are quoted verbatim — confirm with the patient or carer before acting.'
-          : 'Every fact below carries its local demo id — on Mainnet these are Walrus blob receipts. Allergies are quoted verbatim — confirm with the patient or carer before acting.'}
+
+      <p className="view-note">
+        {isDemoNamespace(user)
+          ? 'Premade shared profile — nothing here is yours.'
+          : 'Only your own care record is shown here.'}{' '}
+        Everything remembered for <code>{user}</code> — each fact is a
+        Seal-encrypted Walrus blob, cited by id. Strangers see counts, never
+        text.
       </p>
 
-      <p className="mem-hint">
-        Only your own care record is shown here — facts belonging to anyone else stay redacted.
-      </p>
+      {expFailed && (
+        <div className="view-empty" role="status">
+          Export didn't finish — try again shortly.
+        </div>
+      )}
 
-      {stale ? (
-        <Alert variant="warn">
-          {data.stale
-            ? 'Stale data — this memory may be incomplete. Verify with the patient or carer before relying on it.'
-            : 'Allergy history unconfirmed — assume nothing is safe until checked with the patient or carer.'}
-        </Alert>
-      ) : null}
+      {failed && (
+        <div className="view-empty" role="status">
+          Memory couldn't be read right now — try again shortly.
+        </div>
+      )}
 
-      <Card className="mem-allergy-card">
-        <CardHeader>
-          <CardTitle>Allergies</CardTitle>
-          <CardDescription>Critical — quoted verbatim with blob receipts</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Allergies"
-            items={data.allergies}
-            blobOf={blobOf}
-            stale={stale}
-            allergy
-            emptyUnknown="UNKNOWN — allergy history may be incomplete. Assume nothing is safe."
-            emptyNone="No known allergies on record."
-            badge={<Badge variant="danger">critical</Badge>}
-          />
-        </CardContent>
-      </Card>
+      {!failed && facts && facts.length === 0 && (
+        <div className="view-empty">
+          Nothing stored yet. Teach a medication, an allergy, or a routine in
+          Chat and it will appear here with its receipt.
+        </div>
+      )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Current medications</CardTitle>
-          <CardDescription>{data.medications.length} on record</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Current medications"
-            items={data.medications}
-            blobOf={blobOf}
-            stale={stale}
-            emptyUnknown="UNKNOWN — medication list may be incomplete."
-            emptyNone="No current medications on record."
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Stopped</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Stopped"
-            items={data.stopped}
-            blobOf={blobOf}
-            stale={stale}
-            emptyUnknown="UNKNOWN — stopped list may be incomplete."
-            emptyNone="No stopped medications on record."
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Daily routine</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Daily routine"
-            items={data.routine}
-            blobOf={blobOf}
-            stale={stale}
-            emptyUnknown="UNKNOWN — routine may be incomplete."
-            emptyNone="No routine on record."
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Family &amp; care</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Family & care"
-            items={data.familyAndCare}
-            blobOf={blobOf}
-            stale={stale}
-            emptyUnknown="UNKNOWN — care contacts may be incomplete."
-            emptyNone="No family or care contacts on record."
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Unclassified</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Section
-            title="Unclassified"
-            items={data.unclassified}
-            blobOf={blobOf}
-            stale={stale}
-            emptyUnknown="UNKNOWN — unclassified notes may be incomplete."
-            emptyNone="Nothing unclassified."
-          />
-          <p className="mem-foot">{data.disclaimer} · Generated {data.generatedAt} · Blobs on record: {data.blobCount} · {data.mode}</p>
-        </CardContent>
-      </Card>
+      {facts && facts.length > 0 && (
+        <ul className="fact-list">
+          {facts.map((f, i) => (
+            <li key={f.blobId ?? i} className="fact">
+              <span className="fact-text">{f.text}</span>
+              {f.blobId && (
+                <span className="fact-meta">
+                  blob <code>{shortBlob(f.blobId)}</code>
+                  {mainnet && (
+                    <a
+                      href={`https://walruscan.com/blob/${f.blobId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      walruscan <ExternalIcon />
+                    </a>
+                  )}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

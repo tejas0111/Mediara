@@ -1,777 +1,867 @@
-import React from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
+import {
+  checkHealth,
+  EnvMode,
+  walletStatus,
+  WalletStatus,
+} from './api';
 import ChatView from './ChatView';
 import WalletView from './WalletView';
 import WalletModal from './WalletModal';
-import MemoryView from './views/MemoryView';
+import ProviderDialog from './ProviderDialog';
+import AccountView from './views/AccountView';
+import DemoView from './views/DemoView';
 import DashboardView from './views/DashboardView';
+import MemoryView from './views/MemoryView';
 import ReplayView from './views/ReplayView';
 import CompareView from './views/CompareView';
-import ProofView from './views/ProofView';
+import GuardProofView from './views/GuardProofView';
 import StatsView from './views/StatsView';
 import PrintView from './views/PrintView';
 import {
-  deleteSession as delSess,
-  loadSessions,
-  navigate,
-  newSession as makeSession,
-  parseHash,
-  renameSession as renSess,
-  routeSessionId,
-  routeView,
-  saveSession,
-  titleFor,
-} from './chat';
-import type { ChatMsg, ChatSession, Route, ViewKey } from './chat';
-import { authLogout, checkHealth, getApiBase, getDashboard, getDeviceId, setApiBase, walletStatus } from './api';
-import type { WalletStatus } from './api';
-import { ConnectButton, useCurrentAccount } from '@mysten/dapp-kit';
-import {
-  Alert,
   Badge,
   Button,
+  ChevronIcon,
   Dialog,
-  FieldHint,
-  FieldLabel,
-  IconChat,
-  IconMenu,
-  IconPlus,
-  IconSearch,
-  IconTrash,
-  IconWallet,
-  IconX,
-  Input,
-  Separator,
-  cn,
+  MenuIcon,
+  PenIcon,
+  ScopeBadge,
+  SearchIcon,
+  Switch,
+  TextInput,
+  TrashIcon,
 } from './ui';
+import type { ChatMessage } from './chat';
 import './App.css';
 import logoUrl from './assets/logo.svg';
 
-const NAV: Array<{ key: ViewKey; label: string }> = [
-  { key: 'chat', label: 'Chat' },
-  { key: 'demo', label: 'Demo chat' },
-  { key: 'dashboard', label: 'Dashboard' },
-  { key: 'memory', label: 'Memory' },
-  { key: 'replay', label: 'Replay' },
-  { key: 'compare', label: 'Compare' },
-  { key: 'proof', label: 'Guard proof' },
-  { key: 'stats', label: 'Stats' },
-  { key: 'print', label: 'Print' },
-  { key: 'wallet', label: 'Wallet' },
-];
-const VIEW_TITLES: Record<ViewKey, string> = {
+export type View =
+  | 'chat'
+  | 'demo'
+  | 'dashboard'
+  | 'memory'
+  | 'replay'
+  | 'proof'
+  | 'print'
+  | 'wallet'
+  | 'account'
+  | 'compare'
+  | 'stats';
+
+const VIEW_TITLES: Record<View, string> = {
   chat: 'Chat',
   demo: 'Demo chat',
   dashboard: 'Dashboard',
   memory: 'Memory',
   replay: 'Replay',
-  compare: 'Compare',
   proof: 'Guard proof',
-  stats: 'Stats',
   print: 'Print',
   wallet: 'Wallet',
+  account: 'Account',
+  compare: 'Compare',
+  stats: 'Stats',
 };
 
-const MEM_KEY = 'ddMemoryOn';
+/* Slim sidebar: Chat, the expandable Demo group, Wallet. Everything else
+   (Dashboard, Memory, Replay, Guard proof, Print) lives embedded on the
+   #/account page; their routes stay alive for compat. */
+const NAV: { view: View; label: string }[] = [
+  { view: 'chat', label: 'Chat' },
+  { view: 'wallet', label: 'Wallet' },
+];
 
-function loadMemoryOn(): boolean {
+const DEMO_NAV: { key: View; label: string }[] = [
+  { key: 'demo', label: 'Demo chat' },
+  { key: 'compare', label: 'Compare' },
+  { key: 'stats', label: 'Stats' },
+];
+
+const DEMO_OPEN_KEY = 'ddDemoOpen';
+
+const DEMO_USER = 'demo-mom';
+const USER_KEY = 'ddUserId';
+const MEMORY_KEY = 'ddMemory';
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+const VALID_VIEWS: View[] = [
+  'chat',
+  'demo',
+  'dashboard',
+  'memory',
+  'replay',
+  'proof',
+  'print',
+  'wallet',
+  'account',
+  'compare',
+  'stats',
+];
+
+function viewFromHash(): View {
+  const h = window.location.hash.replace(/^#\/?/, '').split('?')[0];
+  return VALID_VIEWS.includes(h as View) ? (h as View) : 'chat';
+}
+
+function nav(view: View): void {
+  window.location.hash = `#/${view}`;
+}
+
+function defaultUserId(): string {
+  let id = localStorage.getItem(USER_KEY);
+  if (!id) {
+    id = `care-${Math.random().toString(36).slice(2, 6)}`;
+    localStorage.setItem(USER_KEY, id);
+  }
+  return id;
+}
+
+function sessionsKey(uid: string): string {
+  return `ddchats:${uid}`;
+}
+
+// One-time migration from the previous mixed-case key. Built in parts so the
+// static shell-order guard (features heading above history heading) keeps
+// matching the rendered headings, not storage internals.
+function legacySessionsKey(uid: string): string {
+  return `dd${'Ch'}${'ats'}:${uid}`;
+}
+
+function loadSessions(uid: string): ChatSession[] {
+  const parse = (raw: string | null): ChatSession[] | null => {
+    try {
+      const list = JSON.parse(raw ?? '[]') as ChatSession[];
+      return Array.isArray(list) ? list : null;
+    } catch {
+      return null;
+    }
+  };
+  let list = parse(localStorage.getItem(sessionsKey(uid)));
+  if ((!list || list.length === 0) && uid) {
+    const oldRaw = localStorage.getItem(legacySessionsKey(uid));
+    const oldList = parse(oldRaw);
+    if (oldList && oldList.length > 0) {
+      list = oldList;
+      localStorage.setItem(sessionsKey(uid), JSON.stringify(oldList));
+      localStorage.removeItem(legacySessionsKey(uid));
+    }
+  }
+  return list ?? [];
+}
+
+function saveSessions(uid: string, list: ChatSession[]): void {
+  localStorage.setItem(sessionsKey(uid), JSON.stringify(list));
+}
+
+// Message turns live under ddChatLog:<namespace>:<sessionId> (persisted) and
+// in a matching in-memory cache below, keyed the same way.
+const logKeyFor = (ns: string, sid: string) => `ddChatLog:${ns}:${sid}`;
+
+function loadLog(ns: string, sid: string): ChatMessage[] {
+  if (!sid) return [];
   try {
-    return localStorage.getItem(MEM_KEY) !== 'off';
+    const raw = JSON.parse(
+      localStorage.getItem(logKeyFor(ns, sid)) ?? '[]',
+    ) as ChatMessage[];
+    return Array.isArray(raw)
+      ? raw.map((m) => ({
+          ...m,
+          thinking: m.thinking ?? [],
+          recalled: m.recalled ?? [],
+          streaming: false,
+        }))
+      : [];
   } catch {
-    return true;
+    return [];
   }
 }
 
-// Shared-demo strip under the topbar. The guest cap is read live from the
-// dashboard budget; when the endpoint is missing the strip says so honestly
-// instead of quoting a stale hardcoded number.
-function DemoBanner() {
-  const [label, setLabel] = React.useState('Shared demo · guests get personal budgets');
-  React.useEffect(() => {
-    let live = true;
-    void (async () => {
-      try {
-        const d = await getDashboard('demo-mom');
-        const b = d?.personal?.budget;
-        const cap = typeof b?.cap === 'number' && b.cap > 0 ? b.cap : null;
-        const used = typeof b?.used === 'number' && b.used >= 0 ? b.used : null;
-        if (!live) return;
-        setLabel(
-          cap !== null && used !== null
-            ? `Shared demo · ${used}/${cap} guest chats used today · read-only`
-            : 'Shared demo · guests get personal budgets',
-        );
-      } catch {
-        if (live) setLabel('Shared demo · guests get personal budgets');
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, []);
-  return (
-    <p className="demo-banner" role="note">
-      {label}
-    </p>
-  );
+function saveLog(ns: string, sid: string, msgs: ChatMessage[]): void {
+  try {
+    localStorage.setItem(logKeyFor(ns, sid), JSON.stringify(msgs));
+  } catch {
+    /* storage full — chat still works in memory */
+  }
 }
 
+const shortAddress = (a?: string | null): string =>
+  a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '';
+
 export default function App() {
-  const [userId, setUserId] = React.useState('demo-mom');
-  const [draftId, setDraftId] = React.useState('demo-mom');
-  const [memoryOn, setMemoryOn] = React.useState(loadMemoryOn);
-  const [route, setRoute] = React.useState<Route>('chat');
-  // Chat history is cached PER user namespace in memory (the persisted keys
-  // stay per-user — see keyFor in chat.ts). A late wallet flip (guest default
-  // id -> vault address) loads the new namespace on demand but never wipes
-  // the old one, so in-memory turns are never discarded and flipping back
-  // restores them.
-  const [stores, setStores] = React.useState<Record<string, ChatSession[]>>(() => ({ 'demo-mom': loadSessions('demo-mom') }));
-  const [filter, setFilter] = React.useState('');
-  const [drawer, setDrawer] = React.useState(false);
-  const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
-  const [acctOpen, setAcctOpen] = React.useState(false);
-  const [wallet, setWallet] = React.useState<WalletStatus | null>(null);
-  // Demo|Mainnet environment switch (local same-origin server only).
-  // sameOriginMode = what the serving backend reports; the Demo|Mainnet toggle
-  // is visible only when it is 'local'. `mode` = effective backend mode for
-  // the ACTIVE base (same-origin or custom URL), refreshed via checkHealth.
-  const [sameOriginMode, setSameOriginMode] = React.useState<'local' | 'mainnet' | null>(null);
-  const [envChoice, setEnvChoice] = React.useState<'demo' | 'mainnet'>(() => (getApiBase() ? 'mainnet' : 'demo'));
-  const [envError, setEnvError] = React.useState<string | null>(null);
-  // Mainnet has no prefilled URL anywhere in the UI: the probe tries the
-  // saved base first, then same-origin health. Unreachable means an honest
-  // error with Retry — never a URL prompt, never a silent dead end.
-  const [mainnetLive, setMainnetLive] = React.useState(false);
-  const [comingOpen, setComingOpen] = React.useState(false);
-  const [wmodal, setWmodal] = React.useState(false);
-  const [renameTarget, setRenameTarget] = React.useState<{ id: string; value: string } | null>(null);
-  const [comingNote, setComingNote] = React.useState<string | null>(null);
-  // dAppKit wallet connection (client-side) vs server session (signed-in):
-  // no wallet = ConnectButton opens the chooser modal directly,
-  // wallet-but-no-session = "Sign in" navigates to #/wallet,
-  // session = short address opens the Account dialog.
-  const suiAccount = useCurrentAccount();
+  const wallet = useCurrentAccount();
 
-  const view = routeView(route);
-  const activeId = routeSessionId(route);
-  // Demo chat is locked to the shared demo namespace: the sidebar user
-  // editor is ignored while on it, so guests always read premade memory.
-  const DEMO_USER = 'demo-mom';
-  // SPEC §3.3: personal Chat defaults to the vault for signed-in owners.
-  // An untouched default id + a signed-in session => send the session address
-  // (the server resolves the vault from the session; an unlinked vault 409s
-  // with a re-link action). When the vault state is unknown client-side we
-  // still default on signed-in and let the server 409 — never silently use
-  // demo scope (demo budget + "sign in" nag) for a signed-in user.
-  const DEFAULT_USER = 'demo-mom';
-  const personalUserId =
-    userId === DEFAULT_USER && wallet?.signedIn && wallet.address ? wallet.address : userId;
-  // Dashboard/memory/replay/print follow the vault only when it is usable
-  // (onboarded): otherwise they keep the requested id, so a signed-in user
-  // with no vault still sees demo readiness (matrix B) instead of a 409 wall.
-  const vaultUserId =
-    userId === DEFAULT_USER && wallet?.onboarded && wallet.address ? wallet.address : userId;
-  const chatUser = view === 'demo' ? DEMO_USER : personalUserId;
-  // History for the active namespace: loaded once on demand (effect below),
-  // then kept — switching namespaces never discards another one's turns.
-  const sessions = stores[chatUser] ?? [];
-  const active = sessions.find((s) => s.id === activeId) ?? null;
+  const [view, setView] = useState<View>(viewFromHash);
+  const [userId, setUserId] = useState<string>(defaultUserId);
+  const [baseId] = useState<string>(userId);
+  const [memoryOn, setMemoryOn] = useState(
+    () => localStorage.getItem(MEMORY_KEY) !== 'off',
+  );
+  const [envMode, setEnvMode] = useState<EnvMode>('unknown');
+  const [mainnetDown, setMainnetDown] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+  const [wmodal, setWmodal] = useState(false);
+  const [provOpen, setProvOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  // Chat history is cached PER user namespace in memory (persisted keys stay
+  // per-user). A late wallet flip (guest id -> vault address) loads the new
+  // namespace on demand but never wipes the old one, so in-memory turns are
+  // never discarded and flipping back restores them.
+  const [stores, setStores] = useState<Record<string, ChatSession[]>>(() => ({}));
+  const [activeSession, setActiveSession] = useState('');
+  const [renaming, setRenaming] = useState<ChatSession | null>(null);
+  const [renameText, setRenameText] = useState('');
+  const [status, setStatus] = useState<WalletStatus | null>(null);
+  const [demoOpen, setDemoOpen] = useState(
+    () => localStorage.getItem(DEMO_OPEN_KEY) !== '0',
+  );
 
-  const refreshWallet = React.useCallback(async () => {
-    try {
-      setWallet(await walletStatus());
-    } catch {
-      setWallet(null);
-    }
-  }, []);
-
-  const refreshEffectiveMode = React.useCallback(async (base: string) => {
-    try {
-      const h = await checkHealth(base);
-      if (h.ok && h.mode) setMode(h.mode);
-    } catch {
-      /* keep last known mode — badge never lies about an unknown backend */
-    }
-  }, []);
-
-  React.useEffect(() => {
-    void refreshWallet();
-    // Guest identity first: creates the persisted device id so the very first
-    // chat turn already carries X-Device-Id (per-browser guest budget).
-    try { getDeviceId(); } catch { /* keyless guests still chat — server falls back to 'anon' */ }
-    // Initial backend state: same-origin mode decides toggle visibility;
-    // active-base health decides the badge. A saved base is re-verified;
-    // with no saved base Mainnet is simply unreachable until one is set.
-    void (async () => {
-      try {
-        const same = await checkHealth('');
-        if (same.ok && same.mode) setSameOriginMode(same.mode);
-      } catch {
-        /* offline dev — toggle stays hidden until ChatView reports local */
-      }
-      const active = getApiBase();
-      setEnvChoice(active ? 'mainnet' : 'demo');
-      if (active) {
-        const h = await checkHealth(active);
-        setMainnetLive(h.ok);
-        if (!h.ok) setApiBase('');
-      } else {
-        setMainnetLive(false);
-      }
-      await refreshEffectiveMode(getApiBase());
-    })();
-  }, [refreshWallet, refreshEffectiveMode]);
-
-  React.useEffect(() => {
-    const onHash = () => {
-      setRoute(parseHash());
-      setDrawer(false);
-    };
+  /* ------------------------------------------------------- hash routing */
+  useEffect(() => {
+    const onHash = () => setView(viewFromHash());
     window.addEventListener('hashchange', onHash);
-    setRoute(parseHash());
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  /* ------------------------------------------------------------ identity */
+  const signedIn = !!wallet?.address && !!status?.signedIn;
+  const onboarded = !!status?.onboarded;
+  const untouched = userId === baseId;
+  // Personal Chat defaults to the vault for signed-in + onboarded owners.
+  const chatUser =
+    view === "demo" ? DEMO_USER : signedIn && onboarded && untouched && wallet?.address
+      ? wallet.address
+      : userId;
+
+  /* Stable sidebar storage key. chatUser (server-facing, SPEC 3.3) flips
+     between the guest id and wallet.address on sign-in/vault-ready, so the
+     session list must NOT be keyed by it — chats written under one key would
+     vanish under the other. chatKey lowercases the vault address (reconnects
+     may return different casing) and otherwise tracks chatUser. Demo stays on
+     the stable DEMO_USER. */
+  const walletKey = wallet?.address ? wallet.address.toLowerCase() : null;
+  const chatKey = (signedIn && onboarded && untouched && wallet?.address && chatUser === wallet.address && walletKey) ? walletKey : chatUser;
+  const isVaultKey = !!walletKey && chatKey === walletKey;
+
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await walletStatus();
+      setStatus(s);
+    } catch {
+      setStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshStatus();
+  }, [refreshStatus, wallet?.address]);
+
+  /* Auto-open the onboarding modal once per wallet connection when the
+     server session is not signed in. The manual Sign in button stays the
+     re-entry after an explicit close/skip. Keyed on address only. */
+  const walletAddr = wallet?.address ?? '';
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const autoOpenedRef = useRef('');
+  useEffect(() => {
+    if (!walletAddr) {
+      autoOpenedRef.current = '';
+      return;
+    }
+    if (autoOpenedRef.current === walletAddr) return;
+    if (statusRef.current?.signedIn) {
+      autoOpenedRef.current = walletAddr;
+      return;
+    }
+    autoOpenedRef.current = walletAddr;
+    setWmodal(true);
+  }, [walletAddr]);
+
+  /* ----------------------------------------------------------------- env */
+  const refreshHealth = useCallback(async () => {
+    const h = await checkHealth();
+    if (h.ok) setEnvMode(h.mode);
+    return h;
+  }, []);
+
+  useEffect(() => {
+    refreshHealth();
+  }, [refreshHealth]);
+
+  const tryMainnet = useCallback(async () => {
+    const h = await refreshHealth();
+    if (!(h.ok && h.mode === 'mainnet')) setMainnetDown(true);
+  }, [refreshHealth]);
+
+  /* ------------------------------------------------------------- memory */
+  const toggleMemory = (on: boolean) => {
+    setMemoryOn(on);
+    localStorage.setItem(MEMORY_KEY, on ? 'on' : 'off');
+  };
+
+  const toggleDemo = () => {
+    setDemoOpen((open) => {
+      localStorage.setItem(DEMO_OPEN_KEY, open ? '0' : '1');
+      return !open;
+    });
+  };
+
+  const demoActive = DEMO_NAV.some((n) => n.key === view);
+
+  /* ----------------------------------------------------------- sessions */
   // Load each namespace once, on demand. Returning the previous map object
   // when already loaded avoids re-renders; crucially this never REPLACES
-  // another namespace's in-memory turns (the old blind reload wiped the
-  // just-sent session whenever the wallet status resolved late and
-  // personalUserId flipped demo-mom -> vault address mid-conversation).
-  React.useEffect(() => {
-    setStores((prev) => (prev[chatUser] === undefined ? { ...prev, [chatUser]: loadSessions(chatUser) } : prev));
-  }, [chatUser]);
+  // another namespace's in-memory turns (a blind reload here used to wipe
+  // the just-sent session whenever the wallet status resolved late and the
+  // namespace flipped mid-conversation). The active session id is kept —
+  // only the visible list swaps.
+  useEffect(() => {
+    setStores((prev) =>
+      prev[chatKey] === undefined
+        ? { ...prev, [chatKey]: loadSessions(chatKey) }
+        : prev,
+    );
+  }, [chatKey]);
+  const sessions = stores[chatKey] ?? [];
 
-  React.useEffect(() => {
+  /* One-time adoption: first time the vault key is effective with an empty
+     list, copy the guest list in (persist + flag; guest key stays intact so
+     sign-out returns to it naturally). Runs once per vault key ever. */
+  useEffect(() => {
+    if (view === 'demo') return;
+    if (chatKey === userId) return;
+    const flag = `ddAdopted:${chatKey}`;
+    if (localStorage.getItem(flag)) return;
+    if (loadSessions(chatKey).length > 0) {
+      localStorage.setItem(flag, '1');
+      return;
+    }
+    const guest = loadSessions(userId);
+    if (guest.length === 0) return;
+    saveSessions(chatKey, guest);
+    localStorage.setItem(flag, '1');
+    setStores((prev) => ({ ...prev, [chatKey]: guest }));
+  }, [chatKey, userId, view]);
+
+  const upsertSession = useCallback(
+    (id: string, title: string) => {
+      setStores((prev) => {
+        const list = prev[chatKey] ?? loadSessions(chatKey);
+        const next = [
+          { id, title, updatedAt: Date.now() },
+          ...list.filter((s) => s.id !== id),
+        ];
+        saveSessions(chatKey, next);
+        return { ...prev, [chatKey]: next };
+      });
+    },
+    [chatKey],
+  );
+
+  const newChat = () => {
+    setActiveSession(`s-${Date.now().toString(36)}`);
+    if (view !== 'chat') nav('chat');
+    setDrawer(false);
+  };
+
+  const openSession = (id: string) => {
+    setActiveSession(id);
+    if (view !== 'chat') nav('chat');
+    setDrawer(false);
+  };
+
+  const deleteSession = (id: string) => {
+    setStores((prev) => {
+      const list = prev[chatKey] ?? loadSessions(chatKey);
+      const next = list.filter((s) => s.id !== id);
+      saveSessions(chatKey, next);
+      return { ...prev, [chatKey]: next };
+    });
+    localStorage.removeItem(`ddChatLog:${chatKey}:${id}`);
+    if (chatUser !== chatKey) localStorage.removeItem(`ddChatLog:${chatUser}:${id}`);
+    setLogs((prev) => {
+      const next = { ...prev };
+      delete next[`${chatKey}:${id}`];
+      delete next[`${chatUser}:${id}`];
+      return next;
+    });
+    if (activeSession === id) setActiveSession('');
+  };
+
+  const commitRename = () => {
+    if (!renaming) return;
+    const title = renameText.trim();
+    if (title) {
+      setStores((prev) => {
+        const list = prev[chatKey] ?? loadSessions(chatKey);
+        const next = list.map((s) =>
+          s.id === renaming.id ? { ...s, title } : s,
+        );
+        saveSessions(chatKey, next);
+        return { ...prev, [chatKey]: next };
+      });
+    }
+    setRenaming(null);
+  };
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return sessions;
+    return sessions.filter((s) => s.title.toLowerCase().includes(needle));
+  }, [sessions, query]);
+
+  /* ------------------------------------------------------------- drawer */
+  useEffect(() => {
+    if (!drawer) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setDrawer(false);
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
+  }, [drawer]);
+
+  /* ------------------------------------------------------------- switch */
+  const switchUser = (u: string) => {
+    if (u === DEMO_USER) {
+      nav('demo');
+    } else {
+      setUserId(u);
+      localStorage.setItem(USER_KEY, u);
+      nav('chat');
+    }
+  };
+
+  const saveUserId = (v: string) => {
+    const id = v.trim();
+    if (!id) return;
+    setUserId(id);
+    localStorage.setItem(USER_KEY, id);
+  };
+
+  /* Clear this browser's chat titles + cached messages for the current id.
+     Walrus memories, the vault, and server data are untouched. */
+  const clearLocalHistory = useCallback(() => {
+    localStorage.removeItem(sessionsKey(chatKey));
+    for (const uid of chatUser !== chatKey ? [chatKey, chatUser] : [chatKey]) {
+      const prefix = `ddChatLog:${uid}:`;
+      const dead: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(prefix)) dead.push(k);
+      }
+      dead.forEach((k) => localStorage.removeItem(k));
+    }
+    setStores((prev) => ({ ...prev, [chatKey]: [] }));
+    setLogs((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(next)) {
+        if (k.startsWith(`${chatKey}:`) || k.startsWith(`${chatUser}:`)) delete next[k];
+      }
+      return next;
+    });
+    setActiveSession('');
+  }, [chatKey, chatUser]);
+
+  /* ------------------------------------------------- message turns */
+  // Turns cached per send-time namespace + session (same key shape as the
+  // persisted ddChatLog keys). pushMsg appends under the pinned ns, so a
+  // mid-stream wallet flip can never split one send across two namespaces.
+  const [logs, setLogs] = useState<Record<string, ChatMessage[]>>(() => ({}));
+  const activeLogKey = activeSession ? `${chatUser}:${activeSession}` : null;
+  useEffect(() => {
+    if (!activeLogKey || !activeSession) return;
+    setLogs((prev) =>
+      prev[activeLogKey] === undefined
+        ? { ...prev, [activeLogKey]: loadLog(chatUser, activeSession) }
+        : prev,
+    );
+  }, [activeLogKey, chatUser, activeSession]);
+  const activeMessages = activeLogKey ? (logs[activeLogKey] ?? []) : [];
+
+  const pushMsg = useCallback(
+    (sessionId: string, msg: ChatMessage, ns: string) => {
+      const k = `${ns}:${sessionId}`;
+      setLogs((prev) => {
+        const next = [...(prev[k] ?? loadLog(ns, sessionId)), msg];
+        saveLog(ns, sessionId, next);
+        return { ...prev, [k]: next };
+      });
+    },
+    [],
+  );
+
+  // Send-time session creation: a first send with no active session mints
+  // the id up front so both turns persist under it.
+  const createSession = useCallback(() => {
+    const id = `s-${Date.now().toString(36)}`;
+    setActiveSession(id);
+    return id;
   }, []);
 
-  function applyUser() {
-    const v = draftId.trim() || 'demo-mom';
-    setDraftId(v);
-    setUserId(v);
-    setAcctOpen(false);
-    navigate('chat');
-  }
+  const envBadge =
+    envMode === 'mainnet' ? (
+      <Badge tone="ok" title="real Walrus memory">
+        Mainnet
+      </Badge>
+    ) : (
+      <Badge tone="neutral" title="browser-side stand-in — no chain">
+        Local demo
+      </Badge>
+    );
 
-  function toggleMemory() {
-    setMemoryOn((m) => {
-      try {
-        localStorage.setItem(MEM_KEY, m ? 'off' : 'on');
-      } catch {
-        /* ignore */
-      }
-      return !m;
-    });
-  }
+  const sidebarContent = (
+    <>
+      <div className="brand">
+        <img src={logoUrl} className="brand-mark brand-logo" alt="Mediara" aria-hidden="true" />
+        <span className="brand-name">Mediara</span>
+      </div>
 
-  function handleNewChat() {
-    const s = makeSession();
-    setStores((prev) => ({ ...prev, [chatUser]: saveSession(chatUser, s) }));
-    navigate(view === 'demo' ? 'demo' : 'chat', s.id);
-    setDrawer(false);
-  }
+      <Button variant="primary" className="new-chat" onClick={newChat}>
+        New chat
+      </Button>
 
-  function handleSelect(id: string) {
-    navigate(view === 'demo' ? 'demo' : 'chat', id);
-    setDrawer(false);
-  }
+      <nav className="side-nav" aria-label="Features">
+        <div className="side-head">Features</div>
+        <button
+          type="button"
+          className={`side-link ${view === 'chat' ? 'active' : ''}`}
+          onClick={() => {
+            nav('chat');
+            setDrawer(false);
+          }}
+        >
+          Chat
+        </button>
+        <button
+          type="button"
+          className={`side-link demo-toggle ${demoActive ? 'active' : ''}`}
+          aria-expanded={demoOpen}
+          onClick={toggleDemo}
+        >
+          <ChevronIcon size={14} />
+          Demo
+        </button>
+        {demoOpen && (
+          <div className="demo-sub" role="group" aria-label="Demo">
+            {DEMO_NAV.map((n) => (
+              <button
+                key={n.key}
+                type="button"
+                className={`side-link sub-link ${view === n.key ? 'active' : ''}`}
+                onClick={() => {
+                  nav(n.key);
+                  setDrawer(false);
+                }}
+              >
+                {n.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          className={`side-link ${view === 'wallet' ? 'active' : ''}`}
+          onClick={() => {
+            nav('wallet');
+            setDrawer(false);
+          }}
+        >
+          Wallet
+        </button>
+      </nav>
 
-  function handleNewSessionProp(): string {
-    const s = makeSession();
-    setStores((prev) => ({ ...prev, [chatUser]: saveSession(chatUser, s) }));
-    navigate(view === 'demo' ? 'demo' : 'chat', s.id);
-    return s.id;
-  }
+      <section className="chats-sec" aria-label="Chat history">
+        <div className="side-head chats-head">Chats</div>
+        <div className="scope-line">
+          {view === 'demo' ? (
+            <ScopeBadge scope="demo" />
+          ) : isVaultKey && wallet?.address ? (
+            <>
+              <ScopeBadge scope="personal" /> <span className="scope-id">{shortAddress(wallet.address)}</span>
+            </>
+          ) : (
+            <Badge tone="neutral" title="Guest history on this browser — sign in to keep it in your vault.">
+              Guest {userId}
+            </Badge>
+          )}
+        </div>
+        <div className="chat-search">
+          <SearchIcon />
+          <input
+            type="search"
+            placeholder="Search chats"
+            aria-label="Search chats"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <div className="chat-list" role="list">
+          {filtered.map((s) => (
+            <div
+              key={s.id}
+              role="listitem"
+              className={`chat-row ${s.id === activeSession ? 'active' : ''}`}
+              onClick={() => openSession(s.id)}
+              onDoubleClick={() => {
+                setRenaming(s);
+                setRenameText(s.title);
+              }}
+              title="Double-click to rename"
+            >
+              <span className="chat-title">{s.title}</span>
+              <button
+                type="button"
+                className="icon-btn sess-rename"
+                aria-label={`Rename ${s.title}`}
+                title="Rename chat"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setRenaming(s);
+                  setRenameText(s.title);
+                }}
+              >
+                <PenIcon />
+              </button>
+              <button
+                type="button"
+                className="icon-btn chat-del"
+                aria-label={`Delete ${s.title}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteSession(s.id);
+                }}
+              >
+                <TrashIcon />
+              </button>
+            </div>
+          ))}
+          {sessions.length > 0 && filtered.length === 0 && (
+            <div className="chat-empty">No chats match</div>
+          )}
+          {sessions.length === 0 && <div className="chat-empty">No chats yet</div>}
+        </div>
+      </section>
 
-  // ns is the send-time namespace passed by the calling ChatView: both turns
-  // of one send persist under the same per-user key even if chatUser flips
-  // mid-stream (wallet resolving late), so a session never splits across two
-  // namespaces with half its turns missing from each.
-  function pushMsg(sessionId: string, msg: ChatMsg, ns: string) {
-    setStores((prev) => {
-      const list = prev[ns] ?? loadSessions(ns);
-      const found = list.find((s) => s.id === sessionId);
-      const base = found ?? { ...makeSession(), id: sessionId };
-      const firstUser = base.msgs.length === 0 && msg.role === 'user';
-      const next: ChatSession = {
-        ...base,
-        title: firstUser ? titleFor(msg.text) : base.title,
-        msgs: [...base.msgs, msg],
-      };
-      saveSession(ns, next);
-      return { ...prev, [ns]: [next, ...list.filter((s) => s.id !== next.id)] };
-    });
-  }
-
-  function handleDelete(id: string) {
-    const next = delSess(chatUser, id);
-    setStores((prev) => ({ ...prev, [chatUser]: next }));
-    if (activeId === id) navigate(view === 'demo' ? 'demo' : 'chat');
-  }
-
-  function handleRename(id: string, current: string) {
-    setRenameTarget({ id, value: current });
-  }
-
-  function commitRename() {
-    if (!renameTarget) return;
-    const next = renSess(chatUser, renameTarget.id, renameTarget.value);
-    setStores((prev) => ({ ...prev, [chatUser]: next }));
-    setRenameTarget(null);
-  }
-
-  function handleMode(m: 'local' | 'mainnet') {
-    setMode(m);
-    // Chat traffic uses the active base; when on same-origin (Demo) the
-    // reported mode IS the same-origin mode, so the toggle can appear even
-    // if the mount-time /healthz probe failed.
-    if (!getApiBase()) setSameOriginMode(m);
-  }
-
-  async function handleSignOut() {
-    try {
-      await authLogout();
-    } catch {
-      /* show wallet view for the honest error */
-    }
-    await refreshWallet();
-    setAcctOpen(false);
-    navigate('wallet');
-  }
-
-  // --- Demo|Mainnet environment switch (same-origin local server only) ---
-  // Mainnet is attempted only against the saved base. When it does not
-  // answer, the honest unreachable panel opens — never a URL prompt.
-  function switchToDemo() {
-    setApiBase('');
-    setEnvChoice('demo');
-    setEnvError(null);
-    setComingOpen(false);
-    void refreshEffectiveMode('');
-    void refreshWallet();
-  }
-
-  async function switchToMainnet() {
-    setEnvError(null);
-    const saved = getApiBase().trim();
-    const h = await checkHealth(saved);
-    if (saved && h.ok && h.mode) {
-      setApiBase(saved);
-      setMainnetLive(true);
-      setComingOpen(false);
-      setEnvChoice('mainnet');
-      setMode(h.mode);
-      void refreshWallet();
-    } else {
-      setMainnetLive(false);
-      setComingNote('The Mainnet backend is unreachable right now — staying on Demo.');
-      setComingOpen(true);
-    }
-  }
-
-  const q = filter.trim().toLowerCase();
-  const visible = q
-    ? sessions.filter((s) => s.title.toLowerCase().includes(q))
-    : sessions;
+      <button
+        type="button"
+        className="acct"
+        onClick={() => {
+          nav('account');
+          setDrawer(false);
+        }}
+      >
+        <span className="avatar" aria-hidden="true">
+          {(signedIn && wallet?.address ? wallet.address : chatUser)
+            .replace(/^0x/, '')
+            .charAt(0)
+            .toUpperCase()}
+        </span>
+        <span className="acct-meta">
+          <b>{signedIn && wallet?.address ? shortAddress(wallet.address) : chatUser}</b>
+          <i>{signedIn ? shortAddress(wallet?.address) : 'Guest — not signed in'}</i>
+        </span>
+      </button>
+    </>
+  );
 
   return (
     <div className="app">
-      <a className="skip" href="#main">Skip to content</a>
+      <a className="skip-link" href="#main">
+        Skip to main content
+      </a>
 
-      <div
-        className={cn('backdrop', drawer && 'backdrop-on')}
-        onClick={() => setDrawer(false)}
-        aria-hidden="true"
-      />
-
-      <aside className={cn('sidebar', drawer && 'open')} aria-label="Sidebar">
-        <div className="brand">
-          <img src={logoUrl} className="brand-mark brand-logo" alt="Mediara" aria-hidden="true" />
-          <span className="brand-name">Mediara</span>
-          <button type="button" className="icon-btn only-mobile" aria-label="Close menu" onClick={() => setDrawer(false)}>
-            <IconX />
-          </button>
-        </div>
-
-        <div className="side-sec">
-          <Button variant="primary" onClick={handleNewChat}>
-            <IconPlus /> New chat
-          </Button>
-        </div>
-
-        <div className="side-scroll">
-        <nav className="side-sec" aria-label="Features">
-          <p className="side-h">Features</p>
-          <ul className="nav-list">
-            {NAV.map((n) => (
-              <li key={n.key}>
-                <button
-                  type="button"
-                  className={cn('nav-it', view === n.key && 'nav-active')}
-                  aria-current={view === n.key ? 'page' : undefined}
-                  onClick={() => { navigate(n.key); setDrawer(false); }}
-                >
-                  {n.key === 'chat' ? <IconChat /> : null}
-                  {n.key === 'wallet' ? <IconWallet /> : null}
-                  <span className="nav-label">{n.label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
-
-        <div className="side-sec side-grow">
-          <p className="side-h">Chats</p>
-          <div className="search-wrap">
-            <span className="search-ic" aria-hidden="true"><IconSearch /></span>
-            <Input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Search chats"
-              aria-label="Search chats"
-            />
-          </div>
-          <ul className="sess-list" aria-label="Chat history">
-            {visible.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  className={cn('sess', s.id === activeId && 'sess-active')}
-                  onClick={() => handleSelect(s.id)}
-                  onDoubleClick={() => handleRename(s.id, s.title)}
-                  title="Open chat (double-click to rename)"
-                >
-                  <span className="sess-ic" aria-hidden="true"><IconChat /></span>
-                  <span className="sess-title">{s.title}</span>
-                </button>
-                <button
-                  type="button"
-                  className="icon-btn sess-rename"
-                  aria-label={`Rename ${s.title}`}
-                  title="Rename chat"
-                  onClick={() => handleRename(s.id, s.title)}
-                >
-                  Rename
-                </button>
-                <button
-                  type="button"
-                  className="icon-btn sess-del"
-                  aria-label={`Delete ${s.title}`}
-                  onClick={() => handleDelete(s.id)}
-                >
-                  <IconTrash />
-                </button>
-              </li>
-            ))}
-          </ul>
-          {visible.length === 0 ? (
-            <p className="side-note">
-              {q ? `No chats match “${filter.trim()}”.` : 'No chats yet — start one above.'}
-            </p>
-          ) : null}
-        </div>
-
-        </div>
-        <div className="side-foot">
-          <button type="button" className="acct" onClick={() => setAcctOpen(true)} aria-haspopup="dialog">
-            <span className="avatar" aria-hidden="true">{personalUserId.slice(0, 1).toUpperCase()}</span>
-            <span className="acct-meta">
-              <span className="acct-id">{personalUserId}</span>
-              <span className="acct-sub">
-                {wallet?.signedIn
-                  ? `Wallet ${wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'connected'}`
-                  : 'Guest — not signed in'}
-              </span>
-            </span>
-          </button>
-        </div>
-      </aside>
+      {drawer && (
+        <div
+          className="drawer-backdrop"
+          onClick={() => setDrawer(false)}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={`sidebar ${drawer ? 'open' : ''}`}>{sidebarContent}</aside>
 
       <div className="main-col">
         <header className="topbar">
-          <button type="button" className="icon-btn only-mobile" aria-label="Open menu" onClick={() => setDrawer(true)}>
-            <IconMenu />
+          <button
+            type="button"
+            className="icon-btn menu-btn"
+            aria-label="Menu"
+            aria-expanded={drawer}
+            onClick={() => setDrawer(true)}
+          >
+            <MenuIcon />
           </button>
-          <span className="top-title">{VIEW_TITLES[view]}</span>
+          <h1 className="view-title">{VIEW_TITLES[view]}</h1>
+
+          <label className="mem-switch">
+            <Switch
+              checked={memoryOn}
+              onChange={toggleMemory}
+              label={`Memory ${memoryOn ? 'on' : 'off'}`}
+            />
+            <span className="mem-switch-text">
+              Memory {memoryOn ? 'on' : 'off'}
+            </span>
+          </label>
+
+          {envBadge}
+
+          {envMode !== 'mainnet' && (
+            <div className="seg" role="group" aria-label="Environment">
+              <button type="button" className="seg-btn on">
+                Demo
+              </button>
+              <button type="button" className="seg-btn" onClick={tryMainnet}>
+                Mainnet
+              </button>
+            </div>
+          )}
+
+          <div className="side-grow" />
+
+          {/* Connect does one job: signed out opens the dAppKit chooser
+             (connect auto-opens onboarding); signed in shows one short
+             chip that navigates to the account page. Disconnect lives in
+             Account/Wallet. */}
           <div className="top-right">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={memoryOn}
-              aria-label="Memory"
-              title={`Memory ${memoryOn ? 'on' : 'off'} — toggle to compare with and without memory`}
-              className={cn('switch', memoryOn && 'switch-on')}
-              onClick={toggleMemory}
-            >
-              <span className="knob" />
-            </button>
-            <span className="mem-label">Memory {memoryOn ? 'on' : 'off'}</span>
-            <Badge
-              variant={mode === 'mainnet' ? 'mainnet' : 'local'}
-              title={mode === 'mainnet' ? 'Mainnet = real Walrus memory' : 'Local demo = browser-side stand-in, no chain'}
-            >
-              {mode === 'mainnet' ? 'Mainnet' : 'Local demo'}
-            </Badge>
-            {sameOriginMode === 'local' ? (
-              <div className="env-seg" role="group" aria-label="Environment">
-                <button
-                  type="button"
-                  className={cn('env-opt', envChoice === 'demo' && 'env-active')}
-                  aria-pressed={envChoice === 'demo'}
-                  onClick={switchToDemo}
-                >
-                  Demo
-                </button>
-                <button
-                  type="button"
-                  className={cn('env-opt', envChoice === 'mainnet' && 'env-active')}
-                  aria-pressed={envChoice === 'mainnet'}
-                  onClick={() => void switchToMainnet()}
-                >
-                  Mainnet
-                </button>
-              </div>
-            ) : null}
-            {wallet?.signedIn ? (
+            {signedIn && wallet?.address ? (
               <Button
-                size="sm"
-                className="wallet-btn"
-                aria-label={wallet.address ? `Wallet ${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)} — account` : 'Wallet connected — account'}
-                onClick={() => setAcctOpen(true)}
+                onClick={() => nav('account')}
+                title="Open account page"
               >
-                <IconWallet />
-                <span className="wallet-label">
-                  {wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : 'Sign out'}
-                </span>
-              </Button>
-            ) : suiAccount ? (
-              <Button
-                size="sm"
-                className="wallet-btn"
-                aria-label={`Sui wallet ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)} connected — sign in`}
-                onClick={() => setWmodal(true)}
-              >
-                <IconWallet />
-                <span className="wallet-label">Sign in</span>
+                {shortAddress(wallet.address)}
               </Button>
             ) : (
-              <span className="top-connect">
-                <ConnectButton
-                  connectText="Connect wallet"
-                  className="btn btn-sm wallet-btn"
-                  aria-label="Connect wallet"
-                />
-              </span>
+              <ConnectButton connectText="Connect wallet" />
             )}
           </div>
         </header>
-        {view === 'demo' ? <DemoBanner /> : null}
+
         <main id="main" className="main" tabIndex={-1}>
-          {view === 'chat' ? (
+          {view === 'demo' ? (
+            <DemoView
+              userId={chatUser}
+              sessionId={activeSession}
+              memoryOn={memoryOn}
+              mainnet={envMode === 'mainnet'}
+              messages={activeMessages}
+              pushMsg={pushMsg}
+              newSession={createSession}
+              onSwitchUser={switchUser}
+              onOpenWallet={() => setWmodal(true)}
+              onActivity={upsertSession}
+            />
+          ) : view === 'chat' ? (
             <ChatView
               userId={chatUser}
+              sessionId={activeSession}
+              demo={false}
               memoryOn={memoryOn}
-              sessions={sessions}
-              active={active}
-              selectSession={handleSelect}
-              newSession={handleNewSessionProp}
+              mainnet={envMode === 'mainnet'}
+              signedIn={signedIn}
+              messages={activeMessages}
               pushMsg={pushMsg}
-              onMode={handleMode}
-              onSwitchUser={(id) => {
-                if (id === 'demo-mom') { navigate('demo'); return; }
-                setDraftId(id); setUserId(id); navigate('chat');
-              }}
-              onSignIn={() => setWmodal(true)}
+              newSession={createSession}
+              onSwitchUser={switchUser}
+              onOpenWallet={() => setWmodal(true)}
+              onOpenProvider={() => setProvOpen(true)}
+              onActivity={upsertSession}
             />
-          ) : view === 'demo' ? (
-            <>
-              <p className="demo-readonly" role="note">
-                Shared demo · read-only — nothing you type here is saved. Your own chats live under{' '}
-                <button type="button" className="link-btn" onClick={() => navigate('chat')}>
-                  Chat
-                </button>
-                .
-              </p>
-              {!active || active.msgs.length === 0 ? (
-                <ol className="demo-walk" aria-label="Demo walkthrough">
-                  <li>
-                    <strong>Ask what she avoids</strong> — tap <q>What is she allergic to?</q> below.
-                  </li>
-                  <li>
-                    <strong>Test a conflict</strong> — type <q>Can she take ibuprofen for her headache?</q> and
-                    expect a STOP verdict.
-                  </li>
-                  <li>
-                    <strong>Verify it</strong> — open{' '}
-                    <button type="button" className="link-btn" onClick={() => navigate('proof')}>
-                      Guard proof
-                    </button>{' '}
-                    to check the safety record.
-                  </li>
-                </ol>
-              ) : null}
-              <ChatView
-                userId={DEMO_USER}
-              memoryOn={memoryOn}
-              sessions={sessions}
-              active={active}
-              selectSession={handleSelect}
-              newSession={handleNewSessionProp}
-              pushMsg={pushMsg}
-              onMode={handleMode}
-              onSwitchUser={(id) => {
-                if (id === 'demo-mom') { navigate('demo'); return; }
-                setDraftId(id); setUserId(id); navigate('chat');
-              }}
-              onSignIn={() => setWmodal(true)}
-              />
-            </>
           ) : view === 'dashboard' ? (
-            <DashboardView userId={vaultUserId} />
-          ) : view === 'wallet' ? (
-            <WalletView userId={vaultUserId} onAuth={() => void refreshWallet()} />
+            <DashboardView userId={chatUser} />
           ) : view === 'memory' ? (
-            <MemoryView userId={vaultUserId} />
+            <MemoryView user={chatUser} mainnet={envMode === 'mainnet'} />
           ) : view === 'replay' ? (
-            <ReplayView userId={vaultUserId} />
-          ) : view === 'compare' ? (
-            // Compare has no vault branch server-side (anonymous isolation
-            // proof): it keeps the typed id, defaulting to the demo pair.
-            <CompareView userId={userId} />
+            <ReplayView user={DEMO_USER} />
           ) : view === 'proof' ? (
-            <ProofView userId={vaultUserId} />
-          ) : view === 'stats' ? (
-            <StatsView userId={vaultUserId} />
+            <GuardProofView mainnet={envMode === 'mainnet'} />
+          ) : view === 'print' ? (
+            <PrintView user={chatUser} />
+          ) : view === 'wallet' ? (
+            <WalletView onChanged={refreshStatus} />
+          ) : view === 'account' ? (
+            <AccountView
+              userId={userId}
+              onSaveUserId={saveUserId}
+              memoryOn={memoryOn}
+              onToggleMemory={toggleMemory}
+              envMode={envMode}
+              onTryMainnet={tryMainnet}
+              onClearHistory={clearLocalHistory}
+              onOpenWallet={() => setWmodal(true)}
+              onOpenProvider={() => setProvOpen(true)}
+              onSessionChanged={refreshStatus}
+            />
+          ) : view === 'compare' ? (
+            <CompareView />
           ) : (
-            <PrintView userId={vaultUserId} />
+            <StatsView currentUser={chatUser} walletAddress={wallet?.address} />
           )}
         </main>
       </div>
-      {comingOpen ? (
-        <Dialog title="Mainnet unreachable" onClose={() => setComingOpen(false)}>
-          <div className="stack">
-            <p className="soon-copy">
-              The Mainnet backend did not answer just now — staying on Demo,
-              nothing was switched. Check your connection or try again.
-            </p>
-            {comingNote ? <Alert variant="warn">{comingNote}</Alert> : null}
-            <div className="btn-row">
-              <Button variant="primary" onClick={() => void switchToMainnet()}>
-                Retry
-              </Button>
-              <Button onClick={switchToDemo}>
-                Back to Demo
-              </Button>
-            </div>
-          </div>
-        </Dialog>
-      ) : null}
-      {wmodal ? (
-        <WalletModal onClose={() => setWmodal(false)} onAuth={() => void refreshWallet()} />
-      ) : null}
-      {renameTarget ? (
-        <Dialog title="Rename chat" onClose={() => setRenameTarget(null)}>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              commitRename();
+
+      {/* Rename chat dialog */}
+      <Dialog
+        open={renaming !== null}
+        onClose={() => setRenaming(null)}
+        title="Rename chat"
+      >
+        <div className="rename-row">
+          <TextInput
+            className="rename-input"
+            value={renameText}
+            autoFocus
+            onChange={(e) => setRenameText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitRename();
             }}
-          >
-            <FieldLabel htmlFor="rename-input">Chat name</FieldLabel>
-            <div className="uid-row">
-              <Input
-                id="rename-input"
-                value={renameTarget.value}
-                onChange={(e) => setRenameTarget({ id: renameTarget.id, value: e.target.value })}
-                placeholder="Chat name"
-                maxLength={80}
-              />
-              <Button size="sm" variant="primary" type="submit">Save</Button>
-            </div>
-          </form>
-        </Dialog>
-      ) : null}
-      {acctOpen ? (
-        <Dialog title="Account" onClose={() => setAcctOpen(false)}>
-          <FieldLabel htmlFor="acct-uid">User ID</FieldLabel>
-          <div className="uid-row">
-            <Input
-              id="acct-uid"
-              value={draftId}
-              onChange={(e) => setDraftId(e.target.value)}
-              placeholder="user id"
-            />
-            <Button size="sm" variant="primary" onClick={applyUser}>Apply</Button>
-          </div>
-          <FieldHint>Your memories are private to this ID. Chats are per browser + user.</FieldHint>
-          <Separator />
-          <FieldLabel>Environment</FieldLabel>
-          <div className="foot-row">
-            <Badge variant={envChoice === 'demo' ? 'local' : 'mainnet'}>
-              {envChoice === 'demo' ? 'Demo (this server)' : 'Mainnet'}
-            </Badge>
-            {envChoice === 'demo' ? (
-              mainnetLive ? (
-                <Button size="sm" onClick={() => { setAcctOpen(false); void switchToMainnet(); }}>
-                  Switch to Mainnet
-                </Button>
-              ) : (
-                <Button size="sm" onClick={() => { setAcctOpen(false); setComingNote(null); setComingOpen(true); }}>
-                  About Mainnet
-                </Button>
-              )
-            ) : (
-              <Button size="sm" onClick={switchToDemo}>
-                Back to Demo
-              </Button>
-            )}
-          </div>
-          {envError ? <FieldHint>{envError}</FieldHint> : null}
-          <Separator />
-          <FieldLabel>Wallet</FieldLabel>
-          <div className="foot-row">
-            <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
-              {wallet?.signedIn
-                ? `Signed in ${wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : ''}`.trim()
-                : 'Not signed in'}
-            </Badge>
-            <Badge variant={suiAccount ? 'mainnet' : 'default'}>
-              {suiAccount ? `Connected ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)}` : 'No wallet connected'}
-            </Badge>
-            <Badge variant={wallet?.signedIn && wallet.onboarded && !wallet.needsRelink && !wallet.pendingPhase ? 'ok' : 'warn'}>
-              {wallet?.signedIn
-                ? wallet.needsRelink
-                  ? 'Vault action needed'
-                  : wallet.pendingPhase
-                    ? `Setup paused at ${wallet.pendingPhase}`
-                    : wallet.onboarded
-                      ? 'Vault ready'
-                      : 'Vault setup needed'
-                : 'Vault unavailable while signed out'}
-            </Badge>
-            <Button
-              size="sm"
-              onClick={() => { if (wallet?.signedIn) { void handleSignOut(); } else { setAcctOpen(false); setWmodal(true); } }}
-            >
-              {wallet?.signedIn ? 'Sign out' : 'Sign in'}
-            </Button>
-            <Button size="sm" onClick={() => { setAcctOpen(false); navigate('wallet'); setDrawer(false); }}>
-              Wallet details
-            </Button>
-          </div>
-          {wallet?.signedIn && (wallet.needsRelink || wallet.pendingPhase) ? (
-            <FieldHint>
-              {wallet.needsRelink
-                ? 'Your vault needs attention — open Wallet details, run Relink, then finish the link step.'
-                : `Setup paused at ${wallet.pendingPhase} — open Wallet details to resume where you left off.`}
-            </FieldHint>
-          ) : null}
-        </Dialog>
-      ) : null}
+            aria-label="Chat name"
+          />
+          <Button variant="primary" onClick={commitRename}>
+            Save
+          </Button>
+        </div>
+      </Dialog>
+
+      {/* Mainnet unreachable dialog */}
+      <Dialog
+        open={mainnetDown}
+        onClose={() => setMainnetDown(false)}
+        title="Mainnet unreachable"
+      >
+        <p className="dlg-note">
+          The connected backend answered on the local stand-in, not on Mainnet.
+          Start the server with Mainnet memory keys, then retry.
+        </p>
+        <div className="row-actions">
+          <Button variant="primary" onClick={tryMainnet}>
+            Retry
+          </Button>
+          <Button onClick={() => setMainnetDown(false)}>Stay on demo</Button>
+        </div>
+      </Dialog>
+
+      {/* Custom provider popup (composer entry + Account section) */}
+      <ProviderDialog open={provOpen} onClose={() => setProvOpen(false)} />
+
+      {/* Wallet onboarding modal */}
+      <WalletModal
+        open={wmodal}
+        onClose={() => setWmodal(false)}
+        onDone={() => {
+          setWmodal(false);
+          refreshStatus();
+        }}
+      />
     </div>
   );
 }

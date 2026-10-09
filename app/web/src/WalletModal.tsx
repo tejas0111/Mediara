@@ -1,153 +1,165 @@
-// Guided wallet flow: Connect -> Sign -> Vault -> Chat. One modal, skippable
-// at every step, always landing back in chat. The full machinery (manual,
-// relink, tx inspection) stays on #/wallet; this is the happy path.
-import React from 'react';
-import { navigate } from './chat';
-import { ConnectButton, useCurrentAccount, useSignPersonalMessage } from '@mysten/dapp-kit';
-import { ApiError, authMessage, authVerify, walletStatus } from './api';
-import { Alert, Button, Dialog, FieldHint, IconCheck } from './ui';
+import { useState } from 'react';
+import { useCurrentAccount, useSignPersonalMessage } from '@mysten/dapp-kit';
+import { ConnectButton } from '@mysten/dapp-kit';
+import {
+  ApiError,
+  authMessage,
+  authVerify,
+  walletOnboardComplete,
+  walletOnboardCreate,
+  walletOnboardLink,
+} from './api';
+import { Button, Dialog } from './ui';
 
-type Step = 'connect' | 'sign' | 'setup' | 'done';
+/* First-run guide: connect → sign → vault → chat. One numbered story with
+   one primary action per step; skippable — the full Wallet view stays
+   available for anything unfinished. */
+const STEPS = ['Connect wallet', 'Sign message', 'Vault setup', 'Done'];
 
-const STEPS: Array<{ key: Step; label: string }> = [
-  { key: 'connect', label: 'Connect' },
-  { key: 'sign', label: 'Sign in' },
-  { key: 'setup', label: 'Vault' },
-  { key: 'done', label: 'Chat' },
+const STEP_HELP = [
+  'Connect a Sui wallet — it becomes the key to your private vault. Next, you sign one message.',
+  'Sign one message to prove the wallet is yours — nothing is spent. Next, your vault is created.',
+  'Create your vault — private memories save here from now on. Next, you are done and can chat.',
+  'Everything is ready — teach a memory in chat and every answer is checked against it.',
 ];
 
-function shortAddr(a: string): string {
-  return a.length > 13 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
-}
-
-function friendlyError(e: unknown): string {
-  if (e instanceof ApiError) {
-    const msg = e.message || 'Request failed.';
-    if (e.status === 401) return `Your session expired — sign in again. (${msg})`;
-    if (e.status === 409) return msg;
-    if (e.status === 429) return `${msg} — please wait, then try again.`;
-    if (e.status === 503) return `${msg} — please retry in a moment.`;
-    return `Server error (${e.status}): ${msg}`;
-  }
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
-
-export default function WalletModal({ onClose, onAuth }: { onClose: () => void; onAuth: () => void }) {
+export default function WalletModal({
+  open,
+  onClose,
+  onDone,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const account = useCurrentAccount();
-  const signPersonalMessage = useSignPersonalMessage();
-  const [step, setStep] = React.useState<Step>(account ? 'sign' : 'connect');
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
+  const [busy, setBusy] = useState('');
+  const [signed, setSigned] = useState(false);
+  const [vaultDone, setVaultDone] = useState(false);
+  const [err, setErr] = useState('');
 
-  React.useEffect(() => {
-    if (account && step === 'connect') setStep('sign');
-    if (!account && (step === 'sign' || step === 'setup')) setStep('connect');
-  }, [account, step]);
+  const step = !account?.address ? 0 : !signed ? 1 : !vaultDone ? 2 : 3;
 
-  async function signIn() {
-    if (!account) return;
-    setBusy(true);
-    setError(null);
+  const isWalletCancel = (e: unknown): boolean =>
+    /reject|denied|cancel|closed|dismiss|popup/i.test(
+      String((e as { message?: unknown })?.message ?? e),
+    );
+
+  const sign = async () => {
+    if (!account?.address) return;
+    setErr('');
+    setBusy('sign');
     try {
       const { nonce, message } = await authMessage();
-      const { signature } = await signPersonalMessage.mutateAsync({
+      const { signature } = await signPersonalMessage({
         message: new TextEncoder().encode(message),
       });
-      const res = await authVerify(account.address, signature, nonce);
-      if (!res.ok) throw new Error('Server did not confirm sign-in.');
-      const st = await walletStatus();
-      onAuth();
-      const ready = !!st.onboarded && !st.needsRelink && !st.pendingPhase;
-      setStep(ready ? 'done' : 'setup');
+      await authVerify(account.address, signature, nonce);
+      setSigned(true);
     } catch (e) {
-      setError(friendlyError(e));
+      if (isWalletCancel(e)) {
+        setErr('Signature cancelled in your wallet — press again to retry');
+      } else {
+        setErr(
+          e instanceof ApiError
+            ? e.message
+            : 'The signature was not completed in the wallet.',
+        );
+      }
     } finally {
-      setBusy(false);
+      setBusy('');
     }
-  }
+  };
 
-  const idx = STEPS.findIndex((s) => s.key === step);
+  const setupVault = async () => {
+    setErr('');
+    setBusy('vault');
+    try {
+      await walletOnboardCreate();
+      await walletOnboardLink();
+      await walletOnboardComplete();
+      setVaultDone(true);
+    } catch (e) {
+      setErr(
+        e instanceof ApiError
+          ? e.message
+          : 'Vault setup did not finish — the Wallet view can resume it.',
+      );
+    } finally {
+      setBusy('');
+    }
+  };
 
   return (
-    <Dialog title="Wallet sign-in" onClose={onClose}>
-      <ol className="wsteps" aria-label="Progress">
-        {STEPS.map((s, i) => (
-          <li key={s.key} className={i < idx ? 'ws-done' : i === idx ? 'ws-now' : ''} aria-current={i === idx ? 'step' : undefined}>
-            <span className="ws-dot" aria-hidden="true">{i < idx ? '✓' : i + 1}</span>
-            <span className="ws-label">{s.label}</span>
+    <Dialog open={open} onClose={onClose} title="Set up private memory" wide>
+      <ol className="stepper" aria-label="Setup progress">
+        {STEPS.map((label, i) => (
+          <li
+            key={label}
+            className={i < step ? 'done' : i === step ? 'current' : 'todo'}
+            aria-current={i === step ? 'step' : undefined}
+          >
+            <span className="step-n" aria-hidden="true">
+              {i < step ? '✓' : i + 1}
+            </span>
+            {label}
           </li>
         ))}
       </ol>
+      <p className="step-help">{STEP_HELP[step]}</p>
 
-      {step === 'connect' ? (
-        <div className="stack">
-          <p className="eyebrow">Step 1 of 4 · Connect</p>
-          <p className="modal-copy" style={{ marginTop: 0 }}>
-            Connect your wallet to unlock your private memory vault.
-            Signing in and vault setup follow right here — skip anytime and
-            keep chatting as a guest.
+      {err && (
+        <p className="wallet-err" role="alert">
+          {err}
+        </p>
+      )}
+
+      {step === 0 && (
+        <div className="wm-body">
+          <p>Connect a Sui wallet to unlock a private vault for this family.</p>
+          <ConnectButton connectText="Connect wallet" />
+        </div>
+      )}
+
+      {step === 1 && (
+        <div className="wm-body">
+          <p>One signature proves the wallet is yours. Nothing is spent.</p>
+          <Button variant="primary" onClick={sign} disabled={!!busy}>
+            {busy === 'sign' ? 'Check your wallet' : 'Sign the message'}
+          </Button>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div className="wm-body">
+          <p>
+            Create the vault where your private memories live, so answers can
+            be checked against them.
           </p>
-          <div className="btn-row">
-            <ConnectButton connectText="Connect wallet" />
-          </div>
-          <FieldHint>No wallet yet? Install a Sui wallet in your browser, then return here to connect.</FieldHint>
-          {error ? <Alert variant="danger" role="alert">{error}</Alert> : null}
-          <div className="btn-row">
-            <Button size="sm" onClick={onClose}>Skip for now</Button>
-          </div>
+          <Button variant="primary" onClick={setupVault} disabled={!!busy}>
+            {busy === 'vault' ? 'Setting up…' : 'Create my vault'}
+          </Button>
         </div>
-      ) : null}
+      )}
 
-      {step === 'sign' ? (
-        <div className="stack">
-          <p className="eyebrow">Step 2 of 4 · Sign in</p>
-          <p className="modal-copy" style={{ marginTop: 0 }}>
-            Signing as <span className="mono">{account ? shortAddr(account.address) : ''}</span> —
-            a message that proves ownership. No transaction is submitted.
+      {step === 3 && (
+        <div className="wm-body">
+          <p>
+            You're set — teach me a medication, an allergy, or a routine and
+            I'll check every future answer against it.
           </p>
-          <div className="btn-row">
-            <Button variant="primary" onClick={() => void signIn()} disabled={busy || !account} aria-busy={busy}>
-              {busy ? 'Check your wallet…' : 'Sign message'}
-            </Button>
-            <Button size="sm" onClick={onClose} disabled={busy}>Skip for now</Button>
-          </div>
-          {busy ? <FieldHint>Approve the signature request in your wallet.</FieldHint> : null}
-          {error ? (
-            <Alert variant="danger" role="alert">
-              <span>{error}</span>
-              <span className="btn-row">
-                <Button size="sm" onClick={() => void signIn()} disabled={busy || !account}>Try again</Button>
-              </span>
-            </Alert>
-          ) : null}
+          <Button variant="primary" onClick={onDone}>
+            Back to chat
+          </Button>
         </div>
-      ) : null}
+      )}
 
-      {step === 'setup' ? (
-        <div className="stack">
-          <p className="eyebrow">Step 3 of 4 · Vault</p>
-          <p className="modal-copy" style={{ marginTop: 0 }}>
-            You&apos;re signed in. Your private vault needs a
-            one-time setup — two transactions submitted from your wallet.
-          </p>
-          <div className="btn-row">
-            <Button variant="primary" onClick={() => { onClose(); navigate('wallet'); }}>Set up vault</Button>
-            <Button size="sm" onClick={onClose}>Skip for now</Button>
-          </div>
-          <FieldHint>“Set up vault” continues on the Wallet page with full transaction detail. If setup was interrupted, the Wallet page resumes where you left off.</FieldHint>
-        </div>
-      ) : null}
-
-      {step === 'done' ? (
-        <div className="stack">
-          <p className="eyebrow">Step 4 of 4 · Chat</p>
-          <p className="signed-line"><IconCheck /> Vault ready — your chats now save to your own memory.</p>
-          <div className="btn-row">
-            <Button variant="primary" onClick={onClose}>Back to chat</Button>
-          </div>
-        </div>
-      ) : null}
+      <div className="wm-foot">
+        <Button variant="quiet" onClick={onClose}>
+          Skip for now
+        </Button>
+      </div>
     </Dialog>
   );
 }

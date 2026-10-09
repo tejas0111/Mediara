@@ -1,11 +1,9 @@
-import React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ConnectButton,
   useCurrentAccount,
-  useDisconnectWallet,
   useSignPersonalMessage,
   useSignTransaction,
-  useWallets,
 } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
 import {
@@ -13,601 +11,631 @@ import {
   authLogout,
   authMessage,
   authVerify,
-  onboardComplete,
-  onboardCreate,
-  onboardLink,
-  relink,
-  resetVault,
+  walletOnboardCompleteSig,
+  walletOnboardCreate,
+  walletOnboardLink,
+  walletRelink,
+  walletReset,
   walletStatus,
+  WalletStatus,
 } from './api';
-import type { WalletStatus } from './api';
-import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, FieldHint, IconCheck, Input, FieldLabel, Skeleton } from './ui';
+import { Button, Card, CardContent, CardHeader, CardTitle } from './ui';
 import './WalletView.css';
 
-function statusOf(e: unknown): number | null {
-  if (e instanceof ApiError) return e.status;
-  return null;
+const shortAddress = (a?: string | null): string =>
+  a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '';
+
+/* One linear story: exactly one primary action is visible at a time. The
+   stepper names the four states; the sentence below it says what THIS step
+   does and what comes next. */
+const STEPS = ['Connect wallet', 'Sign message', 'Vault setup', 'Done'];
+
+const STEP_HELP = [
+  'Connect a Sui wallet — it becomes the key to your private vault. Next, you sign one message.',
+  'Sign one message to prove the wallet is yours — nothing is spent. Next, your vault is created.',
+  'Create your vault — private memories save here from now on. Next, you are done and can chat.',
+  'Everything is ready — teach a memory in chat and every answer is checked against it.',
+];
+
+/** Server vault-setup phases mapped to their position in the story. */
+const phaseStep = (phase: string | null): number =>
+  phase === 'create' ? 1 : phase === 'link' ? 2 : phase === 'complete' ? 3 : 2;
+
+interface StepAction {
+  label: string;
+  run: () => void;
 }
 
-function friendlyError(e: unknown): string {
-  if (e instanceof ApiError) {
-    const msg = e.message || 'Request failed.';
-    if (e.status === 401) return `Your session expired — sign in again. (${msg})`;
-    if (e.status === 409) return msg;
-    if (e.status === 429) return `${msg} — please wait, then try again.`;
-    if (e.status === 501) return `${msg} Onboarding needs the Mainnet backend with wallet support.`;
-    if (e.status === 503) return `${msg} — please retry in a moment.`;
-    return `Server error (${e.status}): ${msg}`;
-  }
-  if (e instanceof Error) return e.message;
-  return String(e);
-}
-
-function errText(e: unknown): string {
-  return friendlyError(e);
-}
-
-function trunc(tx: string): string {
-  return tx.length > 140 ? `${tx.slice(0, 140)}…` : tx;
-}
-
-function shortAddr(a: string): string {
-  return a.length > 13 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
-}
-
-export default function WalletView({ userId, onAuth }: { userId: string; onAuth: () => void }) {
-  const [status, setStatus] = React.useState<WalletStatus | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [statusError, setStatusError] = React.useState<string | null>(null);
-
-  // dAppKit wallet state (real Sui wallet: Sui Wallet, Slush, …).
+export default function WalletView({ onChanged }: { onChanged?: () => void }) {
   const account = useCurrentAccount();
-  const wallets = useWallets();
-  const disconnectWallet = useDisconnectWallet();
-  const signPersonalMessage = useSignPersonalMessage();
-  const signTransaction = useSignTransaction();
-  const noWalletInstalled = wallets.length === 0;
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
+  const { mutateAsync: signTransaction } = useSignTransaction();
 
-  // sign-in state
-  const [authBusy, setAuthBusy] = React.useState(false);
-  const [authError, setAuthError] = React.useState<string | null>(null);
-  const [authStatus, setAuthStatus] = React.useState<number | null>(null);
+  const [status, setStatus] = useState<WalletStatus | null>(null);
+  const [pending, setPending] = useState('');
+  const [err, setErr] = useState<{ text: string; action?: StepAction } | null>(
+    null,
+  );
 
-  // onboarding wizard state
-  const [step, setStep] = React.useState(0); // 0 create, 1 link
-  const [txBytes, setTxBytes] = React.useState<string | null>(null);
-  const [stepSig, setStepSig] = React.useState('');
-  const [bytesMismatch, setBytesMismatch] = React.useState(false);
-  const [stepBusy, setStepBusy] = React.useState(false);
-  const [stepError, setStepError] = React.useState<string | null>(null);
-  const [stepStatus, setStepStatus] = React.useState<number | null>(null);
-  const [stepMsg, setStepMsg] = React.useState<string | null>(null);
-  const [relinkMsg, setRelinkMsg] = React.useState<string | null>(null);
-  const [relinkError, setRelinkError] = React.useState<string | null>(null);
-  const [relinkBusy, setRelinkBusy] = React.useState(false);
-  const [freshBusy, setFreshBusy] = React.useState(false);
-  // Repair mode: an onboarded vault whose stored delegate key the relayer
-  // rejects (Relink detects the dead key). The step UI below is gated on
-  // !onboarded, so without this the link step could never be reached.
-  const [linkRepair, setLinkRepair] = React.useState(false);
-  // Retired deployment: the stored vault predates the live chain deployment
-  // and can never link — offer an explicit fresh start instead of dead ends.
-  const [retiredDeployment, setRetiredDeployment] = React.useState(false);
-
-  const refresh = React.useCallback(async () => {
-    setLoading(true);
-    setStatusError(null);
+  const load = useCallback(async () => {
     try {
-      const st = await walletStatus();
-      setStatus(st);
-      // Resume: a tab closed mid-flow leaves a server-side pending step. Point
-      // the wizard at it so the next action (regenerate + sign + submit) is
-      // visible instead of silently resetting to step 1.
-      if (st.pendingPhase === 'link') setStep(1);
-      else if (st.pendingPhase === 'create') setStep(0);
-    } catch (e) {
-      setStatusError(errText(e));
-    } finally {
-      setLoading(false);
+      setStatus(await walletStatus());
+    } catch {
+      setStatus(null);
     }
   }, []);
 
-  React.useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  useEffect(() => {
+    load();
+  }, [load, account?.address]);
 
-  // Sign-in with the connected Sui wallet. The EXACT server message bytes are
-  // signed (TextEncoder, no prefix tampering) and the wallet returns a base64
-  // Sui personal-message signature — the format the server verifies with
-  // verifyPersonalMessageSignature over authMessage(nonce) for a 0x{64}
-  // address. Ethereum-style signatures can never satisfy that check.
-  async function signInWithWallet() {
-    if (!account) {
-      setAuthError('Connect a wallet first, then sign in.');
-      setAuthStatus(null);
-      return;
-    }
-    setAuthBusy(true);
-    setAuthError(null);
-    setAuthStatus(null);
-    try {
-      const { nonce: n, message: m } = await authMessage();
-      const { signature } = await signPersonalMessage.mutateAsync({
-        message: new TextEncoder().encode(m),
-      });
-      const res = await authVerify(account.address, signature, n);
-      if (!res.ok) throw new Error('Server did not confirm sign-in.');
-      await refresh();
-      onAuth();
-    } catch (e) {
-      setAuthError(friendlyError(e));
-      setAuthStatus(statusOf(e));
-    } finally {
-      setAuthBusy(false);
-    }
-  }
+  /* Stale-page self-correction: a backgrounded page reloads fresh status
+     when visible again instead of acting on old state. Skips while a
+     wallet action is running so it can never loop or interrupt. */
+  const pendingRef = useRef(false);
+  useEffect(() => {
+    pendingRef.current = pending !== '';
+  }, [pending]);
+  useEffect(() => {
+    const onVis = (): void => {
+      if (document.visibilityState !== 'visible') return;
+      if (pendingRef.current) return;
+      void load();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [load]);
 
-  async function signOut() {
-    setAuthBusy(true);
-    setAuthError(null);
-    try {
-      await authLogout();
-      try {
-        await disconnectWallet.mutateAsync();
-      } catch {
-        /* wallet already disconnected — server session is still cleared above */
-      }
-      setStatus(null);
-      await refresh();
-      onAuth();
-    } catch (e) {
-      setAuthError(errText(e));
-    } finally {
-      setAuthBusy(false);
-    }
-  }
+  const refresh = async () => {
+    await load();
+    onChanged?.();
+  };
 
-  async function disconnectOnly() {
-    try {
-      await disconnectWallet.mutateAsync();
-    } catch (e) {
-      setAuthError(errText(e));
-    }
-  }
-
-  async function copyTx() {
-    if (!txBytes) return;
-    try {
-      await navigator.clipboard.writeText(txBytes);
-    } catch {
-      /* clipboard unavailable — user can select the text manually */
-    }
-  }
-
-  const signedIn = !!status?.signedIn;
-  const onboarded = !!status?.onboarded;
-  // Vault is ready only when the server can act as delegate AND no step is
-  // still pending AND no re-link is required. A dead delegate key must never
-  // show a green ready badge.
-  const needsRelinkFlag = !!status?.needsRelink;
-  const pendingPhase = status?.pendingPhase ?? null;
-  const vaultReady = onboarded && !needsRelinkFlag && !pendingPhase;
-  const vaultLabel = vaultReady
-    ? 'Memory vault ready'
-    : needsRelinkFlag
-      ? 'Vault action needed'
-      : pendingPhase
-        ? `Setup paused at ${pendingPhase}`
-        : 'Vault setup needed';
+  /* The wallet that signs must be the one the session belongs to. */
   const sessionAddr = status?.address ?? null;
   const walletAddr = account?.address ?? null;
   const addrMatch =
-    !!sessionAddr && !!walletAddr && sessionAddr.toLowerCase() === walletAddr.toLowerCase();
+    !!sessionAddr &&
+    !!walletAddr &&
+    sessionAddr.toLowerCase() === walletAddr.toLowerCase();
 
-  // Onboarding step 1: fetch tx bytes the wallet must sign. The server builds
-  // the tx with sender = the signed-in session address and stores the bytes as
-  // pending; the signature is submitted via the complete step, which the server
-  // executes itself (executeSigned) and verifies onchain. Retry = press again
-  // (a fresh prepare regenerates the pending bytes).
-  async function runStep(kind: 'create' | 'link') {
-    if (!addrMatch) {
-      setStepError(
-        `The connected wallet (${walletAddr ? shortAddr(walletAddr) : 'none'}) does not match the signed-in session (${sessionAddr ? shortAddr(sessionAddr) : 'none'}). Switch wallet account or sign out first.`,
-      );
-      return;
-    }
-    setStepBusy(true);
-    setStepError(null);
-    setStepStatus(null);
-    setStepMsg(null);
-    setTxBytes(null);
-    setStepSig('');
-    setBytesMismatch(false);
+  const guardSameWallet = (retry: StepAction): boolean => {
+    if (addrMatch) return true;
+    setErr({
+      text: 'The connected wallet is not the one you signed in with — switch wallet account, or sign out and sign back in.',
+      action: retry,
+    });
+    return false;
+  };
+
+  const isWalletCancel = (e: unknown): boolean =>
+    /reject|denied|cancel|closed|dismiss|popup/i.test(
+      String((e as { message?: unknown })?.message ?? e),
+    );
+
+  const cancelled = (retry: StepAction): void => {
+    setErr({
+      text: 'Signature cancelled in your wallet — press again to retry',
+      action: retry,
+    });
+  };
+
+  /* ---------------------------------------------------------- sign in */
+  const signIn = async () => {
+    if (!account?.address) return;
+    setErr(null);
+    setPending('sign');
+    const retry: StepAction = {
+      label: 'Sign in',
+      run: () => void signIn(),
+    };
     try {
-      const res = kind === 'create' ? await onboardCreate() : await onboardLink();
-      const tx = String(res.txBytesBase64 ?? res.txBytes ?? '');
-      if (!tx) throw new Error('Server returned no transaction bytes.');
-      setTxBytes(tx);
+      const { nonce, message } = await authMessage();
+      const { signature } = await signPersonalMessage({
+        message: new TextEncoder().encode(message),
+      });
+      await authVerify(account.address, signature, nonce);
+      await refresh();
     } catch (e) {
-      setStepError(friendlyError(e));
-      setStepStatus(statusOf(e));
-      if (e instanceof ApiError && (e.data as { retiredDeployment?: boolean })?.retiredDeployment === true) {
-        setRetiredDeployment(true);
-      }
+      if (isWalletCancel(e)) cancelled(retry);
+      else
+        fail(e, 'The signature was not completed in the wallet.', retry);
     } finally {
-      setStepBusy(false);
+      setPending('');
     }
-  }
+  };
 
-  // Sign the server-issued bytes with the connected wallet. Transaction.from
-  // restores the exact built tx (sender is already set server-side); the
-  // wallet returns the base64 signature the server executes — sign-only, the
-  // server submits it in the complete step.
-  async function signStepTx() {
-    if (!txBytes) return;
-    if (!account) {
-      setStepError('Connect the wallet matching your signed-in session first.');
-      setStepStatus(null);
-      return;
-    }
-    setStepBusy(true);
-    setStepError(null);
-    setStepStatus(null);
-    setBytesMismatch(false);
+  const signOut = async () => {
+    setPending('signout');
     try {
-      const tx = Transaction.from(txBytes);
-      const { bytes, signature } = await signTransaction.mutateAsync({ transaction: tx });
-      if (bytes !== txBytes) setBytesMismatch(true);
-      setStepSig(signature);
+      await authLogout();
+      await refresh();
+    } finally {
+      setPending('');
+    }
+  };
+
+  /* One vault-setup step: the server prepares a transaction, the wallet
+     signs it, and the server submits it. Nothing is signed or spent
+     without the wallet's approval popup. */
+  const signAndComplete = async (
+    kind: 'create' | 'link',
+    retry: StepAction,
+  ): Promise<boolean> => {
+    let txBytes = '';
+    try {
+      const prep =
+        kind === 'create' ? await walletOnboardCreate() : await walletOnboardLink();
+      const p = prep as Record<string, unknown>;
+      if (p.alreadyLinked === true) {
+        // Server self-heal: the link already landed earlier — nothing to sign.
+        await refresh();
+        return true;
+      }
+      txBytes = String(p.txBytesBase64 ?? p.txBytes ?? '');
+      if (!txBytes) throw new Error('empty transaction');
     } catch (e) {
-      setStepError(friendlyError(e));
-      setStepStatus(statusOf(e));
-    } finally {
-      setStepBusy(false);
-    }
-  }
-
-  async function finishStep(kind: 'create' | 'link') {
-    if (!stepSig.trim()) {
-      setStepError('Sign the transaction in your wallet first.');
-      setStepStatus(null);
-      return;
-    }
-    setStepBusy(true);
-    setStepError(null);
-    setStepStatus(null);
-    setStepMsg(null);
-    try {
-      const res = await onboardComplete(stepSig.trim());
-      if (res && typeof res === 'object' && 'ok' in res && (res as { ok: boolean }).ok === false) {
-        throw new Error('Server did not confirm onboarding.');
-      }
-      const next = (res as { nextStep?: string | null }).nextStep;
-      const stage = (res as { stage?: string }).stage;
-      const doneId = (res as { accountId?: string }).accountId;
-      setStepSig('');
-      setTxBytes(null);
-      setBytesMismatch(false);
-      if (kind === 'create' && next === 'link') {
-        setStep(1);
-        setStepMsg(
-          `Account created${doneId ? ` (${doneId})` : ''}${stage ? ` — stage: ${stage}` : ''}. Now run the link step.`,
-        );
+      if (e instanceof ApiError && e.retiredDeployment) {
+        setStatus((s) => (s ? { ...s, retiredDeployment: true } : s));
+        setErr(null);
       } else {
-        setStep(0);
-        setLinkRepair(false);
-        setStepMsg(`Onboarding complete${doneId ? ` — account ${doneId}` : ''}.`);
+        fail(e, 'Vault setup did not finish — nothing was saved.', retry);
       }
-      await refresh();
-      onAuth();
-    } catch (e) {
-      setStepError(friendlyError(e));
-      setStepStatus(statusOf(e));
-    } finally {
-      setStepBusy(false);
+      return false;
     }
-  }
-
-  async function doFreshStart() {
-    setRelinkError(null);
-    setStepError(null);
-    setStepStatus(null);
-    setFreshBusy(true);
+    setPending('approve');
+    let signature = '';
     try {
-      await resetVault();
-      setRetiredDeployment(false);
-      setLinkRepair(false);
-      setStep(0);
-      setTxBytes(null);
-      setStepSig('');
-      setRelinkMsg('Old vault row abandoned — run create, then link, on the live deployment.');
-      await refresh();
-      onAuth();
+      const out = await signTransaction({
+        transaction: Transaction.from(txBytes),
+      });
+      signature = out.signature;
     } catch (e) {
-      setStepError(friendlyError(e));
-      setStepStatus(statusOf(e));
-    } finally {
-      setFreshBusy(false);
+      if (isWalletCancel(e)) cancelled(retry);
+      else fail(e, 'The signature was not completed in the wallet.', retry);
+      return false;
     }
-  }
-
-  async function doRelink() {
-    setRelinkMsg(null);
-    setRelinkError(null);
-    setRelinkBusy(true);
     try {
-      const out = (await relink()) as {
-        ok: boolean;
-        accountId?: string;
-        alreadyLinked?: boolean;
-        needsDelegateLink?: boolean;
-      };
-      if (out?.needsDelegateLink) {
-        setStep(1);
-        setLinkRepair(true);
-        setRelinkMsg(
-          (out as { delegateRotated?: boolean })?.delegateRotated
-            ? 'The stored vault key was rejected by the memory network — a fresh key is ready on the server. Run the link step below to register it.'
-            : `Found onchain account${out.accountId ? ` ${out.accountId}` : ''} but this server has no delegate key — run the link step below.`,
-        );
+      await walletOnboardCompleteSig(signature);
+      await refresh();
+      return true;
+    } catch (e) {
+      if (e instanceof ApiError && e.retiredDeployment) {
+        setStatus((s) => (s ? { ...s, retiredDeployment: true } : s));
+        setErr(null);
       } else {
-        setRelinkMsg(
-          `Relink accepted${out?.accountId ? ` — account ${out.accountId}` : ''}${out?.alreadyLinked ? ' (already linked).' : '.'}`,
-        );
+        fail(e, 'Vault setup did not finish — nothing was saved.', retry);
       }
-      await refresh();
-      onAuth();
-    } catch (e) {
-      setRelinkError(friendlyError(e));
-    } finally {
-      setRelinkBusy(false);
+      return false;
     }
+  };
+
+  /* One smart setup action: reads fresh status first, then runs only the
+     step that is still needed — so it can never fire the create chain when
+     a usable vault already exists. */
+  const setupVault = async () => {
+    const retry: StepAction = {
+      label: 'Try again',
+      run: () => void setupVault(),
+    };
+    setErr(null);
+    if (!guardSameWallet(retry)) return;
+    setPending('vault');
+    try {
+      // Fresh status first: this page may hold pre-heal state while the
+      // server already has a usable vault.
+      const fresh = await walletStatus();
+      setStatus(fresh);
+      if (
+        fresh?.onboarded &&
+        !fresh?.needsRelink &&
+        !fresh?.pendingPhase &&
+        !fresh?.retiredDeployment
+      ) {
+        // Already usable — nothing to sign, just land on Done.
+        await refresh();
+        return;
+      }
+      if (fresh?.retiredDeployment) {
+        // Needs the fresh-start card instead — refresh so it appears.
+        await refresh();
+        return;
+      }
+      if (fresh?.needsRelink || fresh?.pendingPhase) {
+        const linkRetry: StepAction = {
+          label: 'Continue',
+          run: () => void setupVault(),
+        };
+        if (!guardSameWallet(linkRetry)) return;
+        await signAndComplete('link', linkRetry);
+        return;
+      }
+      const created = await signAndComplete('create', retry);
+      if (!created) return;
+      // The vault needs its second step before saving switches on — run it
+      // in the same chain instead of landing back on an unfinished card.
+      const st = await walletStatus();
+      setStatus(st);
+      if (!st?.onboarded || st?.needsRelink || st?.pendingPhase) {
+        const linkRetry: StepAction = {
+          label: 'Continue',
+          run: () => void setupVault(),
+        };
+        if (!guardSameWallet(linkRetry)) return;
+        await signAndComplete('link', linkRetry);
+      } else {
+        onChanged?.();
+      }
+    } catch (e) {
+      // Self-correcting stale page: the server says a usable vault already
+      // exists (e.g. healed/adopted since this page loaded) — refresh instead
+      // of dead-ending; the stepper flips to Done on its own.
+      if (
+        e instanceof ApiError &&
+        e.status === 409 &&
+        /already has a linked memory vault/i.test(e.message)
+      ) {
+        await refresh();
+        return;
+      }
+      fail(e, 'Vault setup did not finish — nothing was saved.', retry);
+    } finally {
+      setPending('');
+    }
+  };
+
+  /** Dead-link recovery: repair, then finish the link in the same chain so
+      the card never loops back onto itself. */
+  const linkRepair = async () => {
+    const retry: StepAction = {
+      label: 'Re-link vault',
+      run: () => void linkRepair(),
+    };
+    setErr(null);
+    if (!guardSameWallet(retry)) return;
+    setPending('relink');
+    try {
+      const out = (await walletRelink()) as Record<string, unknown> | null;
+      const st = await walletStatus();
+      setStatus(st);
+      onChanged?.();
+      const stillBroken =
+        out?.needsDelegateLink === true ||
+        !!st?.needsRelink ||
+        !!st?.pendingPhase;
+      if (!stillBroken) {
+        await refresh();
+        return;
+      }
+      // The server restored the vault record but still needs the wallet's
+      // signature — continue straight into approval in this same chain.
+      await signAndComplete('link', retry);
+    } catch (e) {
+      if (e instanceof ApiError && e.retiredDeployment) {
+        setStatus((s) => (s ? { ...s, retiredDeployment: true } : s));
+        setErr(null);
+      } else {
+        fail(e, 'The re-link did not complete — saving is still paused.', retry);
+      }
+    } finally {
+      setPending('');
+    }
+  };
+
+  /** Retired deployment: self-healing repair — reset (skipped when a
+      previous attempt already cleared it), then create + link again in one
+      chain so the card never dead-ends. */
+  const repairVault = async () => {
+    const retry: StepAction = {
+      label: 'Repair my vault',
+      run: () => void repairVault(),
+    };
+    setErr(null);
+    if (!guardSameWallet(retry)) return;
+    try {
+      setPending('reset');
+      // Resume point: a fresh status tells us whether reset already landed.
+      let st = await walletStatus();
+      setStatus(st);
+      if (st?.retiredDeployment) {
+        await walletReset();
+        st = await walletStatus();
+        setStatus(st);
+      }
+      if (!st?.onboarded && !st?.pendingPhase && !st?.needsRelink) {
+        const created = await signAndComplete('create', retry);
+        if (!created) return;
+        st = await walletStatus();
+        setStatus(st);
+      }
+      if (!st?.onboarded || st?.needsRelink || st?.pendingPhase) {
+        const linkRetry: StepAction = {
+          label: 'Repair my vault',
+          run: () => void repairVault(),
+        };
+        if (!guardSameWallet(linkRetry)) return;
+        await signAndComplete('link', linkRetry);
+      } else {
+        onChanged?.();
+      }
+    } catch (e) {
+      fail(e, 'The repair did not finish — nothing was saved.', retry);
+    } finally {
+      setPending('');
+    }
+  };
+
+  /** A pending step that can no longer resume gets regenerated. */
+  const regenerate = async () => {
+    const phase = status?.pendingPhase;
+    if (!phase) return;
+    const retry: StepAction = {
+      label: 'Try again',
+      run: () => void regenerate(),
+    };
+    setErr(null);
+    if (!guardSameWallet(retry)) return;
+    setPending(phase);
+    try {
+      await signAndComplete(phase === 'create' ? 'create' : 'link', retry);
+    } catch (e) {
+      fail(e, 'Setup did not resume — nothing was saved.', retry);
+    } finally {
+      setPending('');
+    }
+  };
+
+  /* Every failure pairs one plain sentence with one action (429 is a
+     wait note, so it carries no button). */
+  function fail(e: unknown, fallback: string, retry: StepAction): void {
+    if (e instanceof ApiError) {
+      if (e.status === 401) {
+        setErr({
+          text: 'Your sign-in expired — sign in again to continue.',
+          action: { label: 'Sign in', run: () => void signIn() },
+        });
+        return;
+      }
+      if (e.status === 409) {
+        if (e.needsRelink) {
+          setErr({
+            text: 'Your vault link broke — re-link it to resume saving.',
+            action: { label: 'Re-link vault', run: () => void linkRepair() },
+          });
+        } else {
+          setErr({
+            text: 'No vault is linked yet — create one to start saving.',
+            action: {
+              label: 'Set up private memory',
+              run: () => void setupVault(),
+            },
+          });
+        }
+        return;
+      }
+      if (e.status === 429) {
+        setErr({ text: 'Too many tries — wait a little, then try again.' });
+        return;
+      }
+      if (e.status === 503) {
+        setErr({
+          text: "The server didn't answer — nothing was saved.",
+          action: retry,
+        });
+        return;
+      }
+    }
+    setErr({ text: fallback, action: retry });
   }
 
-  const stepName = step === 0 ? 'create' : 'link';
+  /* ------------------------------------------------------------ render */
+  const signedIn = !!account?.address && !!status?.signedIn;
+  const pendingPhase = status?.pendingPhase ?? null;
+  const ready =
+    signedIn &&
+    !!status?.onboarded &&
+    !status?.needsRelink &&
+    !status?.retiredDeployment &&
+    !pendingPhase;
+
+  const stepIdx = !account?.address ? 0 : !signedIn ? 1 : ready ? 3 : 2;
+
+  const statusLine = !account?.address
+    ? 'No wallet connected yet.'
+    : !signedIn
+      ? 'Wallet connected — one signature left.'
+      : status?.needsRelink
+        ? 'Vault link broken — your sign-in works but saving is paused'
+        : status?.retiredDeployment
+          ? "This vault can't be reused — start a fresh one below."
+          : pendingPhase
+            ? 'Vault setup paused — continue below.'
+            : !status?.onboarded
+              ? 'No vault yet'
+              : 'Vault ready — memories save here';
+
+  const addr = status?.address ?? account?.address;
 
   return (
-    <div className="wallet">
-      <p className="eyebrow">Account</p>
-      <Card>
-        <CardHeader>
-          <CardTitle>Wallet</CardTitle>
-          <CardDescription>
-            You&apos;re chatting as <span className="mono">{userId}</span>. Signing in binds this browser
-            to your Sui address and unlocks your private memory vault.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <div className="stack" aria-busy="true">
-              <Skeleton style={{ height: 22, width: '55%' }} />
-              <Skeleton style={{ height: 40 }} />
-            </div>
-          ) : statusError ? (
-            <div className="stack">
-              <Alert variant="danger">{statusError}</Alert>
-              <div className="btn-row">
-                <Button size="sm" onClick={() => void refresh()}>Retry</Button>
-              </div>
-            </div>
-          ) : signedIn ? (
-            <div className="stack">
-              <p className="signed-line">
-                <IconCheck /> Signed in as{' '}
-                <span className="mono" title={status?.address ?? ''}>{status?.address ? shortAddr(status.address) : 'unknown address'}</span>
-              </p>
-              <div className="btn-row">
-                <Badge variant={vaultReady ? 'ok' : 'warn'}>{vaultLabel}</Badge>
-                {status?.accountId ? (
-                  <Badge variant="default" title={status.accountId}>Account {trunc(status.accountId)}</Badge>
-                ) : null}
-                <Button size="sm" onClick={() => void signOut()} disabled={authBusy}>
-                  {authBusy ? 'Signing out…' : 'Sign out'}
-                </Button>
-              </div>
-              {needsRelinkFlag ? (
-                <Alert variant="warn">
-                  This server has no usable key for your onchain account — the vault is not ready.
-                  Run Relink below, then complete the link step.
-                </Alert>
-              ) : null}
-              {pendingPhase ? (
-                <Alert variant="warn">
-                  Setup paused at the {pendingPhase} step. Continue in the setup section below — pressing
-                  prepare again regenerates the transaction, nothing is lost.
-                </Alert>
-              ) : null}
-              {account && status?.address && account.address.toLowerCase() !== status.address.toLowerCase() ? (
-                <Alert variant="warn">
-                  Connected wallet {shortAddr(account.address)} is not the signed-in one.{' '}
-                  <Button size="sm" onClick={() => void disconnectOnly()}>Disconnect</Button>
-                </Alert>
-              ) : null}
-              {authError ? (
-                <Alert variant="danger">
-                  {authError}
-                  {authStatus === 401 ? ' Press Sign out, then sign in again.' : null}
-                </Alert>
-              ) : null}
-            </div>
-          ) : (
-            <div className="stack">
-              {!account ? (
-                <div className="stack">
-                  <div className="btn-row">
-                    <span className="top-connect">
-                      <ConnectButton connectText="Connect wallet" className="btn btn-sm wallet-btn" />
-                    </span>
-                  </div>
-                  {noWalletInstalled ? (
-                    <FieldHint>No wallet detected in this browser. Install a Sui wallet, then return here to connect.</FieldHint>
-                  ) : (
-                    <FieldHint>Connect your wallet to begin — signing in takes one more step after that.</FieldHint>
-                  )}
-                </div>
-              ) : (
-                <div className="stack">
-                  <Button variant="primary" onClick={() => void signInWithWallet()} disabled={authBusy}>
-                    {authBusy ? 'Check your wallet…' : `Sign in as ${shortAddr(account.address)}`}
-                  </Button>
-                  {authBusy ? (
-                    <FieldHint>Approve the signature request in your wallet to finish signing in.</FieldHint>
-                  ) : null}
-                  {status?.staleSession ? (
-                    <FieldHint>Your last session expired — signing in again takes one step.</FieldHint>
-                  ) : null}
-                  <div className="btn-row">
-                    <Button size="sm" onClick={() => void disconnectOnly()} disabled={authBusy || disconnectWallet.isPending}>
-                      Use a different wallet
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {authError ? (
-                <Alert variant="danger">
-                  {authError}
-                  <span className="btn-row">
-                    <Button size="sm" onClick={() => void signInWithWallet()} disabled={authBusy || !account}>Try signing in again</Button>
-                  </span>
-                </Alert>
-              ) : null}
-            </div>
+    <div className="wallet-wrap">
+      <p className="wallet-intro">
+        Signing in upgrades this browser from shared guest memory to a private
+        vault only your wallet can open. No passwords — one signature proves
+        it's you.
+      </p>
+
+      <ol className="stepper" aria-label="Setup progress">
+        {STEPS.map((label, i) => (
+          <li
+            key={label}
+            className={i < stepIdx ? 'done' : i === stepIdx ? 'current' : 'todo'}
+            aria-current={i === stepIdx ? 'step' : undefined}
+          >
+            <span className="step-n" aria-hidden="true">
+              {i < stepIdx ? '✓' : i + 1}
+            </span>
+            {label}
+          </li>
+        ))}
+      </ol>
+      <p className="step-help">{STEP_HELP[stepIdx]}</p>
+
+      {signedIn && addr && (
+        <p className="wallet-status">
+          Signed in as {shortAddress(addr)} (this browser)
+        </p>
+      )}
+      <p className="wallet-status vault-status" role="status">
+        {statusLine}
+      </p>
+
+      {err && (
+        <div className="wallet-err" role="alert">
+          <span>{err.text}</span>
+          {err.action && (
+            <Button
+              variant="primary"
+              onClick={err.action.run}
+              disabled={!!pending}
+            >
+              {err.action.label}
+            </Button>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
-      {signedIn && (!vaultReady || linkRepair) ? (
+      {!account?.address && (
         <Card>
           <CardHeader>
-            <CardTitle>Vault setup ({stepName} — step {step + 1} of 2)</CardTitle>
-            <CardDescription>
-              Three steps: connect, sign a message, then set up the vault. This section is step 3.
-            </CardDescription>
+            <CardTitle>Connect your Sui wallet</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="stack">
-              <FieldHint>Setup submits network transactions from your wallet. The server prepares each transaction, your wallet signs it, and the server submits and verifies it. Every step reports the exact server result.</FieldHint>
-              {pendingPhase ? (
-                <Alert variant="warn">
-                  You have a pending {pendingPhase} transaction from an earlier visit — press {pendingPhase === 'link' ? '“Next: link account”' : '“Start: create account”'} again to regenerate it (old bytes are replaced, nothing is lost), then sign and submit.
-                </Alert>
-              ) : null}
-              {needsRelinkFlag && !linkRepair ? (
-                <Alert variant="warn">
-                  Your account exists but this server holds no usable key. Press “Relink wallet” below first —
-                  you will be sent back here to the link step.
-                </Alert>
-              ) : null}
-              {!addrMatch ? (
-                <Alert variant="warn">
-                  {account
-                    ? `Connected wallet ${shortAddr(account.address)} does not match the signed-in session ${sessionAddr ? shortAddr(sessionAddr) : '(unknown)'}. Switch wallet account or sign out and sign back in.`
-                    : 'Connect the wallet matching your signed-in session to continue setup.'}
-                </Alert>
-              ) : null}
-              <div className="btn-row">
-                <Button
-                  variant="primary"
-                  disabled={stepBusy || !addrMatch}
-                  onClick={() => void runStep(step === 0 ? 'create' : 'link')}
-                >
-                  {stepBusy ? 'Requesting transaction…' : step === 0 ? 'Start: create account' : 'Next: link account'}
-                </Button>
-              </div>
-              {txBytes ? (
-                <div className="stack">
-                  <p className="muted">Sign this transaction in your wallet:</p>
-                  <p className="mono msg" title={txBytes}>{trunc(txBytes)}</p>
-                  <div className="btn-row">
-                    <Button size="sm" onClick={() => void copyTx()}>Copy full transaction bytes</Button>
-                    <Button size="sm" variant="primary" onClick={() => void signStepTx()} disabled={stepBusy || !addrMatch}>
-                      {stepBusy ? 'Waiting for wallet…' : stepSig ? 'Re-sign in wallet' : 'Sign in wallet'}
-                    </Button>
-                  </div>
-                  {bytesMismatch ? (
-                    <Alert variant="warn">The wallet returned different bytes than the server issued. Submitting may fail — the exact server error will be shown.</Alert>
-                  ) : null}
-                  {stepSig ? (
-                    <div className="stack">
-                      <FieldLabel htmlFor="w-stepsig">Wallet signature (base64)</FieldLabel>
-                      <p className="mono msg" title={stepSig}>{trunc(stepSig)}</p>
-                      <div className="btn-row">
-                        <Button variant="primary" disabled={stepBusy} onClick={() => void finishStep(step === 0 ? 'create' : 'link')}>
-                          {stepBusy ? 'Submitting…' : step === 0 ? 'Submit & create' : 'Submit & complete setup'}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              {stepMsg ? <Alert variant="ok">{stepMsg}</Alert> : null}
-              {stepError ? (
-                <Alert variant="danger">
-                  <span>{stepError}</span>
-                  <span className="btn-row">
-                    {stepStatus === 401 ? (
-                      <Button size="sm" onClick={() => void signOut()}>Sign out, then sign in again</Button>
-                    ) : null}
-                    {stepStatus === 409 && step === 0 ? (
-                      <Button size="sm" onClick={() => { setStep(1); setStepError(null); }}>Go to link step instead</Button>
-                    ) : null}
-                    <Button size="sm" onClick={() => void runStep(step === 0 ? 'create' : 'link')} disabled={stepBusy || !addrMatch}>Retry this step</Button>
-                  </span>
-                </Alert>
-              ) : null}
-              {retiredDeployment ? (
-                <Alert variant="warn" role="alert">
-                  <span>Your old vault was created under a retired deployment and cannot link. Starting fresh abandons the old row (its memories stay unreadable) and runs create + link on the live deployment.</span>
-                  <span className="btn-row">
-                    <Button size="sm" variant="primary" onClick={() => void doFreshStart()} disabled={freshBusy}>{freshBusy ? 'Starting fresh…' : 'Start a fresh vault'}</Button>
-                  </span>
-                </Alert>
-              ) : null}
-            </div>
+            <p className="muted">
+              Your wallet address becomes the key to your private memory vault.
+            </p>
+            <ConnectButton connectText="Connect wallet" />
           </CardContent>
         </Card>
-      ) : null}
+      )}
 
-      {signedIn && vaultReady && !linkRepair ? (
+      {account?.address && !signedIn && (
         <Card>
           <CardHeader>
-            <CardTitle>Vault details</CardTitle>
+            <CardTitle>Sign one message</CardTitle>
           </CardHeader>
           <CardContent>
-            <dl className="vault-meta">
-              <div><dt>Signed-in address</dt><dd className="mono" title={status?.address ?? ''}>{status?.address ?? '—'}</dd></div>
-              {status?.accountId ? <div><dt>Account</dt><dd className="mono">{status.accountId}</dd></div> : null}
-              <div><dt>Status</dt><dd>Ready — chats save to your private vault.</dd></div>
-            </dl>
+            <p className="muted">
+              One signature, no transaction, nothing spent.
+            </p>
+            <Button variant="primary" onClick={signIn} disabled={!!pending}>
+              {pending === 'sign'
+                ? 'Check your wallet'
+                : `Sign in as ${shortAddress(account.address)}`}
+            </Button>
           </CardContent>
         </Card>
-      ) : null}
+      )}
 
-      {signedIn ? (
+      {signedIn && status?.retiredDeployment && (
         <Card>
           <CardHeader>
-            <CardTitle>Repair access</CardTitle>
-            <CardDescription>If the vault stopped working, repair it here. Recovery never touches your address.</CardDescription>
+            <CardTitle>Start a fresh vault</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="stack">
-              <p className="muted">If your session went stale or the link broke, request a fresh link. If the server finds your onchain account but no usable key, you will be sent to the link step above.</p>
-              <div className="btn-row">
-                <Button size="sm" variant="primary" onClick={() => void doRelink()} disabled={relinkBusy}>{relinkBusy ? 'Checking…' : 'Relink wallet'}</Button>
-                <Button size="sm" onClick={() => void doFreshStart()} disabled={freshBusy} title="Abandon this server's vault row and set up again from scratch">{freshBusy ? 'Starting fresh…' : 'Start fresh vault'}</Button>
-              </div>
-              <FieldHint>Start fresh abandons this server&apos;s vault row and runs create + link again. Use it when the vault is from a retired deployment or cannot link.</FieldHint>
-              {relinkMsg ? <Alert variant="ok">{relinkMsg}</Alert> : null}
-              {relinkError ? (
-                <Alert variant="danger">
-                  <span>{relinkError}</span>
-                  <span className="btn-row"><Button size="sm" onClick={() => void doRelink()} disabled={relinkBusy}>Retry relink</Button></span>
-                </Alert>
-              ) : null}
-            </div>
+            <p className="muted">
+              This vault was set up under an older version and can no longer
+              be opened. Repairing starts a fresh one for this wallet —
+              anything saved in the old vault stays sealed where it is and
+              nothing moves over.
+            </p>
+            <Button
+              variant="primary"
+              onClick={repairVault}
+              disabled={!!pending}
+            >
+              {pending === 'approve'
+                ? 'Approve in your wallet'
+                : pending
+                  ? 'Repairing…'
+                  : 'Repair my vault'}
+            </Button>
           </CardContent>
         </Card>
-      ) : null}
+      )}
+
+      {signedIn && status?.needsRelink && !status?.retiredDeployment && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Vault link broken</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="muted">
+              The saved connection to your vault stopped working — your sign-in
+              still works, but new memories can't be saved until you re-link.
+            </p>
+            <Button variant="primary" onClick={linkRepair} disabled={!!pending}>
+              {pending === 'relink'
+                ? 'Re-linking…'
+                : pending === 'approve'
+                  ? 'Approve in your wallet'
+                  : 'Re-link vault'}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {signedIn && pendingPhase && !status?.retiredDeployment && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Setup paused</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="muted">
+              Vault setup didn't finish — your sign-in still works, but nothing
+              is saved yet.
+            </p>
+            <Button variant="primary" onClick={regenerate} disabled={!!pending}>
+              {pending
+                ? pending === 'approve'
+                  ? 'Approve in your wallet'
+                  : 'Working…'
+                : `Setup stopped at step ${phaseStep(pendingPhase)} — Continue`}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {signedIn &&
+        !status?.onboarded &&
+        !status?.needsRelink &&
+        !status?.retiredDeployment &&
+        !pendingPhase && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Set up private memory</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="muted">
+                One step creates your private vault and switches saving on.
+              </p>
+              <Button variant="primary" onClick={setupVault} disabled={!!pending}>
+                {pending === 'vault'
+                  ? 'Creating…'
+                  : pending === 'approve'
+                    ? 'Approve in your wallet'
+                    : 'Set up private memory'}
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+      {signedIn && (
+        <div className="btn-row signout-row">
+          <Button variant="quiet" onClick={signOut} disabled={!!pending}>
+            {pending === 'signout' ? 'Signing out…' : 'Sign out'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

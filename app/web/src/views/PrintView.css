@@ -1,48 +1,109 @@
-.pr-wrap { display: flex; flex-direction: column; gap: 14px; min-width: 0; max-width: 100%; }
-.pr-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
-.pr-toolbar-hint { font-size: 13px; color: var(--muted); line-height: 1.5; overflow-wrap: break-word; flex: 1 1 220px; min-width: 0; }
-.pr-big { font-size: 20px; overflow-wrap: anywhere; }
-.pr-allergies { border: 2px solid var(--danger); border-radius: var(--r-md); background: var(--danger-soft); padding: 16px; margin-bottom: 16px; min-width: 0; }
-.pr-allergy-h { margin: 0 0 10px; font-size: clamp(20px, 5vw, 24px); font-weight: 800; letter-spacing: 0.01em; line-height: 1.2; color: var(--danger); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; overflow-wrap: break-word; }
-.pr-allergy-list { list-style: none; padding-left: 0; }
-.pr-allergy-item { font-size: clamp(16px, 4.2vw, 18px); font-weight: 700; line-height: 1.5; }
-.pr-unknown { margin: 0; font-weight: 700; color: var(--warn); font-size: 16px; line-height: 1.55; overflow-wrap: break-word; }
-.pr-h { margin: 16px 0 8px; font-size: 15px; font-weight: 700; overflow-wrap: break-word; }
-.pr-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.pr-allergy-list.pr-list { padding-left: 0; }
-.pr-item { font-size: 14.5px; line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
-.pr-item .mono { overflow-wrap: anywhere; }
-.pr-muted { color: var(--muted); font-size: 14px; margin: 0; line-height: 1.55; overflow-wrap: break-word; }
-.pr-blobids { margin: 16px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; min-width: 0; }
-@media (max-width: 480px) {
-  .pr-allergies { padding: 13px; }
-  .pr-toolbar > :first-child { flex: 1 1 100%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .pr-wrap *, .pr-wrap *::before, .pr-wrap *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
-}
-@media print {
-  .sidebar, .topbar, .demo-banner, .backdrop, .no-print { display: none !important; }
-  .main, .main-col { padding: 0 !important; margin: 0 !important; }
-  .pr-wrap { gap: 10px; background: #fff; color: #000; }
-  .pr-wrap .card { background: #fff; border-color: #999; box-shadow: none; }
-  .pr-allergies { break-inside: avoid; background: #fff; }
-  .pr-allergy-h { color: #000; }
-  .pr-blobids { display: block !important; }
-  a { text-decoration: none; color: inherit; }
-  /* Blob URLs must survive on paper: links are not clickable in print, so
-     the walruscan destination prints next to the link text. */
-  .pr-wrap a[href^="https://walruscan"]::after {
-    content: " (" attr(href) ")";
-    font-size: 11px;
-    overflow-wrap: anywhere;
-  }
+/* Emergency card — paper styles. The shell (sidebar, topbar) drops out on
+   paper; blob cites (.pr-blobids) must stay visible on the printed card. */
+
+.print-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 22px 18px 60px;
 }
 
-/* Page column (screen only — print keeps its own chrome-hiding rules above). */
-@media screen {
-  .pr-wrap { flex: 1; min-height: 0; overflow-y: auto; width: 100%; max-width: 860px; margin: 0 auto; padding: 28px 20px; }
+.print-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
 }
-@media screen and (max-width: 480px) {
-  .pr-wrap { padding: 20px 12px; }
+
+.pr-card {
+  background: #ffffff;
+  color: #16181d;
+  border-radius: var(--radius);
+  padding: 26px 30px;
+  box-shadow: var(--shadow);
+}
+.pr-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 2px solid #16181d;
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+}
+.pr-head h2 {
+  margin: 0;
+  font-size: 19px;
+}
+.pr-user {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #5a6070;
+}
+.pr-section h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #5a6070;
+  margin: 16px 0 6px;
+}
+.pr-section ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pr-blobids {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #5a6070;
+  margin-left: 8px;
+}
+.pr-empty {
+  color: #5a6070;
+}
+.pr-foot {
+  margin-top: 22px;
+  border-top: 1px solid #d7d9e0;
+  padding-top: 10px;
+  font-size: 11.5px;
+  color: #5a6070;
+}
+
+@media print {
+  .sidebar,
+  .topbar,
+  .print-actions,
+  .skip-link {
+    display: none !important;
+  }
+  html,
+  body,
+  #root,
+  .app,
+  .main-col,
+  .main {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  body,
+  .app,
+  .main-col,
+  .main {
+    background: #ffffff !important;
+  }
+  .print-wrap {
+    padding: 0;
+    max-width: none;
+    overflow: visible;
+  }
+  .pr-card {
+    box-shadow: none;
+    border-radius: 0;
+  }
 }

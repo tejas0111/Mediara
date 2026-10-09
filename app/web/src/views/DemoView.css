@@ -1,0 +1,35 @@
+/* Demo chat — surface-specific tweaks beyond ChatView.css live here.
+   (The demo strip, walkthrough chips, and wrap layout are in ChatView.css
+   and App.css so the personal and demo chats share one geometry.) */
+
+/* Demo area owns the shared-demo readiness line: static above the chat,
+   chat keeps its own locked scroller below. */
+.demo-outer {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 22px 18px 0;
+  overflow: hidden;
+}
+.demo-outer .demo-cap {
+  flex: 0 0 auto;
+  margin: 0 0 12px;
+}
+.demo-outer .chat-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-width: none;
+  margin: 0;
+  padding: 0 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-outer {
+    scroll-behavior: auto;
+  }
+}

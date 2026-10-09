@@ -1,168 +1,113 @@
-// Chat session model + localStorage persistence + hash routing.
-// Sessions are namespaced per user: localStorage key `ddChats:<userId>`.
-
-export interface RecalledRef {
-  text: string;
-  blob_id: string | null;
-}
+/* Shared chat domain types + small format helpers. */
 
 export interface ThinkStep {
-  label: string;
-  detail: string;
+  step: string;
+  /** Wire alias: the server emits `label`; the client accepts both. */
+  label?: string;
+  detail?: string;
+  ok?: boolean;
+  ms?: number;
 }
-export interface ChatMsg {
-  id: string;
+
+export interface RecalledItem {
+  text: string;
+  blobId?: string | null;
+  distance?: number;
+}
+
+export interface Budget {
+  used: number;
+  cap: number;
+  remaining: number;
+  resetAt?: string;
+  resetInHrs?: number;
+}
+
+export interface GuardCite {
+  text: string;
+  blobId?: string | null;
+}
+
+export type Verdict = 'STOP' | 'CAUTION';
+
+export interface GuardInfo {
+  verdict?: string;
+  reason?: string;
+  cited?: GuardCite[];
+  proofId?: string;
+}
+
+export interface ChatResponse {
+  reply: string;
+  recalledMeta?: RecalledItem[];
+  thinking?: ThinkStep[];
+  savedBlob?: string | null;
+  memoryPersisted?: boolean;
+  budget?: Budget;
+  mode?: string;
+  disclaimer?: string;
+  guard?: GuardInfo | null;
+}
+
+export interface ChatMessage {
   role: 'user' | 'assistant';
   text: string;
+  thinking: ThinkStep[];
+  recalled: RecalledItem[];
+  verdict?: Verdict;
+  guardReason?: string;
+  cited?: GuardCite[];
   savedBlob?: string | null;
-  memoryPersisted?: boolean | 'pending' | null;
-  recalled?: RecalledRef[];
-  thinking?: ThinkStep[];
-  ts: number;
+  memoryPersisted?: boolean;
+  budget?: Budget;
+  streaming?: boolean;
+  error?: boolean;
 }
 
-export interface ChatSession {
-  id: string;
-  title: string;
-  startedAt: number;
-  msgs: ChatMsg[];
+/** Truncate a Walrus blob id for display: keep both ends, elide the middle. */
+export function shortBlob(blob?: string | null): string {
+  if (!blob) return '—';
+  if (blob.length <= 14) return blob;
+  return `${blob.slice(0, 6)}…${blob.slice(-4)}`;
 }
 
-export type ViewKey =
-  | 'chat'
-  | 'demo'
-  | 'dashboard'
-  | 'memory'
-  | 'replay'
-  | 'compare'
-  | 'proof'
-  | 'stats'
-  | 'print'
-  | 'wallet';
-
-/** Parsed location hash: a plain view, or a chat view (personal or demo) with a session. */
-export type Route = ViewKey | { chat: 'chat' | 'demo'; sessionId: string };
-
-const VIEWS: ViewKey[] = [
-  'chat',
-  'demo',
-  'dashboard',
-  'memory',
-  'replay',
-  'compare',
-  'proof',
-  'stats',
-  'print',
-  'wallet',
-];
-
-function isView(s: string): s is ViewKey {
-  return (VIEWS as string[]).includes(s);
-}
-
-export function parseHash(): Route {
-  const raw = window.location.hash.replace(/^#/, '');
-  const parts = raw.split('/').filter(Boolean);
-  if (parts.length === 0) return 'chat';
-  const [head, tail] = parts;
-  if ((head === 'chat' || head === 'demo') && tail) return { chat: head, sessionId: decodeURIComponent(tail) };
-  if (isView(head)) return head;
-  return 'chat';
-}
-
-export function navigate(view: ViewKey, sessionId?: string): void {
-  if (sessionId && (view === 'chat' || view === 'demo')) {
-    window.location.hash = `#/${view}/${encodeURIComponent(sessionId)}`;
-  } else if (view === 'chat') {
-    window.location.hash = '#/chat';
-  } else {
-    window.location.hash = `#/${view}`;
+/** "2h 5m" style countdown text for budget resets. */
+export function formatResetIn(
+  resetAt?: string,
+  resetInHrs?: number,
+  now: number = Date.now(),
+): string {
+  let ms = 0;
+  if (resetAt) {
+    const t = Date.parse(resetAt);
+    if (!Number.isNaN(t)) ms = t - now;
+  } else if (typeof resetInHrs === 'number' && Number.isFinite(resetInHrs)) {
+    ms = resetInHrs * 3_600_000;
   }
+  if (ms <= 0) return '0m';
+  const mins = Math.ceil(ms / 60_000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-export function routeView(r: Route): ViewKey {
-  return typeof r === 'string' ? r : r.chat;
-}
-
-export function routeSessionId(r: Route): string | null {
-  return typeof r === 'object' ? r.sessionId : null;
-}
-
-// ------------------------------------------------------- persistence ---
-
-const keyFor = (userId: string) => `ddChats:${userId}`;
-const MAX_SESSIONS = 60;
-
-function uid(): string {
-  try {
-    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-      return crypto.randomUUID();
-    }
-  } catch {
-    /* fall through */
-  }
-  return `s-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
-}
-
-export function msgId(): string {
-  return uid();
-}
-
-/** Derive a short title from the first user message. */
-export function titleFor(text: string): string {
-  const t = String(text ?? '').replace(/\s+/g, ' ').trim();
-  if (!t) return 'New chat';
-  return t.length > 44 ? `${t.slice(0, 44).trimEnd()}…` : t;
-}
-
-export function newSession(firstMsg?: string): ChatSession {
+/** Map a wire response onto a renderable assistant message. */
+export function toAssistantMessage(res: ChatResponse): ChatMessage {
+  let verdict: Verdict | undefined;
+  const g = res.guard ?? undefined;
+  if (g?.verdict === 'STOP' || /^STOP\b/.test(res.reply)) verdict = 'STOP';
+  else if (g?.verdict === 'CAUTION' || /^CAUTION\b/.test(res.reply)) verdict = 'CAUTION';
+  const text = res.reply.replace(/^(STOP|CAUTION)\s*[—–-]\s*/, '');
   return {
-    id: uid(),
-    title: firstMsg ? titleFor(firstMsg) : 'New chat',
-    startedAt: Date.now(),
-    msgs: [],
+    role: 'assistant',
+    text,
+    thinking: res.thinking ?? [],
+    recalled: res.recalledMeta ?? [],
+    verdict,
+    guardReason: g?.reason,
+    cited: g?.cited ?? [],
+    savedBlob: res.savedBlob ?? null,
+    memoryPersisted: res.memoryPersisted,
+    budget: res.budget,
   };
-}
-
-export function loadSessions(userId: string): ChatSession[] {
-  try {
-    const raw = localStorage.getItem(keyFor(userId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as ChatSession[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s) => s && typeof s.id === 'string' && Array.isArray(s.msgs));
-  } catch {
-    return [];
-  }
-}
-
-function persist(userId: string, list: ChatSession[]): void {
-  try {
-    localStorage.setItem(keyFor(userId), JSON.stringify(list.slice(0, MAX_SESSIONS)));
-  } catch {
-    /* storage full or unavailable — chat still works in memory */
-  }
-}
-
-export function saveSession(userId: string, session: ChatSession): ChatSession[] {
-  const list = loadSessions(userId);
-  const ix = list.findIndex((s) => s.id === session.id);
-  const next = ix >= 0
-    ? list.map((s) => (s.id === session.id ? session : s))
-    : [session, ...list];
-  persist(userId, next);
-  return next;
-}
-
-export function deleteSession(userId: string, id: string): ChatSession[] {
-  const next = loadSessions(userId).filter((s) => s.id !== id);
-  persist(userId, next);
-  return next;
-}
-
-export function renameSession(userId: string, id: string, title: string): ChatSession[] {
-  const t = title.trim() || 'Untitled';
-  const next = loadSessions(userId).map((s) => (s.id === id ? { ...s, title: t } : s));
-  persist(userId, next);
-  return next;
 }

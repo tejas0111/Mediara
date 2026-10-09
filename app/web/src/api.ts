@@ -1,522 +1,510 @@
-// Typed client for the Mediara JSON API. Same-origin; session cookies ride
-// along automatically. Every function throws ApiError (with .status) on failure
-// so views can render honest error states instead of silent blanks.
+/* JSON/SSE client for the Mediara backend. Same-origin by default; the base
+   can be overridden (persisted) but no backend URL is ever hardcoded here. */
+
+import type {
+  Budget,
+  ChatResponse,
+  RecalledItem,
+  ThinkStep,
+} from './chat';
+
+/* ---------------------------------------------------------------- errors */
 
 export class ApiError extends Error {
   status: number;
-  data: Record<string, unknown>;
-  constructor(status: number, message: string, data?: Record<string, unknown>) {
-    super(message);
+  data: unknown;
+  loginRequired: boolean;
+  demoUser?: string;
+  needsRelink: boolean;
+  retiredDeployment: boolean;
+  resetAt?: string;
+  resetInHrs?: number;
+
+  constructor(status: number, data: unknown, fallback?: string) {
+    const d = (data ?? {}) as Record<string, unknown>;
+    super(
+      (typeof d.error === 'string' && d.error) ||
+        (typeof d.message === 'string' && d.message) ||
+        fallback ||
+        `Request failed (${status})`,
+    );
+    this.name = 'ApiError';
     this.status = status;
-    this.data = data ?? {};
+    this.data = data;
+    // 429/409 metadata survives on the error object so the UI can react.
+    this.loginRequired = d.loginRequired === true;
+    this.demoUser = typeof d.demoUser === 'string' ? d.demoUser : undefined;
+    this.needsRelink = d.needsRelink === true;
+    this.retiredDeployment = d.retiredDeployment === true;
+    this.resetAt =
+      (typeof d.resetAt === 'string' && d.resetAt) ||
+      (typeof d.resetsAt === 'string' && d.resetsAt) ||
+      undefined;
+    this.resetInHrs =
+      typeof d.resetInHrs === 'number' ? d.resetInHrs : undefined;
   }
 }
 
-// -------------------------------------------------------- base routing ---
-// Demo|Mainnet environment switch. '' = same-origin (local demo server).
-// A custom absolute URL (e.g. https://mainnet-host) routes every req() there.
-// Persisted in localStorage under `ddApiBase`.
-const API_BASE_KEY = 'ddApiBase';
+/* -------------------------------------------------------------- identity */
 
-// Guest identity: stable per-browser device id (persisted UUID, created on
-// first run). Sent as X-Device-Id on every req(); the server hashes it with
-// the caller IP into `guest:<hash12>` for the anonymous day budget — guests
-// get personal memory with no wallet and no forced wall.
 const DEVICE_KEY = 'ddDeviceId';
 
-export function getDeviceId(): string {
-  try {
-    let v = localStorage.getItem(DEVICE_KEY);
-    if (!v || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) {
-      const c = typeof crypto !== 'undefined' ? (crypto as unknown as { randomUUID?: () => string }) : null;
-      v = c?.randomUUID
-        ? c.randomUUID().replace(/-/g, '')
-        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 18)}`;
-      localStorage.setItem(DEVICE_KEY, v);
-    }
-    return v;
-  } catch {
-    return 'anon';
+export function deviceId(): string {
+  let id = localStorage.getItem(DEVICE_KEY);
+  if (!id) {
+    id =
+      typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(DEVICE_KEY, id);
   }
+  return id;
 }
 
+function headers(json = true): Record<string, string> {
+  const h: Record<string, string> = { 'X-Device-Id': deviceId() };
+  if (json) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+/* ------------------------------------------------------------ env routing */
+
+const BASE_KEY = 'ddApiBase';
+let apiBase = (localStorage.getItem(BASE_KEY) ?? '').replace(/\/+$/, '');
+
 export function getApiBase(): string {
-  try {
-    return localStorage.getItem(API_BASE_KEY) || '';
-  } catch {
-    return '';
-  }
+  return apiBase;
 }
 
 export function setApiBase(base: string): void {
-  try {
-    const v = String(base ?? '').trim().replace(/\/+$/, '');
-    if (!v) localStorage.removeItem(API_BASE_KEY);
-    else localStorage.setItem(API_BASE_KEY, v);
-  } catch {
-    /* storage unavailable — base stays same-origin for this session */
-  }
+  apiBase = base.replace(/\/+$/, '');
+  if (apiBase) localStorage.setItem(BASE_KEY, apiBase);
+  else localStorage.removeItem(BASE_KEY);
 }
 
-export interface HealthResult {
+export type EnvMode = 'local' | 'mainnet' | 'unknown';
+
+export interface Health {
   ok: boolean;
-  mode: 'local' | 'mainnet' | null;
-  error?: string;
+  mode: EnvMode;
 }
 
-/** Probe `<base>/healthz` (base '' = same-origin). Never throws. */
-export async function checkHealth(base?: string): Promise<HealthResult> {
-  const b = String(base ?? getApiBase()).trim().replace(/\/+$/, '');
-  const url = `${b}/healthz`;
+/** Reachability + memory-backend mode of the current API base. */
+export async function checkHealth(): Promise<Health> {
   try {
-    const r = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!r.ok) return { ok: false, mode: null, error: `server responded ${r.status}` };
-    const body = (await r.json().catch(() => ({}))) as { mode?: unknown };
-    return { ok: true, mode: body.mode === 'mainnet' ? 'mainnet' : 'local' };
-  } catch (e) {
-    return { ok: false, mode: null, error: e instanceof Error ? e.message : String(e) };
+    const r = await fetch(`${apiBase}/api/seed-status?user=demo-mom`, {
+      headers: headers(false),
+      credentials: 'include',
+    });
+    if (!r.ok) return { ok: false, mode: 'unknown' };
+    const d = (await r.json().catch(() => null)) as Record<
+      string,
+      unknown
+    > | null;
+    const mode: EnvMode = d?.mode === 'mainnet' ? 'mainnet' : 'local';
+    return { ok: true, mode };
+  } catch {
+    return { ok: false, mode: 'unknown' };
   }
 }
+
+/* ----------------------------------------------------------------- core */
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${getApiBase()}${path}`, {
+  const r = await fetch(`${apiBase}${path}`, {
+    credentials: 'include',
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}), 'X-Device-Id': getDeviceId() },
   });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new ApiError(r.status, String((body as { error?: unknown }).error || `request failed (${r.status})`), body as Record<string, unknown>);
-  return body as T;
+  const text = await r.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { error: text || r.statusText };
+  }
+  if (!r.ok) throw new ApiError(r.status, data);
+  return data as T;
 }
 
-/** Strip the stored "User <id>:" label prefix for display.
- * Also strips emoji chrome (server strings like the morning brief may carry
- * pictographs such as U+2600/U+26A0/U+2705/U+274C/U+2B50): views render
- * Badge/Icon affordances instead, never raw emoji. Ellipsis, middots and
- * dashes are untouched. */
-export const clean = (t: string) =>
-  String(t ?? '')
-    .replace(/^User\s+\S+:\s*/i, '')
-    .replace(/[\u2600-\u27BF\u2B00-\u2BFF\uFE00-\uFE0F\u{1F000}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u200D]/gu, '');
+const q = (user: string) => `?user=${encodeURIComponent(user)}`;
 
-/** Short blob id for receipts: local-ids in full-ish, mainnet truncated. */
-export const shortBlob = (id: string | null) => {
-  if (!id) return null;
-  return id.startsWith('local-') ? id : `${id.slice(0, 10)}…`;
-};
+/* ------------------------------------------------------------------ chat */
 
-export const walruscan = (id: string | null) =>
-  id && id.length >= 32 && !id.startsWith('local-')
-    ? `https://walruscan.com/mainnet/blob/${id}`
-    : null;
-
-// ------------------------------------------------------------ budget ---
-// Rolling 24h sliding-window budget (demo + anon channels). resetAt = ISO of
-// when the oldest in-window turn expires (null when empty); remaining counts
-// down to 0, at which point the server answers 429 with RateLimitBody.
-export interface Budget {
-  used: number;
-  cap: number;
-  remaining: number;
-  resetAt: string | null;
-}
-export interface RateLimitBody {
-  error: string;
-  loginRequired?: boolean;
-  demoUser?: string;
-  remaining: number;
-  resetsAt?: string;
-  resetAt: string | null;
-  resetInHrs: number | null;
+export interface ChatOpts {
+  model?: string;
+  memory?: boolean;
+  signal?: AbortSignal;
 }
 
-// ---------------------------------------------------------------- chat ---
-export interface RecalledMeta {
-  text: string;
-  blob_id: string | null;
-  distance: number | null;
-}
-export interface ThinkStep {
-  label: string;
-  detail: string;
-}
-export interface ChatResponse {
-  reply: string;
-  thinking: ThinkStep[];
-  recalled: string[];
-  recalledMeta: RecalledMeta[];
-  memoryScope: string;
-  identity: string;
-  savedBlob: string | null;
-  memoryPersisted: boolean | 'pending' | null;
-  memoryOff: boolean;
-  mode: 'local' | 'mainnet';
-  disclaimer: string;
-  budget?: Budget;
-}
-export const postChat = (userId: string, message: string, memory: boolean, model?: string) =>
-  req<ChatResponse>('/api/chat', {
-    method: 'POST',
-    body: JSON.stringify({ userId, message, memory: memory ? true : 'off', ...(model ? { model } : {}) }),
+function chatBody(userId: string, message: string, opts: ChatOpts): string {
+  const provider = getProvider();
+  return JSON.stringify({
+    userId,
+    message,
+    deviceId: deviceId(),
+    ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.memory === false ? { memory: false } : {}),
+    ...(provider ? { provider } : {}),
   });
-
-// ------------------------------------------------------- chat stream ---
-// Live-token SSE client for POST /api/chat/stream. Same request body as
-// /api/chat; the server replies `text/event-stream` with events:
-//   event: thinking  data: { thinking: ThinkStep[], recalledMeta: RecalledMeta[] }
-//   event: token     data: { t: string }
-//   event: done      data: ChatResponse
-//   event: error     data: { error: string, ... } (same body /api/chat sends)
-// A `data: [DONE]` payload (no event) also terminates the stream.
-// onEvent fires for thinking|token|done only; `error` events throw ApiError.
-// Resolves with the `done` payload. Throws ApiError when the stream ends
-// without a `done` event.
-export type ChatStreamEvent =
-  | { type: 'thinking'; thinking: ThinkStep[]; recalledMeta: RecalledMeta[] }
-  | { type: 'token'; token: string }
-  | { type: 'done'; done: ChatResponse };
-export type ChatStreamHandler = (ev: ChatStreamEvent) => void;
-
-function parseStreamBlock(block: string): { event: string; data: string } | null {
-  let event = '';
-  const dataLines: string[] = [];
-  for (const raw of block.split('\n')) {
-    const line = raw.replace(/\r$/, '');
-    if (line.startsWith(':')) continue; // comment keep-alive
-    if (line.startsWith('event:')) event = line.slice(6).trim();
-    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
-    else if (line === '') continue;
-  }
-  if (dataLines.length === 0) return null;
-  return { event, data: dataLines.join('\n') };
 }
 
-function errorFromStreamText(status: number, text: string): ApiError {
-  let message = `request failed (${status})`;
-  let data: Record<string, unknown> = {};
-  for (const raw of String(text).split('\n')) {
-    const line = raw.trim();
-    if (!line.startsWith('data:')) continue;
-    const payload = line.slice(5).trim();
-    if (!payload || payload === '[DONE]') continue;
-    try {
-      const obj = JSON.parse(payload) as Record<string, unknown>;
-      if (obj && typeof obj === 'object') {
-        data = obj;
-        if (typeof obj.error === 'string' && obj.error) message = obj.error;
-      }
-    } catch {
-      /* keep scanning — malformed JSON never fails the error path */
-    }
-  }
-  return new ApiError(status, message, data);
-}
-
-export async function postChatStream(
+export function chat(
   userId: string,
   message: string,
-  memory: boolean,
-  model: string | undefined,
-  onEvent: ChatStreamHandler,
+  opts: ChatOpts = {},
 ): Promise<ChatResponse> {
-  const r = await fetch(`${getApiBase()}/api/chat/stream`, {
+  return req<ChatResponse>('/api/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Device-Id': getDeviceId() },
-    body: JSON.stringify({ userId, message, memory: memory ? true : 'off', ...(model ? { model } : {}) }),
+    headers: headers(),
+    body: chatBody(userId, message, opts),
+    signal: opts.signal,
+  });
+}
+
+export interface StreamHandlers {
+  onThinking?: (thinking: ThinkStep[], recalledMeta: RecalledItem[]) => void;
+  onToken?: (t: string) => void;
+  onDone?: (full: ChatResponse) => void;
+}
+
+/**
+ * POST /api/chat/stream — SSE. Server emits
+ *   event: thinking  data: {thinking: ThinkStep[], recalledMeta}
+ *   event: token     data: {t}
+ *   event: done      data: full ChatResponse
+ *   event: error     data: same JSON body as the REST error
+ * and terminates with data: [DONE].
+ */
+export async function chatStream(
+  userId: string,
+  message: string,
+  opts: ChatOpts,
+  handlers: StreamHandlers,
+): Promise<ChatResponse> {
+  const r = await fetch(`${apiBase}/api/chat/stream`, {
+    method: 'POST',
+    headers: headers(),
+    credentials: 'include',
+    body: chatBody(userId, message, opts),
+    signal: opts.signal,
   });
   if (!r.ok) {
-    throw errorFromStreamText(r.status, await r.text().catch(() => ''));
+    const data = await r.json().catch(() => null);
+    throw new ApiError(r.status, data);
   }
-  if (!r.body) throw new ApiError(r.status || 500, 'stream unavailable', {});
+  if (!r.body) throw new ApiError(0, { error: 'stream-unavailable' });
+
   const reader = r.body.getReader();
-  const decoder = new TextDecoder();
+  const dec = new TextDecoder();
   let buf = '';
-  let done: ChatResponse | null = null;
-  const handleBlock = (block: string) => {
-    if (!block.trim()) return;
-    const parsed = parseStreamBlock(block);
-    if (!parsed) return;
-    if (parsed.data === '[DONE]') {
-      // Termination marker with no payload (upstream passthrough).
-      if (!done) throw new ApiError(500, 'stream ended before the answer arrived', {});
+  let ev = '';
+  let dataLines: string[] = [];
+  let final: ChatResponse | null = null;
+
+  const flush = (): void => {
+    const raw = dataLines.join('\n');
+    dataLines = [];
+    const kind = ev;
+    ev = '';
+    if (!raw) return;
+    if (raw === '[DONE]') return;
+    let json: Record<string, unknown> = {};
+    try {
+      json = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
       return;
     }
-    let obj: Record<string, unknown>;
-    try {
-      obj = JSON.parse(parsed.data) as Record<string, unknown>;
-    } catch {
-      return; // malformed JSON is skipped, the stream continues
-    }
-    if (parsed.event === 'thinking') {
-      onEvent({
-        type: 'thinking',
-        thinking: Array.isArray(obj.thinking) ? (obj.thinking as ThinkStep[]) : [],
-        recalledMeta: Array.isArray(obj.recalledMeta) ? (obj.recalledMeta as RecalledMeta[]) : [],
-      });
-    } else if (parsed.event === 'token') {
-      const t = typeof obj.t === 'string' ? obj.t
-        : typeof obj.text === 'string' ? (obj.text as string)
-        : typeof obj.token === 'string' ? (obj.token as string) : '';
-      if (t) onEvent({ type: 'token', token: t });
-    } else if (parsed.event === 'done') {
-      done = obj as unknown as ChatResponse;
-      onEvent({ type: 'done', done });
-    } else if (parsed.event === 'error') {
-      const status = typeof obj.status === 'number' ? (obj.status as number) : 500;
-      const msg = typeof obj.error === 'string' && obj.error ? (obj.error as string) : 'stream failed';
-      throw new ApiError(status, msg, obj);
+    if (kind === 'thinking') {
+      handlers.onThinking?.(
+        (json.thinking as ThinkStep[]) ?? [],
+        (json.recalledMeta as RecalledItem[]) ?? [],
+      );
+    } else if (kind === 'token') {
+      handlers.onToken?.(typeof json.t === 'string' ? json.t : '');
+    } else if (kind === 'done') {
+      final = json as unknown as ChatResponse;
+      handlers.onDone?.(final);
+    } else if (kind === 'error') {
+      // error event carries the same JSON body as the REST error
+      const status = typeof json.status === 'number' ? json.status : 500;
+      throw new ApiError(status, json);
     }
   };
+
   for (;;) {
-    const { value, done: rd } = await reader.read();
-    if (value?.length) buf += decoder.decode(value, { stream: true });
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
     let idx: number;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const block = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      handleBlock(block);
-      if (done) {
-        try { await reader.cancel(); } catch { /* already closed */ }
-        return done;
-      }
-    }
-    if (rd) break;
-  }
-  buf += decoder.decode();
-  if (buf.trim()) {
-    for (const block of buf.split(/\n\n/)) {
-      handleBlock(block);
-      if (done) {
-        try { await reader.cancel(); } catch { /* already closed */ }
-        return done;
-      }
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).replace(/\r$/, '');
+      buf = buf.slice(idx + 1);
+      if (line === '') flush();
+      else if (line.startsWith('event:')) ev = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
     }
   }
-  if (done) return done;
-  throw new ApiError(500, 'stream ended before the answer arrived', {});
+  flush();
+  if (!final) throw new ApiError(0, { error: 'stream-incomplete' });
+  return final;
 }
+
+/* ----------------------------------------------------------------- reads */
+
+export interface SummarySection {
+  label: string;
+  items: { text: string; blobId?: string | null }[];
+}
+
+export interface Summary {
+  user: string;
+  medications?: { text: string; blobId?: string | null }[];
+  allergies?: { text: string; blobId?: string | null }[];
+  routine?: { text: string; blobId?: string | null }[];
+  contacts?: { text: string; blobId?: string | null }[];
+  sections?: SummarySection[];
+}
+
+export const summary = (user: string) =>
+  req<Summary>(`/api/summary${q(user)}`, { headers: headers(false) });
+
+export interface ExportFact {
+  text: string;
+  blobId?: string | null;
+  createdAt?: string;
+}
+
+export interface ExportData {
+  user: string;
+  facts?: ExportFact[];
+  memories?: ExportFact[];
+}
+
+export const exportMemory = (user: string) =>
+  req<ExportData>(`/api/export${q(user)}`, { headers: headers(false) });
+
+export interface SeedStatus {
+  user: string;
+  seeded?: boolean;
+  count?: number;
+  mode?: string;
+  days?: { day: number; facts: ExportFact[] }[];
+}
+
+export const seedStatus = (user: string) =>
+  req<SeedStatus>(`/api/seed-status${q(user)}`, { headers: headers(false) });
+
+export interface GuardProofEntry {
+  id?: string;
+  ts?: string;
+  verdict?: string;
+  reason?: string;
+  factText?: string;
+  text?: string;
+  blobId?: string | null;
+  hash?: string;
+  prevHash?: string;
+  prev?: string;
+  user?: string;
+}
+
+export interface GuardProof {
+  ok?: boolean;
+  entries?: GuardProofEntry[];
+  ledger?: GuardProofEntry[];
+  verify?: { ok?: boolean; checked?: number };
+}
+
+export const guardProof = () =>
+  req<GuardProof>('/api/guard-proof', { headers: headers(false) });
+
+export const proactive = (user: string) =>
+  req<Record<string, unknown>>(`/api/proactive${q(user)}`, {
+    headers: headers(false),
+  });
+
+export interface UsageUser {
+  id?: string;
+  user?: string;
+  namespace?: string;
+  memories?: number;
+  turns?: number;
+  guards?: number;
+  firstSeen?: string;
+  lastSeen?: string;
+}
+
+export interface Usage {
+  users?: UsageUser[];
+  totals?: { users?: number; memories?: number; turns?: number };
+}
+
+export const usage = () => req<Usage>('/api/usage', { headers: headers(false) });
+
+export interface DashboardData {
+  personal?: {
+    turns?: number;
+    memories?: number;
+    guardStops?: number;
+    memoriesCapped?: boolean;
+    guardStale?: boolean;
+    budget?: Budget;
+  };
+  demo?: { used?: number; cap?: number; remaining?: number; resetAt?: string };
+  vault?: {
+    signedIn?: boolean;
+    onboarded?: boolean;
+    needsRelink?: boolean;
+    pendingPhase?: string | null;
+  };
+}
+
+export const dashboard = (user: string) =>
+  req<DashboardData>(`/api/dashboard${q(user)}`, { headers: headers(false) });
+
+/* ----------------------------------------------------------------- auth */
+
+export interface AuthChallenge {
+  nonce: string;
+  message: string;
+}
+
+export const authMessage = () =>
+  req<AuthChallenge>('/api/auth/message', { headers: headers(false) });
+
+export const authVerify = (address: string, signature: string, nonce: string) =>
+  req<{ ok?: boolean; address?: string }>('/api/auth/verify', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ address, signature, nonce }),
+  });
+
+export const authLogout = () =>
+  req<{ ok?: boolean }>('/api/auth/logout', {
+    method: 'POST',
+    headers: headers(),
+    body: '{}',
+  });
+
+/* ---------------------------------------------------------------- wallet */
+
+export interface WalletStatus {
+  signedIn?: boolean;
+  address?: string;
+  onboarded?: boolean;
+  needsRelink?: boolean;
+  retiredDeployment?: boolean;
+  pendingPhase?: string | null;
+}
+
+export const walletStatus = () =>
+  req<WalletStatus>('/api/wallet/status', { headers: headers(false) });
+
+const walletPost = (path: string) =>
+  req<Record<string, unknown>>(path, {
+    method: 'POST',
+    headers: headers(),
+    body: '{}',
+  });
+
+export const walletOnboardCreate = () => walletPost('/api/wallet/onboard/create');
+export const walletOnboardLink = () => walletPost('/api/wallet/onboard/link');
+export const walletOnboardComplete = () =>
+  walletPost('/api/wallet/onboard/complete');
+/** Step 2 with a wallet signature: submits the signed tx bytes server-side. */
+export const walletOnboardCompleteSig = (signature: string) =>
+  req<Record<string, unknown>>('/api/wallet/onboard/complete', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ signature }),
+  });
+export const walletRelink = () => walletPost('/api/wallet/relink');
+export const walletReset = () => walletPost('/api/wallet/reset');
+
+/* ---------------------------------------------------------------- models */
+
 export interface ModelInfo {
   id: string;
+  name?: string;
 }
-export interface ModelsResponse {
-  models: ModelInfo[];
-  default: string;
-  live: boolean;
-  freeOnly: boolean;
+
+/** Registry is free-only on the server; we just render what it returns. */
+export async function models(): Promise<ModelInfo[]> {
+  const d = await req<unknown>('/api/models', { headers: headers(false) });
+  const list = Array.isArray(d)
+    ? d
+    : ((d as Record<string, unknown>)?.models as unknown[]) ?? [];
+  return list
+    .map((m): ModelInfo | null => {
+      if (typeof m === 'string') return { id: m };
+      if (m && typeof m === 'object') {
+        const o = m as Record<string, unknown>;
+        if (typeof o.id === 'string')
+          return { id: o.id, name: typeof o.name === 'string' ? o.name : undefined };
+      }
+      return null;
+    })
+    .filter((m): m is ModelInfo => m !== null);
 }
-export const MODEL_KEY = 'ddModel';
-export const getModels = () => req<ModelsResponse>('/api/models');
-export const loadModel = (): string | null => {
+
+const MODEL_KEY = 'ddModel';
+
+export const getSavedModel = (): string => localStorage.getItem(MODEL_KEY) ?? '';
+export const saveModel = (id: string): void => {
+  if (id) localStorage.setItem(MODEL_KEY, id);
+  else localStorage.removeItem(MODEL_KEY);
+};
+
+/* ------------------------------------------------------ custom provider */
+
+/** Bring-your-own model endpoint. Stored only in this browser; attached to
+    chat request bodies verbatim and never logged anywhere. */
+export interface CustomProvider {
+  kind: 'openai' | 'anthropic';
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+const PROVIDER_KEY = 'ddProvider';
+
+export function getProvider(): CustomProvider | null {
   try {
-    return localStorage.getItem(MODEL_KEY);
+    const raw = localStorage.getItem(PROVIDER_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<CustomProvider>;
+    if (
+      (p.kind === 'openai' || p.kind === 'anthropic') &&
+      typeof p.baseUrl === 'string' &&
+      p.baseUrl.length > 0 &&
+      typeof p.apiKey === 'string' &&
+      p.apiKey.length > 0 &&
+      typeof p.model === 'string' &&
+      p.model.length > 0
+    ) {
+      return { kind: p.kind, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model };
+    }
+    return null;
   } catch {
     return null;
   }
-};
-export const saveModel = (id: string) => {
-  try {
-    localStorage.setItem(MODEL_KEY, id);
-  } catch {
-    /* ignore */
-  }
-};
+}
 
-// -------------------------------------------------------------- summary ---
-export interface SummaryResponse {
-  user: string;
-  mode: string;
-  generatedAt: string;
-  medications: string[];
-  allergies: string[];
-  stopped: string[];
-  superseded: string[];
-  routine: string[];
-  familyAndCare: string[];
-  unclassified: string[];
-  blobCount: number;
-  stale: boolean;
-  allergiesKnown: boolean;
-  medicationsKnown: boolean;
-  disclaimer: string;
+export function saveProvider(p: CustomProvider | null): void {
+  if (p) localStorage.setItem(PROVIDER_KEY, JSON.stringify(p));
+  else localStorage.removeItem(PROVIDER_KEY);
+  window.dispatchEvent(new Event('ddprovider'));
 }
-export const getSummary = (userId: string) =>
-  req<SummaryResponse>(`/api/summary?user=${encodeURIComponent(userId)}`);
 
-// --------------------------------------------------------------- export ---
-export interface ExportFact {
-  text: string;
-  blob_id: string | null;
+/** "openrouter/google/gemini-2.5-flash:free" -> "Gemini 2.5 Flash" */
+export function prettyModel(id: string): string {
+  const tail = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
+  const clean = tail.replace(/:.*$/, '');
+  const parts = clean.split(/[-_.]+/).filter(Boolean);
+  if (!parts.length) return id;
+  return parts
+    .map((p) =>
+      /^\d+(\.\d+)*[a-z]?$/i.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1),
+    )
+    .join(' ');
 }
-export interface ExportResponse {
-  user: string;
-  mode: string;
-  agentId: string | null;
-  blobCount: number;
-  facts: ExportFact[];
-}
-export const getExport = (userId: string) =>
-  req<ExportResponse>(`/api/export?user=${encodeURIComponent(userId)}`);
-
-// ---------------------------------------------------------- seed-status ---
-export interface SeedStatus {
-  user: string;
-  mode: string;
-  agentId: string | null;
-  recalledCount: number;
-  blobCount: number | null;
-  namespaceCount: number | null;
-  censusAvailable: boolean;
-  meetsMinimum: boolean;
-  stale: boolean;
-}
-export const getSeedStatus = (userId: string) =>
-  req<SeedStatus>(`/api/seed-status?user=${encodeURIComponent(userId)}`);
-
-// ---------------------------------------------------------- guard-proof ---
-export interface GuardEntry {
-  n: number;
-  at: string;
-  userId: string;
-  kind: 'conflict' | 'interaction';
-  substance: string;
-  withSubstance?: string | null;
-  severity: string;
-  reason: string;
-  fact: string;
-  blobId: string | null;
-  message: string;
-  prev: string;
-  hash: string;
-}
-export interface GuardProofResponse {
-  count: number;
-  verify: { ok: boolean; brokenAt: number | null };
-  entries: GuardEntry[];
-}
-export const getGuardProof = () => req<GuardProofResponse>('/api/guard-proof');
-
-// ------------------------------------------------------------ proactive ---
-export interface InteractionWarning {
-  substance: string;
-  withSubstance: string;
-  severity: string;
-  reason: string;
-  fact: string;
-  blob_id: string | null;
-  factB?: string;
-  blobIdB?: string | null;
-}
-export interface ProactiveResponse {
-  user: string;
-  mode: string;
-  degraded: boolean;
-  morning: string | null;
-  interactionWarnings: InteractionWarning[];
-}
-export const getProactive = (userId: string) =>
-  req<ProactiveResponse>(`/api/proactive?user=${encodeURIComponent(userId)}`);
-
-// ---------------------------------------------------------------- usage ---
-export interface UsageBlob {
-  blobId: string;
-  text: string;
-  link: string | null;
-}
-export interface UsageUser {
-  userId: string;
-  memories: number;
-  turns: number;
-  firstSeen: string | null;
-  meetsMinimum: boolean;
-  blobs: UsageBlob[];
-}
-export interface UsageResponse {
-  generatedAt: string;
-  mode: string;
-  requirement: { distinctUsers: number; memoriesPerUser: number };
-  qualifyingUsers: number;
-  meetsRequirement: boolean;
-  users: UsageUser[];
-  markdown?: string;
-}
-export const getUsage = () => req<UsageResponse>('/api/usage');
-
-// ---------------------------------------------------------------- wallet ---
-export interface WalletStatus {
-  signedIn: boolean;
-  staleSession?: boolean;
-  onboarded?: boolean;
-  pendingPhase?: string | null;
-  needsRelink?: boolean;
-  address?: string;
-  accountId?: string;
-}
-export const walletStatus = () => req<WalletStatus>('/api/wallet/status');
-export const authMessage = () =>
-  req<{ nonce: string; message: string }>('/api/auth/message');
-export const authVerify = (address: string, signature: string, nonce: string) =>
-  req<{ ok: boolean; address: string }>('/api/auth/verify', {
-    method: 'POST',
-    body: JSON.stringify({ address, signature, nonce }),
-  });
-export const authLogout = () =>
-  req<{ ok: boolean }>('/api/auth/logout', { method: 'POST', body: '{}' });
-export const onboardCreate = () =>
-  req<{ txBytes: string } & Record<string, unknown>>(
-    '/api/wallet/onboard/create',
-    { method: 'POST', body: '{}' },
-  );
-export const onboardLink = () =>
-  req<{ txBytes: string } & Record<string, unknown>>(
-    '/api/wallet/onboard/link',
-    { method: 'POST', body: '{}' },
-  );
-export const onboardComplete = (signature: string) =>
-  req<{ ok: boolean } & Record<string, unknown>>(
-    '/api/wallet/onboard/complete',
-    { method: 'POST', body: JSON.stringify({ signature }) },
-  );
-export const relink = () =>
-  req<{ ok: boolean } & Record<string, unknown>>('/api/wallet/relink', {
-    method: 'POST',
-    body: '{}',
-  });
-export const resetVault = () =>
-  req<{ ok: boolean } & Record<string, unknown>>('/api/wallet/reset', {
-    method: 'POST',
-    body: '{}',
-  });
-
-// ------------------------------------------------------------ dashboard ---
-export interface DashboardDemo {
-  userId: string;
-  ready: boolean;
-  blobCount: number;
-}
-export interface DashboardBudget {
-  used: number;
-  cap: number;
-  remaining: number;
-  reset: string | null;
-  resetAt: string | null;
-  resetInHrs: number | null;
-}
-export interface DashboardPersonal {
-  memories: number;
-  turns: number;
-  budget: DashboardBudget;
-  guardHits: number;
-  stale: boolean;
-}
-export interface DashboardVault {
-  signedIn: boolean;
-  onboarded: boolean;
-}
-export interface DashboardResponse {
-  user: string;
-  mode: string;
-  demo: DashboardDemo;
-  personal: DashboardPersonal;
-  vault: DashboardVault;
-}
-export const getDashboard = (userId: string) =>
-  req<DashboardResponse>(`/api/dashboard?user=${encodeURIComponent(userId)}`);

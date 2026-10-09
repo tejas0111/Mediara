@@ -1,196 +1,129 @@
-import React from 'react';
-import { ApiError, clean, getExport, shortBlob, walruscan, type ExportFact, type ExportResponse } from '../api';
-import { navigate } from '../chat';
-import { Alert, Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Empty, FieldLabel, Input, Skeleton } from '../ui';
+import { useState } from 'react';
+import { ApiError, chat } from '../api';
+import { ChatResponse, shortBlob } from '../chat';
+import { Button, Card, CardContent, CardHeader, CardTitle, ScopeBadge, ShieldIcon } from '../ui';
 import './CompareView.css';
 
-const norm = (t: string) => clean(t).trim().toLowerCase();
+const SIDES = ['demo-day1', 'demo-day7', 'demo-mom'] as const;
 
-function FactList({ facts }: { facts: ExportFact[] }) {
-  if (facts.length === 0) {
-    return (
-      <Empty
-        title="No facts"
-        action={<Button size="sm" variant="primary" onClick={() => navigate('chat')}>Teach a fact in chat</Button>}
-      >
-        Nothing stored under these namespaces yet.
-      </Empty>
-    );
-  }
-  return (
-    <ul className="cmp-list">
-      {facts.map((f, i) => {
-        const short = shortBlob(f.blob_id);
-        const link = walruscan(f.blob_id);
-        return (
-          <li key={i} className="cmp-fact">
-            <span>{clean(f.text)}</span>
-            {short ? (
-              <span className="cmp-cite">
-                {' '}<code className="mono">{short}</code>
-                {link ? (
-                  <>
-                    {' '}<a href={link} target="_blank" rel="noreferrer">walruscan</a>
-                  </>
-                ) : null}
-              </span>
-            ) : null}
-          </li>
-        );
-      })}
-    </ul>
-  );
+interface SideResult {
+  res?: ChatResponse;
+  err?: string;
 }
 
-export default function CompareView({ userId }: { userId: string }) {
-  const [aId, setAId] = React.useState(userId || 'demo-mom');
-  const [bId, setBId] = React.useState('demo-mom');
-  const [a, setA] = React.useState<ExportResponse | null>(null);
-  const [b, setB] = React.useState<ExportResponse | null>(null);
-  const [compared, setCompared] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
+/**
+ * Before/after, live: the same question against two memory namespaces —
+ * an empty one versus a taught one. Memory is what changes the answer.
+ */
+export default function CompareView() {
+  const [left, setLeft] = useState<string>('demo-day1');
+  const [right, setRight] = useState<string>('demo-day7');
+  const [question, setQuestion] = useState('Can she take ibuprofen for her headache?');
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<{ a: SideResult; b: SideResult } | null>(null);
 
-  // The left box follows the signed-in user; switching account re-points it.
-  React.useEffect(() => {
-    setAId(userId || 'demo-mom');
-  }, [userId]);
+  const run = async () => {
+    if (!question.trim() || busy) return;
+    setBusy(true);
+    setResults(null);
+    const ask = async (u: string): Promise<SideResult> => {
+      try {
+        return { res: await chat(u, question.trim()) };
+      } catch (e) {
+        return { err: e instanceof ApiError ? e.message : 'Unavailable' };
+      }
+    };
+    const [a, b] = await Promise.all([ask(left), ask(right)]);
+    setResults({ a, b });
+    setBusy(false);
+  };
 
-  const compare = React.useCallback(async (x: string, y: string) => {
-    const nx = x.trim();
-    const ny = y.trim();
-    if (!nx || !ny) {
-      setError('Type two namespace names to compare — for example your user id and demo-mom.');
-      setA(null);
-      setB(null);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const [ra, rb] = await Promise.all([getExport(nx), getExport(ny)]);
-      setA(ra);
-      setB(rb);
-      setCompared(true);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'request failed');
-      setA(null);
-      setB(null);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    compare(aId, bId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const setA2 = new Set((a?.facts ?? []).map((f) => norm(f.text)));
-  const setB2 = new Set((b?.facts ?? []).map((f) => norm(f.text)));
-  const shared = (a?.facts ?? []).filter((f) => setB2.has(norm(f.text)));
-  const uniqueA = (a?.facts ?? []).filter((f) => !setB2.has(norm(f.text)));
-  const uniqueB = (b?.facts ?? []).filter((f) => !setA2.has(norm(f.text)));
+  const column = (label: string, r: SideResult | undefined) => (
+    <Card className="cmp-col">
+      <CardHeader>
+        <CardTitle>{label}</CardTitle>
+        <ScopeBadge scope="demo" />
+      </CardHeader>
+      <CardContent>
+        {!r && <p className="view-empty">Waiting…</p>}
+        {r?.err && <p className="view-empty">{r.err}</p>}
+        {r?.res && (
+          <>
+            {/^STOP\b/.test(r.res.reply) && (
+              <div className="cmp-verdict stop">
+                <ShieldIcon /> STOP
+              </div>
+            )}
+            {/^CAUTION\b/.test(r.res.reply) && (
+              <div className="cmp-verdict caution">CAUTION</div>
+            )}
+            <p className="cmp-reply">
+              {r.res.reply.replace(/^(STOP|CAUTION)\s*[—–-]\s*/, '')}
+            </p>
+            {(r.res.recalledMeta?.length ?? 0) > 0 && (
+              <div className="cmp-sources">
+                Recalled ({r.res.recalledMeta!.length}):
+                <ul>
+                  {r.res.recalledMeta!.map((m, i) => (
+                    <li key={i}>
+                      {m.text}
+                      {m.blobId && <code className="blob">{shortBlob(m.blobId)}</code>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
 
   return (
     <div className="cmp-wrap">
-      <p className="eyebrow">Namespaces</p>
-      <h2 className="cmp-title">Compare namespaces</h2>
-      <p className="cmp-hint">
-        Compare two memory namespaces side by side. Shared facts and per-namespace facts each cite their blob receipts.
+      <h2 className="cmp-title">Demo Day 1 vs Day 7 — shared premade data</h2>
+      <p className="view-note">
+        <ScopeBadge scope="demo" /> Premade shared profile — nothing here is
+        yours. One question, two memories. Day 1 knows nothing; Day 7 has been
+        taught. The difference in the answer is the product.
       </p>
-      <p className="cmp-hint">
-        In plain words: the project needs at least 3 people with 10 memories each.
-        Type your user id on the left and demo-mom on the right to check your side —
-        nothing from one side should appear on the other.
-      </p>
-      <form
-        className="cmp-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          compare(aId, bId);
-        }}
-      >
-        <div className="cmp-field">
-          <FieldLabel htmlFor="cmp-a">Namespace A</FieldLabel>
-          <Input id="cmp-a" value={aId} onChange={(e) => setAId(e.target.value)} placeholder="demo-mom" />
+
+      <div className="cmp-controls">
+        <select value={left} onChange={(e) => setLeft(e.target.value)} aria-label="Left memory">
+          {SIDES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <span className="cmp-vs">vs</span>
+        <select value={right} onChange={(e) => setRight(e.target.value)} aria-label="Right memory">
+          {SIDES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="cmp-ask">
+        <input
+          className="input"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          aria-label="Question"
+        />
+        <Button variant="primary" onClick={run} disabled={busy}>
+          {busy ? 'Asking…' : 'Ask both'}
+        </Button>
+      </div>
+
+      {results && (
+        <div className="cmp-cols">
+          {column(left, results.a)}
+          {column(right, results.b)}
         </div>
-        <div className="cmp-field">
-          <FieldLabel htmlFor="cmp-b">Namespace B</FieldLabel>
-          <Input id="cmp-b" value={bId} onChange={(e) => setBId(e.target.value)} placeholder="demo-day7" />
-        </div>
-        <div className="cmp-actions">
-          <Button type="submit" variant="primary" disabled={loading}>
-            {loading ? 'Comparing…' : 'Compare'}
-          </Button>
-        </div>
-      </form>
-      <p className="cmp-hint cmp-hint-sm">Tip: namespaces are per user — your id is already in the left box. Both boxes need a name; empty input is an error, not a silent default.</p>
-
-      {loading && !compared ? (
-        <div aria-busy="true">
-          <Skeleton style={{ height: 120 }} />
-          <Skeleton style={{ height: 120 }} />
-        </div>
-      ) : null}
-
-      {error ? (
-        <Alert variant="danger">
-          <p style={{ margin: 0 }}>Could not compare these namespaces: {error}. Check the names and retry.</p>
-          <div style={{ marginTop: 10 }}>
-            <Button size="sm" onClick={() => compare(aId, bId)}>Retry</Button>
-          </div>
-        </Alert>
-      ) : null}
-
-      {compared && !loading && a && b ? (
-        <>
-          <p className="cmp-hint">Ready: {a.facts.length + b.facts.length} memories stored across both namespaces.</p>
-          <div className="cmp-counts">
-            <Badge variant="default">Shared: {shared.length}</Badge>
-            <Badge variant="default">Only in {a.user}: {uniqueA.length}</Badge>
-            <Badge variant="default">Only in {b.user}: {uniqueB.length}</Badge>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Shared facts ({shared.length})</CardTitle>
-              <CardDescription>Facts present in both namespaces</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <FactList facts={shared} />
-            </CardContent>
-          </Card>
-
-          <div className="cmp-grid">
-            <Card>
-              <CardHeader>
-                <CardTitle><span className="mono">{a.user}</span> ({a.facts.length})</CardTitle>
-                <CardDescription>Namespace {a.user} · Blob count: {a.blobCount} · unique: {uniqueA.length} · {a.mode}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <FactList facts={a.facts} />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle><span className="mono">{b.user}</span> ({b.facts.length})</CardTitle>
-                <CardDescription>Namespace {b.user} · Blob count: {b.blobCount} · unique: {uniqueB.length} · {b.mode}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <FactList facts={b.facts} />
-              </CardContent>
-            </Card>
-          </div>
-        </>
-      ) : compared && !loading && (!a || !b) && !error ? (
-        <Empty
-          title="No comparison data"
-          action={<Button size="sm" variant="primary" onClick={() => compare(aId, bId)}>Retry</Button>}
-        >
-          Both namespaces came back empty — check the names and retry.
-        </Empty>
-      ) : null}
+      )}
     </div>
   );
 }
