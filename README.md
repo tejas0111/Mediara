@@ -35,7 +35,7 @@ git clone https://github.com/tejas0111/mediara.git
 cd mediara/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 709 checks (317 core + 81 wallet + 79 route + 27 stream + 4 brandguard + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 72 hardening + 4 loghygiene), no network
+npm test                    # 729 checks (317 core + 86 wallet incl. 15 onboarding regressions + 79 route + 27 stream + 4 brandguard + 12 stats + 8 db + 15 window + 14 budget-keys + 15 onboarding + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 72 hardening + 4 loghygiene), no network
 npm run dev                 # server on :3001
 ```
 

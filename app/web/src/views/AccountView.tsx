@@ -383,14 +383,9 @@ export default function AccountView({
                 Mainnet
               </Badge>
             ) : (
-              <div className="seg" role="group" aria-label="Environment">
-                <button type="button" className="seg-btn on">
-                  Demo
-                </button>
-                <button type="button" className="seg-btn" onClick={onTryMainnet}>
-                  Mainnet
-                </button>
-              </div>
+              <button type="button" className="seg-btn" onClick={onTryMainnet}>
+                Retry Mainnet
+              </button>
             )}
           </div>
           <p className="ap-note">

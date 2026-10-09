@@ -19,27 +19,16 @@ import {
   walletStatus,
   WalletStatus,
 } from './api';
-import { Button, Card, CardContent, CardHeader, CardTitle } from './ui';
+import { Button, Card, CardContent, CardHeader, CardTitle, Badge, CheckIcon } from './ui';
 import './WalletView.css';
 
+/* One linear story: exactly one primary action is visible at a time, and the
+   stepper names only the steps THIS wallet can still need. The vault state
+   comes from GET /api/wallet/status (read-only), so a returning owner is
+   never walked through "Vault setup" when their vault only needs — or
+   needed — one signature. */
 const shortAddress = (a?: string | null): string =>
   a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '';
-
-/* One linear story: exactly one primary action is visible at a time. The
-   stepper names the four states; the sentence below it says what THIS step
-   does and what comes next. */
-const STEPS = ['Connect wallet', 'Sign message', 'Vault setup', 'Done'];
-
-const STEP_HELP = [
-  'Connect a Sui wallet — it becomes the key to your private vault. Next, you sign one message.',
-  'Sign one message to prove the wallet is yours — nothing is spent. Next, your vault is created.',
-  'Create your vault — private memories save here from now on. Next, you are done and can chat.',
-  'Everything is ready — teach a memory in chat and every answer is checked against it.',
-];
-
-/** Server vault-setup phases mapped to their position in the story. */
-const phaseStep = (phase: string | null): number =>
-  phase === 'create' ? 1 : phase === 'link' ? 2 : phase === 'complete' ? 3 : 2;
 
 interface StepAction {
   label: string;
@@ -472,23 +461,73 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
     !status?.retiredDeployment &&
     !pendingPhase;
 
-  const stepIdx = !account?.address ? 0 : !signedIn ? 1 : ready ? 3 : 2;
+  /* The only step this wallet actually needs, decided from live status — the
+     same decision the onboarding modal makes. Nothing is offered until the
+     server has answered, so a stale or unknown state can never present a
+     setup step that isn't real. */
+  const statusKnown = !!status;
+  const vaultStep = !statusKnown
+    ? 'checking'
+    : status?.retiredDeployment
+      ? 'fresh'
+      : pendingPhase
+        ? 'resume'
+        : status?.needsRelink
+          ? 'link'
+          : status?.onboarded
+            ? 'ready'
+            : 'create';
+
+  const STEPS = !signedIn || vaultStep === 'checking' || vaultStep === 'ready'
+    ? ['Connect wallet', 'Sign in', 'Ready']
+    : vaultStep === 'link'
+      ? ['Sign in', 'Connect vault', 'Ready']
+      : vaultStep === 'resume'
+        ? ['Sign in', 'Finish setup', 'Ready']
+        : ['Sign in', 'Create vault', 'Connect vault', 'Ready'];
+
+  const stepIdx = !account?.address
+    ? 0
+    : !signedIn || vaultStep === 'checking'
+      ? 1
+      : vaultStep === 'ready'
+        ? STEPS.length - 1
+        : 1;
 
   const statusLine = !account?.address
     ? 'No wallet connected yet.'
     : !signedIn
       ? 'Wallet connected — one signature left.'
-      : status?.needsRelink
-        ? 'Vault link broken — your sign-in works but saving is paused'
-        : status?.retiredDeployment
-          ? "This vault can't be reused — start a fresh one below."
-          : pendingPhase
-            ? 'Vault setup paused — continue below.'
-            : !status?.onboarded
-              ? 'No vault yet'
-              : 'Vault ready — memories save here';
+      : vaultStep === 'checking'
+        ? 'Checking your vault…'
+        : vaultStep === 'link'
+          ? 'Your vault exists — one signature connects it.'
+          : vaultStep === 'fresh'
+            ? "This vault can't be reused — start a fresh one below."
+            : vaultStep === 'resume'
+              ? 'Vault setup paused — continue below.'
+              : vaultStep === 'ready'
+                ? 'Vault ready — memories save here'
+                : 'No vault yet';
 
   const addr = status?.address ?? account?.address;
+
+  /* One sentence per state — never a fixed four-step script. */
+  const stepHelp = !account?.address
+    ? 'Connect a Sui wallet — it becomes the key to your private vault. Next, you sign one message.'
+    : !signedIn
+      ? 'One signature proves the wallet is yours — nothing is spent. Then we check what your vault needs.'
+      : vaultStep === 'checking'
+        ? 'Checking what this wallet needs before anything else…'
+        : vaultStep === 'link'
+          ? 'Your memory vault already exists — one signature reconnects this browser to it. Nothing is created and nothing is spent.'
+          : vaultStep === 'fresh'
+            ? 'This wallet has a vault from an older setup that can no longer be opened. Starting a fresh one keeps this wallet key and forgets the dead vault — two signatures.'
+            : vaultStep === 'resume'
+              ? 'Your vault setup stopped halfway — one press finishes the step that is still pending.'
+              : vaultStep === 'ready'
+                ? 'Everything is ready — teach a memory in chat and every answer is checked against it.'
+                : 'One press creates your private vault and switches saving on — your wallet pays the two transactions.';
 
   return (
     <div className="wallet-wrap">
@@ -512,7 +551,7 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
           </li>
         ))}
       </ol>
-      <p className="step-help">{STEP_HELP[stepIdx]}</p>
+      <p className="step-help">{stepHelp}</p>
 
       {signedIn && addr && (
         <p className="wallet-status">
@@ -591,7 +630,7 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
                 ? 'Approve in your wallet'
                 : pending
                   ? 'Repairing…'
-                  : 'Repair my vault'}
+                  : 'Start a fresh vault'}
             </Button>
           </CardContent>
         </Card>
@@ -600,19 +639,20 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
       {signedIn && status?.needsRelink && !status?.retiredDeployment && (
         <Card>
           <CardHeader>
-            <CardTitle>Vault link broken</CardTitle>
+            <CardTitle>Connect your existing vault</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="muted">
-              The saved connection to your vault stopped working — your sign-in
-              still works, but new memories can't be saved until you re-link.
+              Your memory vault already exists — this browser just needs to
+              reconnect to it. One signature, nothing is created and nothing is
+              spent; your memories are already there.
             </p>
             <Button variant="primary" onClick={linkRepair} disabled={!!pending}>
               {pending === 'relink'
-                ? 'Re-linking…'
+                ? 'Connecting…'
                 : pending === 'approve'
                   ? 'Approve in your wallet'
-                  : 'Re-link vault'}
+                  : 'Connect my vault'}
             </Button>
           </CardContent>
         </Card>
@@ -621,7 +661,7 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
       {signedIn && pendingPhase && !status?.retiredDeployment && (
         <Card>
           <CardHeader>
-            <CardTitle>Setup paused</CardTitle>
+            <CardTitle>Finish vault setup</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="muted">
@@ -633,13 +673,16 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
                 ? pending === 'approve'
                   ? 'Approve in your wallet'
                   : 'Working…'
-                : `Setup stopped at step ${phaseStep(pendingPhase)} — Continue`}
+                : pendingPhase === 'create'
+                  ? 'Continue — create the vault'
+                  : 'Continue — connect the vault'}
             </Button>
           </CardContent>
         </Card>
       )}
 
       {signedIn &&
+        statusKnown &&
         !status?.onboarded &&
         !status?.needsRelink &&
         !status?.retiredDeployment &&
@@ -662,6 +705,27 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
             </CardContent>
           </Card>
         )}
+
+      {ready && (
+        <Card className="vault-ready">
+          <CardHeader>
+            <CardTitle>Vault ready</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="ready-line">
+              <CheckIcon />
+              <div>
+                <b>Memories save to your private vault.</b>
+                <p className="muted">
+                  Teach me a medication, an allergy, or a routine in chat and
+                  every future answer is checked against it.
+                </p>
+              </div>
+              <Badge tone="ok">Personal vault</Badge>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {signedIn && (
         <div className="btn-row signout-row">

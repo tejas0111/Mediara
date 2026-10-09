@@ -513,9 +513,15 @@ export default function App() {
       <Badge tone="ok" title="real Walrus memory">
         Mainnet
       </Badge>
-    ) : (
+    ) : envMode === 'local' ? (
       <Badge tone="neutral" title="browser-side stand-in — no chain">
         Local demo
+      </Badge>
+    ) : (
+      // Never assert a state before health resolves: a cold mainnet load used
+      // to flash "Local demo" at the top of the flagship view.
+      <Badge tone="neutral" title="checking memory backend">
+        Checking…
       </Badge>
     );
 
@@ -716,14 +722,9 @@ export default function App() {
           {envBadge}
 
           {envMode !== 'mainnet' && (
-            <div className="seg" role="group" aria-label="Environment">
-              <button type="button" className="seg-btn on">
-                Demo
-              </button>
-              <button type="button" className="seg-btn" onClick={tryMainnet}>
-                Mainnet
-              </button>
-            </div>
+            <button type="button" className="seg-btn" aria-label="Environment: retry Mainnet" onClick={tryMainnet}>
+              Retry Mainnet
+            </button>
           )}
 
           <div className="side-grow" />

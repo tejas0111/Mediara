@@ -56,8 +56,10 @@ export default function DemoView(props: Omit<ChatViewProps, 'demo'>) {
     <div className="demo-outer">
       <p className="view-note demo-cap" role="status">
         <ScopeBadge scope="demo" />{' '}
-        {unavailable || used == null ? (
+        {unavailable ? (
           'Shared demo capacity unavailable.'
+        ) : used == null ? (
+          'Checking demo capacity…'
         ) : (
           <>
             Shared demo messages used {used}/{cap ?? '—'}. The walkthrough

@@ -115,6 +115,34 @@ export async function prepareCreateAccount(address) {
     // pointing the user back at this same create call.
     throw clientError('This wallet already has a linked memory vault — use the link step (or re-link) instead of create.', 409, { alreadyLinked: true });
   }
+  // ALREADY LINKED ON-CHAIN (discovery missed it: no local row, event lag, a
+  // host that came back on an empty disk)? Check BEFORE building: a create tx
+  // for a CURRENT-package account that already exists can only abort, so
+  // discovering it here turns a doomed build into the same actionable 409 the
+  // abort would have produced — minus the wasted transaction and any second
+  // vault. A *retired*-typed account must NOT match: that wallet has to create
+  // fresh on the live deployment, and short-circuiting here would loop the
+  // repair back onto itself.
+  let existing = null;
+  try {
+    existing = MODE === 'mainnet' ? await accountForOwner(address) : null;
+  } catch {
+    existing = null; // discovery is advisory; the build abort still routes to link
+  }
+  if (existing?.accountId) {
+    let current = false;
+    try {
+      const chk = await verifyAccount(existing.accountId, {});
+      current = chk.ok && String(chk.type || '').startsWith(PACKAGE_ID);
+    } catch { /* unreadable — not proof of a usable vault */ }
+    if (current) {
+      throw clientError(
+        'This wallet already owns a memory vault onchain — use the link step to connect it instead of creating (close this, then press "Connect my vault" in the Wallet view: one signature, nothing new is created).',
+        409,
+        { needsRelink: true },
+      );
+    }
+  }
   const delegate = await generateDelegateKey();
   const delegatePublicKeyHex = Buffer.from(delegate.publicKey).toString('hex');
   const tx = buildCreateAccountTx(address);
@@ -132,7 +160,7 @@ export async function prepareCreateAccount(address) {
     // it. needsRelink stays the machine-readable contract.
     if (/create_account.*moveabort|moveabort.*create_account/i.test(String((e && e.message) || e))) {
       throw clientError(
-        'This wallet already owns a memory vault onchain — use the link step to connect it instead of creating (close this, then press "Re-link vault" in the Wallet view: one signature, nothing new is created).',
+        'This wallet already owns a memory vault onchain — use the link step to connect it instead of creating (close this, then press "Connect my vault" in the Wallet view: one signature, nothing new is created).',
         409,
         { needsRelink: true },
       );
@@ -281,7 +309,13 @@ export async function completeOnboarding(address, signatureBase64) {
     // indexer lag, never a bricked vault — retryable, with the reason shown.
     if (!check.ok) throw clientError(`Account verification failed (${check.reason}) — the transaction landed; retry /api/wallet/status in a few seconds`, 409);
     markAccountLinked(address, account.accountId);
-    upsertUser({ address, pendingPhase: null, pendingTxBytes: null });
+    // The account exists, but the delegate is NOT registered on it yet: the
+    // vault cannot save anything until the link transaction lands. Clearing
+    // the pending marker here made walletStatus report onboarded for a
+    // half-built vault, so every surface hid the only action left and the
+    // owner discovered the gap later, when a save failed. Keep the marker so
+    // the next step (link) is honest and resumable.
+    upsertUser({ address, pendingPhase: 'link', pendingTxBytes: null });
     return { stage: 'created', accountId: account.accountId, digest, nextStep: 'link' };
   }
 

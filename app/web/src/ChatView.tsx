@@ -11,6 +11,7 @@ import {
   ApiError,
   chat,
   chatStream,
+  defaultModelLabel,
   getProvider,
   getSavedModel,
   ModelInfo,
@@ -841,7 +842,7 @@ export default function ChatView(props: ChatViewProps) {
                   </div>
                 )}
 
-              {!m.error && (
+              {!m.error && !/confirm with your doctor/i.test(m.text) && (
                 <div className="disc">
                   Confirm with your doctor — this is not medical advice.
                 </div>
@@ -994,11 +995,13 @@ export default function ChatView(props: ChatViewProps) {
                 saveModel(e.target.value);
               }}
             >
-              {displayList.length === 0 && (
-                <option value="">
-                  {modelsErr ? 'Default model (list unavailable)' : 'Default model'}
-                </option>
-              )}
+              {/* An explicit "server default" option so the picker never lies:
+                  before the list loads (or with nothing saved) it shows this
+                  rather than the first model in the list, which is not the
+                  model actually answering. */}
+              <option value="">
+                {defaultModelLabel()}
+              </option>
               {displayList.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name ?? prettyModel(m.id)}

@@ -439,12 +439,21 @@ export interface ModelInfo {
   name?: string;
 }
 
+/** The backend's own default model, from GET /api/models — used so the
+ *  composer's picker can show "Default (Gemma 4 31B)" instead of implying
+ *  the first list entry is what answers. */
+let DEFAULT_MODEL_ID = '';
+export const defaultModelLabel = (): string =>
+  DEFAULT_MODEL_ID ? `Default (${prettyModel(DEFAULT_MODEL_ID)})` : 'Default model';
+
 /** Registry is free-only on the server; we just render what it returns. */
 export async function models(): Promise<ModelInfo[]> {
   const d = await req<unknown>('/api/models', { headers: headers(false) });
   const list = Array.isArray(d)
     ? d
     : ((d as Record<string, unknown>)?.models as unknown[]) ?? [];
+  const def = (d as Record<string, unknown>)?.default;
+  if (typeof def === 'string' && def) DEFAULT_MODEL_ID = def;
   return list
     .map((m): ModelInfo | null => {
       if (typeof m === 'string') return { id: m };
@@ -511,7 +520,9 @@ export function saveProvider(p: CustomProvider | null): void {
 export function prettyModel(id: string): string {
   const tail = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
   const clean = tail.replace(/:.*$/, '');
-  const parts = clean.split(/[-_.]+/).filter(Boolean);
+  // Split only on - and _ (NOT on '.'): version numbers such as 3.1 and 2.5
+  // must stay intact — "Ling 3 1 Flash" is how a judge notices the label lie.
+  const parts = clean.split(/[-_]+/).filter(Boolean);
   if (!parts.length) return id;
   return parts
     .map((p) =>

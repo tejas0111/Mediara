@@ -17,6 +17,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { TransactionDataBuilder } from '@mysten/sui/transactions';
+import { toBase58 } from '@mysten/sui/utils';
 
 const WALLET = '0x' + 'ab'.repeat(32);
 const PKG = '0xe7c16fbea0560e7057e2bf7422feaa4fb313749fc69c9e9092fac7a33b81d7f5'; // current
@@ -24,11 +26,61 @@ const RETIRED_PKG = '0xcee7a6fd8de52ce645c38332bde23d4a30fd9426bc4681409733dd509
 const ACCOUNT = '0x' + 'cd'.repeat(32);
 const RETIRED_ACCOUNT = '0x' + 'ee'.repeat(32);
 const DELEGATE_ADDRESS = '0x' + '12'.repeat(32);
+const REGISTRY_ID = '0x8bf82c9e09e36b8d1c38298f68b7cb68e7b8762887e7592add9986d5e9cf199f';
 // Exact SDK wording seen onchain when create_account is called a second time.
 const CREATE_ABORT =
   "Transaction resolution failed: MoveAbort in 1st command, abort code: 3, in '0x9bb69df6fab877f81c97509523204191d9f2e356af8add901d2886e1dc445650::account::create_account' (instruction 46)";
 
 const obj = (address, repr, json) => ({ address, asMoveObject: { contents: { type: { repr }, json } } });
+
+// A BCS TransactionData the SDK can actually resolve: the stub answers
+// simulateTransaction with it, so a *successful* build is reachable in tests.
+// (The old 'AAAA' placeholder made every real build die on a ULEB decode
+// error, which is why no test could ever walk create → sign → submit.) The two
+// object inputs mirror what buildCreateAccountTx asks for: the shared Registry
+// object and the Clock.
+const RESOLVED_TX_B64 = Buffer.from(
+  new TransactionDataBuilder({
+    version: 2,
+    sender: WALLET,
+    expiration: { None: true },
+    gasData: {
+      payment: [{ digest: toBase58(new Uint8Array(32).fill(7)), objectId: '0x' + '11'.repeat(32), version: 1 }],
+      owner: WALLET,
+      price: 1n,
+      budget: 1000n,
+    },
+    inputs: [
+      { Object: { SharedObject: { objectId: REGISTRY_ID, initialSharedVersion: '1', mutable: true } } },
+      { Object: { SharedObject: { objectId: '0x6', initialSharedVersion: '1', mutable: false } } },
+    ],
+    commands: [],
+  }).build(),
+).toString('base64');
+
+// The same, shaped for buildLinkDelegateTx's inputs: the account object, the
+// Registry object, the delegate key bytes, the label, then the Clock.
+const LINK_RESOLVED_TX_B64 = Buffer.from(
+  new TransactionDataBuilder({
+    version: 2,
+    sender: WALLET,
+    expiration: { None: true },
+    gasData: {
+      payment: [{ digest: toBase58(new Uint8Array(32).fill(7)), objectId: '0x' + '11'.repeat(32), version: 1 }],
+      owner: WALLET,
+      price: 1n,
+      budget: 1000n,
+    },
+    inputs: [
+      { Object: { SharedObject: { objectId: ACCOUNT, initialSharedVersion: '1', mutable: true } } },
+      { Object: { SharedObject: { objectId: REGISTRY_ID, initialSharedVersion: '1', mutable: true } } },
+      { Pure: { bytes: Array.from({ length: 32 }, (_, i) => i) } },
+      { Pure: { bytes: Array.from(new TextEncoder().encode('DoseDaughter')) } },
+      { Object: { SharedObject: { objectId: '0x6', initialSharedVersion: '1', mutable: false } } },
+    ],
+    commands: [],
+  }).build(),
+).toString('base64');
 
 // One knob object the stub reads per request; each test flips what it needs.
 const mode = {
@@ -37,6 +89,7 @@ const mode = {
   objects: [], // owned objects for accountForOwner
   type: `${PKG}::account::MemWalAccount`, // type repr for verifyAccount
   delegates: [], // delegate_keys on the account object
+  failAll: false, // every GraphQL answer fails — proves a healthy status never calls out
 };
 
 const stub = http.createServer((req, res) => {
@@ -49,6 +102,9 @@ const stub = http.createServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(payload));
     };
+    // Offline switch: a healthy wallet's status must not need the chain at
+    // all, so every answer failing cannot change what a complete row reports.
+    if (mode.failAll) return json({ errors: [{ message: 'stub offline' }] });
     // Order matters: the submit mutation document also mentions executeTransaction.
     if (/executeTransaction\s*\(/.test(q)) {
       if (mode.execute === 'failed') {
@@ -71,18 +127,24 @@ const stub = http.createServer((req, res) => {
       });
     }
     if (/simulateTransaction/.test(q)) {
-      // Only the create build aborts (the vault already exists onchain); a
-      // link build resolves, so the link step stays reachable after that 409.
       const wantsCreate = /create_account/.test(body);
-      if (wantsCreate && mode.build !== 'ok') return json({ errors: [{ message: CREATE_ABORT }] });
-      if (!wantsCreate && mode.build === 'abort-all') return json({ errors: [{ message: CREATE_ABORT }] });
-      return json({
-        data: {
-          simulateTransaction: {
-            effects: { transaction: { transactionBcs: 'AAAA', status: 'SUCCESS' } },
+      if (mode.build === 'ok') {
+        // A successful build, shaped like the inputs this builder asked for:
+        // create resolves against Registry+Clock, link against the account.
+        return json({
+          data: {
+            simulateTransaction: {
+              effects: { transaction: { transactionBcs: wantsCreate ? RESOLVED_TX_B64 : LINK_RESOLVED_TX_B64, status: 'SUCCESS' } },
+            },
           },
-        },
-      });
+        });
+      }
+      // Any other setting means the build fails. The create build fails with
+      // the exact SDK MoveAbort wording seen onchain when create_account is
+      // called a second time; every other build fails as a transient relayer
+      // error (the actionable-retry path).
+      if (wantsCreate) return json({ errors: [{ message: CREATE_ABORT }] });
+      return json({ errors: [{ message: 'stub: relayer could not build the transaction' }] });
     }
     if (/objects\(/.test(q)) return json({ data: { objects: { nodes: mode.objects } } });
     if (/object\(address/.test(q)) {
@@ -119,7 +181,7 @@ process.env.DD_DAY_LIMIT_WALLET = '10000';
 
 const { default: app } = await import('./server.js');
 const { issueSession } = await import('./walletAuth.js');
-const { upsertUser, clearUser } = await import('./userRegistry.js');
+const { upsertUser, clearUser, getUser } = await import('./userRegistry.js');
 
 let server;
 let base;
@@ -143,6 +205,7 @@ beforeEach(() => {
   mode.objects = [];
   mode.type = `${PKG}::account::MemWalAccount`;
   mode.delegates = [];
+  mode.failAll = false;
 });
 
 const h = () => ({ Cookie: `dd_session=${issueSession(WALLET)}` });
@@ -369,4 +432,135 @@ test('a RETIRED-typed account still offers the fresh-vault path', async () => {
   assert.equal(r.status, 409);
   const body = await r.json();
   assert.equal(body.retiredDeployment, true, 'a truly retired-typed account still offers repair');
+});
+
+// --- Regression: the "sign, then an unnecessary step" complaint (wallet 0xf355…) ---
+// The onboarding surfaces read GET /api/wallet/status and show exactly one
+// action for its answer. These pin the three answers a returning owner can
+// get, so no client can walk a vault owner through a create that cannot work.
+
+test('status: an onchain-linked vault whose local row is lost reports needsRelink with an alreadyLinked-able link', async () => {
+  // Fresh container: no local row. The account (and a delegate) live onchain.
+  mode.objects = [obj(ACCOUNT, `${PKG}::account::MemWalAccount`, { account_id: ACCOUNT, owner: WALLET })];
+  mode.type = `${PKG}::account::MemWalAccount`;
+  mode.delegates = [DELEGATE_ADDRESS];
+  clearUser(WALLET);
+  const st = await statusOf();
+  assert.equal(st.needsRelink, true, 'an account without a stored delegate asks for LINK, never create');
+  assert.equal(st.retiredDeployment, false, 'a current-package account is linkable');
+  assert.equal(st.onboarded, false);
+  assert.equal(st.accountId, ACCOUNT);
+  // One link press reconnects it — and when the stored delegate IS the one
+  // registered onchain, the server must answer without prompting the wallet.
+  upsertUser({
+    address: WALLET,
+    accountId: ACCOUNT,
+    delegatePrivateKey: 'ab'.repeat(32),
+    delegatePublicKey: 'cd'.repeat(32),
+    delegateAddress: DELEGATE_ADDRESS,
+    pendingPhase: null,
+    pendingTxBytes: null,
+  });
+  const r = await post('/api/wallet/onboard/link', {});
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).alreadyLinked, true, 'nothing to sign: the delegate is already registered');
+  const after = await statusOf();
+  assert.equal(after.onboarded, true, 'the vault is usable without a second wallet prompt');
+  assert.equal(after.needsRelink, false);
+});
+
+test('status: a fully onboarded wallet reports ready with no pending phase — and never calls out', async () => {
+  mode.objects = [obj(ACCOUNT, `${PKG}::account::MemWalAccount`, { account_id: ACCOUNT, owner: WALLET })];
+  mode.type = `${PKG}::account::MemWalAccount`;
+  mode.delegates = [DELEGATE_ADDRESS];
+  seedLinked();
+  mode.failAll = true; // the whole chain is unreachable…
+  const st = await statusOf();
+  assert.equal(st.onboarded, true, 'a complete row is answered from the registry alone');
+  assert.equal(st.needsRelink, false);
+  assert.equal(st.pendingPhase, null, 'no step is left pending for a ready wallet');
+  assert.equal(st.retiredDeployment, false);
+});
+
+test('create auto-detects an existing CURRENT-package vault before it builds a doomed tx', async () => {
+  // build 'ok': a fresh create WOULD resolve, so a 409 can only come from
+  // discovery — the wallet is never offered a transaction that cannot land.
+  mode.build = 'ok';
+  mode.execute = 'ok';
+  mode.objects = [obj(ACCOUNT, `${PKG}::account::MemWalAccount`, { account_id: ACCOUNT, owner: WALLET })];
+  mode.type = `${PKG}::account::MemWalAccount`;
+  mode.delegates = [];
+  clearUser(WALLET);
+  const r = await post('/api/wallet/onboard/create', {});
+  assert.equal(r.status, 409);
+  const body = await r.json();
+  assert.equal(body.needsRelink, true, 'the previous vault is detected before any transaction is built');
+  assert.deepEqual(Object.keys(body).sort(), ['error', 'needsRelink']);
+  // That flag is the client's route to the one link signature that reconnects.
+  const st = await statusOf();
+  assert.equal(st.needsRelink, true);
+  assert.equal(st.retiredDeployment, false);
+});
+
+test('a RETIRED-only vault still creates fresh — create never short-circuits into a relink loop', async () => {
+  // The retired twin is discoverable but unusable: create must fall through
+  // to a fresh vault on the live package, or "start fresh" can never finish.
+  mode.build = 'ok';
+  mode.execute = 'ok';
+  mode.objects = [obj(RETIRED_ACCOUNT, `${RETIRED_PKG}::account::MemWalAccount`, { account_id: RETIRED_ACCOUNT, owner: WALLET })];
+  mode.type = `${RETIRED_PKG}::account::MemWalAccount`;
+  mode.delegates = [];
+  clearUser(WALLET);
+  const r = await post('/api/wallet/onboard/create', {});
+  assert.equal(r.status, 200, 'a retired-typed account must not block the fresh create');
+  assert.ok((await r.json()).txBytesBase64, 'the fresh create is offered to the wallet');
+  // …and the row left behind still reports the twin as retired.
+  const st = await statusOf();
+  assert.equal(st.retiredDeployment, true);
+});
+
+test('a fresh wallet walks create → link with one signature per step and no double-charge', async () => {
+  // The minimal fresh path the onboarding modal/view now runs: two distinct
+  // transactions, each signed once, then the vault reports ready.
+  mode.build = 'ok';
+  mode.execute = 'ok';
+  mode.objects = []; // no account onchain yet — that is what makes this wallet fresh
+  mode.type = `${PKG}::account::MemWalAccount`;
+  mode.delegates = [];
+  clearUser(WALLET);
+  // Step 1 — create.
+  const c = await post('/api/wallet/onboard/create', {});
+  assert.equal(c.status, 200);
+  const created = await c.json();
+  assert.ok(created.txBytesBase64, 'create hands the wallet a transaction to sign');
+  // The account now exists onchain — discovery can see it from here on.
+  mode.objects = [obj(ACCOUNT, `${PKG}::account::MemWalAccount`, { account_id: ACCOUNT, owner: WALLET })];
+  const d1 = await post('/api/wallet/onboard/complete', { signature: 'S'.repeat(88) });
+  assert.equal(d1.status, 200);
+  const done1 = await d1.json();
+  assert.equal(done1.stage, 'created');
+  assert.equal(done1.nextStep, 'link', 'the client is told the link step is next');
+  // …and the vault is NOT usable yet: reporting ready here is what used to
+  // hide the link step and break saving later.
+  const mid = await statusOf();
+  assert.equal(mid.onboarded, false, 'a create-only vault must never report ready');
+  assert.equal(mid.pendingPhase, 'link', 'the outstanding step is named');
+  // Step 2 — link the delegate the create row already minted.
+  const l = await post('/api/wallet/onboard/link', {});
+  assert.equal(l.status, 200);
+  const linked = await l.json();
+  assert.ok(linked.txBytesBase64, 'link hands the wallet its own transaction');
+  assert.notEqual(linked.txBytesBase64, created.txBytesBase64, 'two steps, two transactions — the wallet is never charged twice');
+  // The chain sees the delegate the link registered, so completion verifies.
+  const row = getUser(WALLET);
+  assert.ok(row?.delegateAddress, 'the link step reuses the stored delegate');
+  mode.delegates = [row.delegateAddress];
+  const d2 = await post('/api/wallet/onboard/complete', { signature: 'S'.repeat(88) });
+  assert.equal(d2.status, 200);
+  assert.equal((await d2.json()).stage, 'linked');
+  const st = await statusOf();
+  assert.equal(st.onboarded, true, 'the fresh vault is usable after both signatures');
+  assert.equal(st.needsRelink, false);
+  assert.equal(st.pendingPhase, null);
+  assert.equal(st.retiredDeployment, false);
 });

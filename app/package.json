@@ -9,7 +9,7 @@
   "license": "MIT",
   "name": "mediara",
   "scripts": {
-    "test": "node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stream.test.js && node --test src/brandguard.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/window.test.js && node --test src/budget-keys.test.js && node --test src/frontend.test.js && node --test src/t3.test.js && node --test src/gatewave5.test.js && node --test src/gatewave8.test.js && node --test src/hardening.test.js && node --test src/loghygiene.test.js",
+    "test": "node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stream.test.js && node --test src/brandguard.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/window.test.js && node --test src/budget-keys.test.js && node --test src/walletOnboard.test.js && node --test src/frontend.test.js && node --test src/t3.test.js && node --test src/gatewave5.test.js && node --test src/gatewave8.test.js && node --test src/hardening.test.js && node --test src/loghygiene.test.js",
     "eval": "node src/eval.js",
     "stats": "node src/stats.js",
     "stats:live": "node src/stats.js -- --live",

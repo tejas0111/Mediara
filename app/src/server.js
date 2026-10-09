@@ -830,11 +830,11 @@ function combineSignals(signals) {
   }
   return c.signal;
 }
-async function streamLLM(system, userMessage, history = [], modelOverride, onToken, parentSignal = null) {
+async function streamLLM(system, userMessage, history = [], modelOverride, onToken, parentSignal = null, budgetMs = 15_000) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return { text: null, model: null, streamed: false };
   const models = freeModelChain(modelOverride);
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + Math.max(3000, budgetMs);
   for (const m of models) {
     if (Date.now() > deadline) break;
     if (parentSignal?.aborted) return { text: null, model: null, streamed: false };
@@ -910,7 +910,7 @@ function wholeReplyOf(raw) {
   } catch { return null; }
 }
 
-async function callLLM(system, userMessage, history = [], modelOverride) {
+async function callLLM(system, userMessage, history = [], modelOverride, budgetMs = 15_000) {
   // OpenRouter free-tier default (verified against the live /models free list;
   // all non-OpenAI/Anthropic, so Beyond-Big-Two eligible). Falls back to echo if no key.
   // Resilience: explicit max_tokens, then free-model fallback chain on 402/429
@@ -922,7 +922,7 @@ async function callLLM(system, userMessage, history = [], modelOverride) {
   let lastErr = '';
   // Overall budget across the whole chain so one stalled provider can't run for
   // 6 × 15s; the socket timeout is 120s, so the handler must return well before.
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + Math.max(3000, budgetMs);
   for (const m of models) {
     if (Date.now() > deadline) break;
     try {
@@ -1256,6 +1256,14 @@ async function handleChat(req, res, streaming) {
     // a dead socket. Non-stream passes no signal (unchanged behavior).
     const recallSignal = streamAbortCtrl ? streamAbortCtrl.signal : undefined;
     const recallOpts = recallSignal ? { signal: recallSignal } : {};
+    // The recap ("what do you remember?") needs the WHOLE namespace, not a
+    // query subset. Kick that read off alongside the main recall — same round,
+    // not a second one — so a recap turn stays inside the response budget.
+    const RECAP_RE = /\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i;
+    const isRecap = RECAP_RE.test(message);
+    const fullRecall = (!memoryOff && isRecap)
+      ? recallAllMeta(client, ALL_QUERIES, 25, recallOpts).catch(() => null)
+      : null;
     const rr = (!memoryOff || medShaped) ? await recallRelevantMeta(client, message, 25, recallOpts) : { facts: [], degraded: false };
     // Dead vault credential (the relayer 401s this wallet's delegate key):
     // retrying the same key can never succeed, so fail actionable (re-link)
@@ -1281,13 +1289,13 @@ async function handleChat(req, res, streaming) {
         : { label: 'Recall', detail: 'Memory is OFF for this turn (before/after demo) — recall and both guards skipped (not a medication-shaped turn).' })
       : { label: 'Recall', detail: `3 query angles (your words + allergy sweep + medication sweep) → ${guardFacts.length} candidate facts for the guards, top ${recalled.length} shown${rr.degraded ? ' (memory degraded — stale read)' : ''}.` });
     // "What do you remember?" must return the WHOLE namespace, not a query subset.
-    if (/\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message)) {
-      try { const full = await recallAllMeta(client, ALL_QUERIES, 25, recallOpts); if (full.facts.length) recalled = full.facts; } catch { /* keep the query recall */ }
+    if (fullRecall) {
+      try { const full = await fullRecall; if (full?.facts?.length) recalled = full.facts; } catch { /* keep the query recall */ }
     }
     // A memory recap ("what do you remember?") is not an advice question, so it
     // is exempt from the fail-closed below — but it must say UNREACHABLE,
     // never "I don't have any memories" (that would deny stored facts).
-    const isRecap = /\bwhat\s+do\s+you\s+(?:remember|know)\b|\bremember\s+about\b|\brecap\b|\bso\s+far\b|\bwhat\s+did\s+i\s+(?:tell|say)\b/i.test(message);
+    // isRecap already computed above (with the concurrent full-namespace read).
     // FAIL CLOSED: if memory is unreachable we cannot verify allergies or
     // interactions, so refuse medication questions rather than answer unguarded.
     if (rr.degraded && looksLikeMedicationQuestion(message) && !isRecap) {
@@ -1431,7 +1439,7 @@ async function handleChat(req, res, streaming) {
         // provider body / tail suffix) bypass this and stay single honest
         // tokens via emitToken below.
         const wordSplit = (t) => { for (const w of String(t ?? '').match(/\S+\s+|\S+|\s+/g) || []) emitToken(w); };
-        const streamed = await streamLLM(system, message, history, model, wordSplit, streamAbortCtrl ? streamAbortCtrl.signal : null);
+        const streamed = await streamLLM(system, message, history, model, wordSplit, streamAbortCtrl ? streamAbortCtrl.signal : null, isRecap ? 9000 : 15_000);
         if (streamed.streamed) {
           reply = streamed.text;
           streamedText = streamed.text;
@@ -1449,7 +1457,7 @@ async function handleChat(req, res, streaming) {
           streamSingleToken = true;
         }
       } else {
-        const llm = await callLLM(system, message, history, model);
+        const llm = await callLLM(system, message, history, model, isRecap ? 9000 : 15_000);
         reply = llm.text;
         // No key, or every model failed (dead free model, out of credits, stall):
         // answer FROM MEMORY instead of leaking a debug stub.
@@ -1534,7 +1542,7 @@ async function handleChat(req, res, streaming) {
     // Demo teach redirect: save-worthy content aimed at the read-only shared
     // demo must not vanish silently — point at personal Chat (no UI change).
     let demoRedirected = false;
-    if (!memoryOff && demoReadonly && shouldRemember(message)) {
+    if (!memoryOff && demoReadonly && shouldRemember(message) && !isRecap) {
       reply += ' (The shared demo is read-only, so that was not saved — switch to personal Chat and tell me again to save it.)';
       thinking.push({ label: 'Memory write', detail: 'Redirected, not dropped: save-worthy content goes to personal Chat, never the shared demo.' });
       demoRedirected = true;

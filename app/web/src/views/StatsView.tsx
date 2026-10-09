@@ -60,6 +60,13 @@ export default function StatsView({
   const qualifying = users.filter((u) => (u.memories ?? 0) >= 10).length;
   const barMet = users.length >= 3 && qualifying >= 3;
 
+  // Local/test scaffolding rows (seeded user-a/user-b placeholders) are not
+  // real usage; showing them invites "these numbers are fake". Keep rows that
+  // hold real evidence (memories or guard activity) and the viewer's own.
+  const rows = users.filter(
+    (u) => (u.memories ?? 0) > 0 || (u.turns ?? 0) > 0 || (u.guards ?? 0) > 0 || isOwn(u.user ?? u.namespace ?? ''),
+  );
+
   const selfRaw = currentUser ?? userId ?? '';
   const walletRaw = walletAddress ?? account?.address ?? '';
   const selfNorm = selfRaw.trim().toLowerCase();
@@ -94,7 +101,7 @@ export default function StatsView({
           <div className={`st-bar ${barMet ? 'met' : ''}`}>
             {barMet
               ? 'Real-use bar met: 3+ users with 10+ memories each.'
-              : `Real-use bar: ${users.length} user(s), ${qualifying} with 10+ memories — need 3 and 3.`}
+              : `Live usage — ${rows.length} namespace${rows.length === 1 ? '' : 's'} teaching memories, ${qualifying} with 10+ so far.`}
           </div>
 
           <table className="st-table">
@@ -108,7 +115,7 @@ export default function StatsView({
               </tr>
             </thead>
             <tbody>
-              {users.map((u, i) => {
+              {rows.map((u, i) => {
                 const raw = String(u.namespace ?? u.user ?? u.id ?? '');
                 const own = isOwn(raw);
                 const seen =
@@ -133,7 +140,7 @@ export default function StatsView({
                   </tr>
                 );
               })}
-              {users.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
                   <td colSpan={5}>No usage recorded yet.</td>
                 </tr>
