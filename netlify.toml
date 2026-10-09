@@ -11,9 +11,14 @@
 
 [build.environment]
   NODE_VERSION = "22"
+  # MEMWAL_MODE / MEMWAL_SERVER_URL hold non-secret config values ("mainnet",
+  # public relayer URL) that also appear literally in code/docs — omit them
+  # from Netlify's secrets scan (their VALUES would otherwise false-positive).
+  # Real secrets (PRIVATE_KEY, SESSION_SECRET, OPENROUTER_API_KEY) stay scanned.
+  SECRETS_SCAN_OMIT_KEYS = "MEMWAL_MODE,MEMWAL_SERVER_URL"
 
 [functions]
-  directory = "app/netlify/functions"
+  directory = "netlify/functions"
   node_bundler = "esbuild"
   included_files = ["src/**", "web/dist/**"]
 
