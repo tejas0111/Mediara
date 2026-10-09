@@ -162,14 +162,24 @@ export async function executeSigned(txBytes, signatureBase64) {
     transaction: txBytes,
     signatures: [signatureBase64],
   });
-  // A transaction that FAILED onchain must not be reported as "landed, retry the
-  // indexer" — surface the real failure immediately (4xx, not a retry loop).
-  const status = res?.effects?.status;
+  // The SDK resolves a submit into a UNION, not the flat result:
+  //   { $kind: 'Transaction' | 'FailedTransaction', Transaction, FailedTransaction }
+  // Reading `.effects`/`.digest` off the union silently yields undefined, which
+  // is how a failed submit used to slip through as "landed" (and why the digest
+  // never reached the retry message). Unwrap, then inspect honestly.
+  const out = (res && (res.Transaction || res.FailedTransaction)) || res;
+  const status = out?.effects?.status ?? out?.status;
   const kind = (status && typeof status === 'object') ? status.status : status;
-  if (kind && kind !== 'success') {
-    const err = new Error(`transaction failed onchain: ${(status && status.error) || kind}`);
-    err.status = 422; err.expose = true; err.digest = res?.digest || null;
+  const failed =
+    out?.$kind === 'FailedTransaction' ||
+    (status && typeof status === 'object' && status.success === false) ||
+    Boolean(kind && kind !== 'success' && kind !== 'SUCCESS');
+  if (failed) {
+    const e = status && typeof status === 'object' ? status.error : null;
+    const detail = (e && (e.message || e.constant || e.identifier)) || kind || 'execution failed';
+    const err = new Error(`transaction failed onchain: ${String(detail).slice(0, 200)}`);
+    err.status = 422; err.expose = true; err.digest = out?.digest || null;
     throw err;
   }
-  return res; // { digest, ... }
+  return out; // { digest, effects, ... }
 }

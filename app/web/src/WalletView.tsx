@@ -113,6 +113,14 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
       String((e as { message?: unknown })?.message ?? e),
     );
 
+  /* ApiError keeps the parsed response body verbatim on `data`, so a new
+     server-side next-step flag routes correctly here without a client type
+     change. Only ever reads a boolean flag — never any secret-bearing field. */
+  const flagFrom = (e: ApiError, key: string): boolean => {
+    const d = e.data as Record<string, unknown> | null | undefined;
+    return !!d && typeof d === 'object' && d[key] === true;
+  };
+
   const cancelled = (retry: StepAction): void => {
     setErr({
       text: 'Signature cancelled in your wallet — press again to retry',
@@ -182,7 +190,21 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
         // The vault already exists onchain (discovery missed it): skip
         // straight to the link step instead of failing the setup.
         setErr(null);
-        return signAndComplete('link', retry);
+        // Same guard + fresh status as the setupVault pre-check branch: the
+        // connected wallet must still be the signed-in one, and the link step
+        // must run against current server state (a stale page can offer link
+        // for an account that is actually retired, and link would just 409).
+        const linkRetry: StepAction = {
+          label: 'Continue',
+          run: () => void setupVault(),
+        };
+        if (!guardSameWallet(linkRetry)) return false;
+        try {
+          setStatus(await walletStatus());
+        } catch {
+          /* status is advisory here — the link step re-checks server-side */
+        }
+        return signAndComplete('link', linkRetry);
       } else {
         fail(e, 'Vault setup did not finish — nothing was saved.', retry);
       }
@@ -409,6 +431,11 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
             text: 'Your vault link broke — re-link it to resume saving.',
             action: { label: 'Re-link vault', run: () => void linkRepair() },
           });
+        } else if (flagFrom(e, 'alreadyLinked')) {
+          // The server says this wallet already has a usable vault, so create
+          // is a no-op: land on Done instead of pointing back at create (which
+          // would repeat this exact 409 on the next press).
+          void refresh();
         } else {
           setErr({
             text: 'No vault is linked yet — create one to start saving.',

@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { useCurrentAccount, useSignPersonalMessage } from '@mysten/dapp-kit';
+import { useCurrentAccount, useSignPersonalMessage, useSignTransaction } from '@mysten/dapp-kit';
 import { ConnectButton } from '@mysten/dapp-kit';
+import { Transaction } from '@mysten/sui/transactions';
 import {
   ApiError,
   authMessage,
   authVerify,
-  walletOnboardComplete,
+  walletOnboardCompleteSig,
   walletOnboardCreate,
   walletOnboardLink,
 } from './api';
@@ -34,6 +35,7 @@ export default function WalletModal({
 }) {
   const account = useCurrentAccount();
   const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
+  const { mutateAsync: signTransaction } = useSignTransaction();
   const [busy, setBusy] = useState('');
   const [signed, setSigned] = useState(false);
   const [vaultDone, setVaultDone] = useState(false);
@@ -72,20 +74,54 @@ export default function WalletModal({
     }
   };
 
+  /* One smart vault step, mirroring the Wallet view's proven chain: prepare
+     (create OR link), wallet-sign the returned bytes, submit with the
+     signature. The old chain called complete with NO signature, so it could
+     only ever fail — and it never handled the needsRelink 409, so a wallet
+     that already owns a vault dead-ended here forever. */
   const setupVault = async () => {
     setErr('');
     setBusy('vault');
     try {
-      await walletOnboardCreate();
-      await walletOnboardLink();
-      await walletOnboardComplete();
+      let prep: Record<string, unknown> = {};
+      try {
+        prep = (await walletOnboardCreate()) as Record<string, unknown>;
+      } catch (e) {
+        if (e instanceof ApiError && (e.needsRelink || (e.data as { alreadyLinked?: boolean } | undefined)?.alreadyLinked === true)) {
+          prep = (await walletOnboardLink()) as Record<string, unknown>;
+        } else if (e instanceof ApiError && e.retiredDeployment) {
+          setErr('This wallet has a vault from an older setup that can no longer be opened — open the Wallet view and press "Repair my vault" to start a fresh one.');
+          return;
+        } else {
+          throw e;
+        }
+      }
+      if (prep.alreadyLinked === true) {
+        setVaultDone(true);
+        onDone();
+        return;
+      }
+      const txBytes = String(prep.txBytesBase64 ?? prep.txBytes ?? '');
+      if (!txBytes) throw new Error('empty transaction');
+      setBusy('approve');
+      const out = await signTransaction({
+        transaction: Transaction.from(txBytes),
+      });
+      await walletOnboardCompleteSig(out.signature);
       setVaultDone(true);
+      onDone();
     } catch (e) {
-      setErr(
-        e instanceof ApiError
-          ? e.message
-          : 'Vault setup did not finish — the Wallet view can resume it.',
-      );
+      if (isWalletCancel(e)) {
+        setErr('Signature cancelled in your wallet — press again to retry');
+      } else if (e instanceof ApiError && e.needsRelink) {
+        setErr('Close this and press "Re-link vault" in the Wallet view to connect your existing vault.');
+      } else {
+        setErr(
+          e instanceof ApiError
+            ? e.message
+            : 'Vault setup did not finish — the Wallet view can resume it.',
+        );
+      }
     } finally {
       setBusy('');
     }

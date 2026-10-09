@@ -47,6 +47,13 @@ export default function CompareView() {
       <CardContent>
         {!r && <p className="view-empty">Waiting…</p>}
         {r?.err && <p className="view-empty">{r.err}</p>}
+        {r?.res && !String(r.res.reply || '').trim() && (
+          <p className="view-empty">
+            This profile has no memory yet — Day 1 knows nothing, so the answer
+            asks to be taught. The right side shows the same question answered
+            from stored care facts.
+          </p>
+        )}
         {r?.res && (
           <>
             {/^STOP\b/.test(r.res.reply) && (

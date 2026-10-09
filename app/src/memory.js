@@ -192,11 +192,33 @@ export const DRUG_CLASS = {
 export const BRAND_SYNONYMS = new Map(Object.entries({
   advil: 'ibuprofen', motrin: 'ibuprofen', nurofen: 'ibuprofen', brufen: 'ibuprofen',
   nuprin: 'ibuprofen',
+  // Real-world OTC ibuprofen brands a caregiver will actually type. Every one
+  // is an NSAID → must STOP on a recalled ibuprofen allergy exactly like Advil.
+  midol: 'ibuprofen', pamprin: 'ibuprofen', combiflam: 'ibuprofen', ibugesic: 'ibuprofen',
+  ibugel: 'ibuprofen', dolgesic: 'ibuprofen', fenbid: 'ibuprofen', froben: 'ibuprofen',
+  calprofen: 'ibuprofen', addaprin: 'ibuprofen', genpril: 'ibuprofen', ibumetin: 'ibuprofen',
+  ibu: 'ibuprofen', ibufen: 'ibuprofen', ibrunel: 'ibuprofen', ibudolor: 'ibuprofen',
+  actiprofen: 'ibuprofen', cabinet: 'ibuprofen', dontol: 'ibuprofen', dolofort: 'ibuprofen',
+  ibuespasm: 'ibuprofen', ibuflamar: 'ibuprofen', 'ibu-profren': 'ibuprofen', ibux: 'ibuprofen',
+  inalgex: 'ibuprofen', mindol: 'ibuprofen', rapifen: 'ibuprofen', salpain: 'ibuprofen',
+  trufen: 'ibuprofen', uniprox: 'ibuprofen', ibren: 'ibuprofen', ibumax: 'ibuprofen',
+  aromenol: 'ibuprofen', buburone: 'ibuprofen', dashoflex: 'ibuprofen', ibuprofeno: 'ibuprofen',
+  iprofene: 'ibuprofen', neobrufen: 'ibuprofen', optifen: 'ibuprofen', solpaflex: 'ibuprofen',
+  suspex: 'ibuprofen',
   aleve: 'naproxen', naprosyn: 'naproxen', anaprox: 'naproxen',
+  // Naproxen brands (Midol Extended Relief is the OTC one people actually type).
+  midol_xr: 'naproxen', naprelan: 'naproxen', 'ec-naprosyn': 'naproxen', xenabyte: 'naproxen',
+  ondalix: 'naproxen', naprogesic: 'naproxen', arthroxen: 'naproxen', fertocin: 'naproxen',
   excedrin: 'aspirin', // + paracetamol via BRAND_MULTI below
   disprin: 'aspirin', ecotrin: 'aspirin', bayer: 'aspirin',
-  anacin: 'aspirin', bufferin: 'aspirin',
+  anacin: 'aspirin', bufferin: 'aspirin', zorprin: 'aspirin', aspro: 'aspirin',
+  ascrin: 'aspirin', ascriptin: 'aspirin', easprin: 'aspirin', halfprin: 'aspirin',
+  yspirin: 'aspirin', durlaza: 'aspirin', loprin: 'aspirin', solprin: 'aspirin',
   voltaren: 'diclofenac', cataflam: 'diclofenac', zorvolex: 'diclofenac', pennsaid: 'diclofenac',
+  // Diclofenac brands actually typed by caregivers.
+  voltfast: 'diclofenac', difene: 'diclofenac', dicloflex: 'diclofenac', rhumalgan: 'diclofenac',
+  volsaid: 'diclofenac', volterol: 'diclofenac', cambia: 'diclofenac', dyclo: 'diclofenac',
+  doxtran: 'diclofenac', naklof: 'diclofenac', voveron: 'diclofenac',
   toradol: 'ketorolac', acular: 'ketorolac',
   celebrex: 'celecoxib',
   mobic: 'meloxicam',

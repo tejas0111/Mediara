@@ -1194,7 +1194,12 @@ async function handleChat(req, res, streaming) {
             ? `You've used your ${cap} demo messages — sign in with your Sui wallet for a bigger budget and your own vault.`
             : `You've used your ${cap} guest messages — sign in with your Sui wallet for a bigger budget and your own vault.`,
         loginRequired: !walletClient,
-        demoUser: 'demo-mom',
+        // Only the SHARED DEMO channel carries the demo user pointer: it is
+        // the one case where "sign in for more" has a concrete guest plane to
+        // point at. A wallet owner hitting their own cap must never be told
+        // they are the demo persona (false fact about the caller), and guests
+        // on the personal plane are, well, guests — no demo row to offer.
+        demoUser: !walletClient && demoId != null ? 'demo-mom' : null,
         remaining: 0,
         resetsAt: chk.reset,
         resetAt: chk.resetAt || null,

@@ -2254,6 +2254,16 @@ test('H35: demo 429 keeps loginRequired:true + demoUser (signed-in wallet 429 ne
     assert.equal(j.remaining, 0);
     assert.equal(j.loginRequired, true, 'demo 429 still prompts sign-in');
     assert.equal(j.demoUser, 'demo-mom', 'demo 429 still points at the premade demo');
+    // Signed-in wallet owners get no demo-user pointer (false-fact fix):
+    // the cap message is about THEIR OWN vault, not the shared demo persona.
+    const { issueSession: issueH35 } = await import('./walletAuth.js');
+    const wAddr = '0x' + 'c7'.repeat(32); // signed in, no vault → wallet budget channel
+    const walletOver = await post('/api/chat', { userId: wAddr, message: 'one more please' }, { Cookie: `dd_session=${issueH35(wAddr)}`, ...hdevH() });
+    if (walletOver.status === 429) {
+      const wj = await walletOver.json();
+      assert.equal(wj.loginRequired, false, 'wallet 429 never prompts sign-in');
+      assert.equal(wj.demoUser, null, 'wallet 429 never claims the caller is the demo persona');
+    }
     assert.ok(j.resetAt && !Number.isNaN(Date.parse(j.resetAt)), 'rolling resetAt ISO present');
   } finally {
     if (prev === undefined) delete process.env.DD_DAY_LIMIT_DEMO;

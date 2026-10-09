@@ -34,18 +34,28 @@ the service **Root Directory to `app`** — `railway.json` here is picked up.
 | `OPENROUTER_API_KEY` | LLM key (chat still guards/falls-back without it) |
 | `TRUST_PROXY` | `1` (Railway terminates TLS at its edge) |
 
-## 3. Persistence volume (else memory is wiped on every redeploy)
+## 3. Persistence volume (else memory proof is wiped on every redeploy)
 
 Service → **Volumes** → New Volume, mount path **`/data`**, then set:
 
 | Var | Value |
 |---|---|
+| `DD_DB_PATH` | `/data/mediara.db` |
 | `DD_LOCAL_STORE` | `/data/.local-memory.json` |
 | `DD_USAGE_LEDGER` | `/data/usage-ledger.json` |
 | `DD_GUARD_PROOF` | `/data/guard-proof.json` |
 | `DD_REGISTRY_PATH` | `/data/.wallet-registry.json` |
 
-(All four are honored by the server; without them the repo-local JSON files
+**`DD_DB_PATH` is not optional.** Without it the SQLite store (guard-ledger
+hash chain + usage evidence + wallet registry) lives on the container's
+ephemeral disk and every redeploy wipes it — the tamper-evident ledger that
+`/guard-proof` verifies would restart from zero, and every onboarded wallet
+would be forced to re-link. Blobs themselves live on Walrus Mainnet and
+survive; the *proof* does not. Mount the volume, set the five vars above,
+redeploy once, then verify `/api/guard-proof` still reports the pre-redeploy
+`count`.
+
+(All five are honored by the server; without them the repo-local JSON/DB files
 live on ephemeral disk.)
 
 ## 4. Deploy

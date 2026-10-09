@@ -13,9 +13,7 @@ private/
 
 # --- node ---
 node_modules/
-video/out/
-video/build/
-video/node_modules/
+video/
 # --- runtime evidence ledgers (regenerated; judge-facing copies live in evidence/) ---
 app/src/usage-ledger.json
 app/src/guard-proof.json

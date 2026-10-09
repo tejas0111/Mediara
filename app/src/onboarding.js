@@ -104,10 +104,16 @@ export async function prepareCreateAccount(address) {
   // trusting that null would overwrite accountId with null and brick the user.
   const raw = getRawUser(address);
   if (raw?.accountId && !getUser(address)) {
-    throw clientError('Registry key cannot be decrypted (SESSION_SECRET changed) — re-link required; refusing to overwrite the existing vault.', 409);
+    // The ONLY repair for a row whose key cannot be decrypted is a fresh link
+    // (the new link tx registers a NEW delegate, encrypted with the current
+    // secret). Carry the flag so a client routes there instead of re-creating.
+    throw clientError('Registry key cannot be decrypted (SESSION_SECRET changed) — re-link required; refusing to overwrite the existing vault.', 409, { needsRelink: true });
   }
   if (raw?.accountId && raw?.delegatePrivateKey && !raw.pendingPhase) {
-    throw clientError('This wallet already has a linked memory vault — use the link step (or re-link) instead of create.', 409);
+    // The vault is already usable: creating again would abort onchain. Say so
+    // with a flag (not just prose) so the client lands on Done instead of
+    // pointing the user back at this same create call.
+    throw clientError('This wallet already has a linked memory vault — use the link step (or re-link) instead of create.', 409, { alreadyLinked: true });
   }
   const delegate = await generateDelegateKey();
   const delegatePublicKeyHex = Buffer.from(delegate.publicKey).toString('hex');
@@ -120,9 +126,13 @@ export async function prepareCreateAccount(address) {
     // windows, RPC hiccups): create_account aborts, and retrying create
     // will never succeed. Route to the link step with an exposed 409,
     // never a bare 500/"Internal error" with no next action.
+    // The sentence is the only channel a first-run surface can render (it
+    // prints the message verbatim and cannot auto-advance), so it names the
+    // concrete next press; the flag does the same for clients that branch on
+    // it. needsRelink stays the machine-readable contract.
     if (/create_account.*moveabort|moveabort.*create_account/i.test(String((e && e.message) || e))) {
       throw clientError(
-        'This wallet already owns a memory vault onchain — use the link step to connect it instead of creating.',
+        'This wallet already owns a memory vault onchain — use the link step to connect it instead of creating (close this, then press "Re-link vault" in the Wallet view: one signature, nothing new is created).',
         409,
         { needsRelink: true },
       );
@@ -203,7 +213,20 @@ export async function completeOnboarding(address, signatureBase64) {
     digest = res?.digest || null;
   } catch (e) {
     const msg = String(e?.message || e);
-    if (!/already|executed|duplicate|exists|consumed|invalid object/i.test(msg)) throw e;
+    if (/already|executed|duplicate|exists|consumed|invalid object/i.test(msg)) {
+      // The tx already landed on an earlier attempt — go verify it.
+    } else if (e?.expose === true && Number.isInteger(e?.status) && e.status >= 400 && e.status < 500) {
+      throw e; // already an actionable 4xx (e.g. 422 "failed onchain: …")
+    } else {
+      // A submit that failed for any OTHER reason (stale signature, network
+      // drop) must not surface as a bare 500 "Internal error" with no next
+      // step: keep the pending state and say what to do (re-sign the step we
+      // prepared). The raw reason stays server-side.
+      throw clientError(
+        'The transaction was not submitted — your wallet may have signed a different (older) transaction, or the network was unreachable. Press the step again to regenerate it, then sign.',
+        409,
+      );
+    }
   }
 
   if (user.pendingPhase === 'create') {

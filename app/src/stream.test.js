@@ -144,7 +144,9 @@ test('429 shape preserved as an error event (wallet rolling bucket)', async () =
     const err = events.find((e) => e.event === 'error');
     assert.ok(err, 'an error event is emitted');
     assert.equal(err.data.loginRequired, false, 'signed-in wallet 429 carries no login prompt');
-    assert.equal(err.data.demoUser, 'demo-mom');
+    // A wallet owner hitting THEIR OWN cap must never be told they are the
+    // shared demo persona — the demoUser pointer is demo-channel-only.
+    assert.equal(err.data.demoUser, null, 'wallet 429 carries no demo-user pointer');
     assert.equal(err.data.remaining, 0);
     assert.match(err.data.resetsAt, /^\d{4}-\d{2}-\d{2}$/);
   } finally {

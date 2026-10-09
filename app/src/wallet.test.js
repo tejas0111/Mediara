@@ -213,5 +213,29 @@ import path from 'node:path';
   ok(ob.classifyBuildError('plain string failure') === null, 'non-Error input handled, unmapped');
 }
 
+// --- onboarding regressions: run as a CHILD node:test process.
+// They boot the real app in MEMWAL_MODE=mainnet against a loopback GraphQL
+// stub, which needs env captured at import time — running them in-process
+// would pin this file's offline module graph to mainnet. package.json (the
+// usual place to wire a new test file) is not editable in this change, so the
+// chain runs it from here and folds the child's counts into the totals.
+{
+  const { spawnSync } = await import('node:child_process');
+  const child = new URL('./walletOnboard.test.js', import.meta.url).pathname;
+  const r = spawnSync(process.execPath, ['--test', child], { encoding: 'utf8', timeout: 120_000 });
+  const out = `${r.stdout || ''}${r.stderr || ''}`;
+  process.stdout.write(out);
+  const num = (re) => { const m = re.exec(out); return m ? Number(m[1]) : null; };
+  const childPass = num(/(?:^|\n)\s*(?:ℹ|#)\s*pass\s+(\d+)/);
+  const childFail = num(/(?:^|\n)\s*(?:ℹ|#)\s*fail\s+(\d+)/) ?? 0;
+  if (childPass === null) {
+    fail++;
+    console.log('FAIL - walletOnboard regressions did not report (crash or timeout)');
+  } else {
+    pass += childPass;
+    fail += childFail;
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

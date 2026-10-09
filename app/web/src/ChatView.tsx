@@ -439,9 +439,13 @@ export default function ChatView(props: ChatViewProps) {
         );
         finish(res);
       } catch (e) {
-        const canFallback =
-          !(e instanceof ApiError) || e.status === 0 || e.status === 404;
-        if (canFallback) {
+        // The primary stream (direct API host) fails on a NETWORK error (CORS
+        // hiccup, DNS, offline) — then the same-origin proxy path is attempted.
+        // A 429 (budget) or 401 is a REAL answer from the server: the stream
+        // path reached it fine, so falling back would double-spend the message
+        // (the proxy retries a chargeable turn). Show it instead.
+        const networkOnly = e instanceof ApiError && (e.status === 0 || e.status === 404);
+        if (networkOnly) {
           try {
             const res = await chat(userId, text, {
               model: model || undefined,
