@@ -1509,10 +1509,10 @@ async function handleChat(req, res, streaming) {
           else if (MODE === 'mainnet') {
             // Mainnet indexing (~50s) exceeds any sane chat budget: accept fast,
             // wait bounded, and be honest about pending (never fake a blob).
-            // On the STREAMING path the tail budget is tighter — the reply is
-            // already live and `done` must not wait out a slow index behind a
-            // proxy with a response timeout. Same honesty, smaller window.
-            const rec = await rememberWithReceipt(client, stored, streaming ? { acceptMs: 8000, indexMs: 8000 } : {});
+            // The write tail is bounded on EVERY path — an unauthenticated
+            // proxy or an impatient client kills responses that wait out a
+            // slow index behind them. Same honesty, smaller window.
+            const rec = await rememberWithReceipt(client, stored, { acceptMs: 8000, indexMs: 8000 });
             if (rec.status === 'saved') {
               saved = { blob_id: rec.blob_id }; memoryPersisted = true;
               thinking.push({ label: 'Memory write', detail: `Saved to Walrus (blob ${rec.blob_id}).` });
