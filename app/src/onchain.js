@@ -78,6 +78,23 @@ export function buildLinkDelegateTx(userAddress, accountId, delegatePublicKey) {
 // always works for users who onboarded through this app).
 export async function accountForOwner(ownerAddress) {
   const owner = String(ownerAddress).toLowerCase();
+  // Owned-objects first: no event-window limit, any package. A dashboard-made
+  // account older than the last 50 sent events is invisible to the events
+  // scan below but still owned — and ownership is exactly what link needs.
+  try {
+    const data = await gql(
+      `query($a: SuiAddress!) { objects(first: 50, filter: { owner: $a }) { nodes { address asMoveObject { contents { type { repr } json } } } } }`,
+      { a: owner },
+    );
+    for (const node of data?.objects?.nodes || []) {
+      const repr = String(node?.asMoveObject?.contents?.type?.repr || '');
+      if (/::account::MemWalAccount$/.test(repr)) {
+        const j = node?.asMoveObject?.contents?.json || {};
+        if (node?.address) return { accountId: node.address, source: 'owned-objects' };
+        if (j?.account_id) return { accountId: j.account_id, source: 'owned-objects' };
+      }
+    }
+  } catch { /* fall through to the events scan */ }
   for (const pkg of PACKAGE_IDS) {
     const data = await gql(
       `query($a: SuiAddress!) { events(last: 50, filter: { sender: $a, module: "${pkg}::account" }) { nodes { contents { json } } } }`,

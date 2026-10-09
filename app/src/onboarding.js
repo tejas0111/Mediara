@@ -103,6 +103,17 @@ export async function prepareCreateAccount(address) {
   try {
     bytes = await tx.build({ client: buildClient() });
   } catch (e) {
+    // The onchain account already exists (discovery can miss it — event
+    // windows, RPC hiccups): create_account aborts, and retrying create
+    // will never succeed. Route to the link step with an exposed 409,
+    // never a bare 500/"Internal error" with no next action.
+    if (/create_account.*moveabort|moveabort.*create_account/i.test(String((e && e.message) || e))) {
+      throw clientError(
+        'This wallet already owns a memory vault onchain — use the link step to connect it instead of creating.',
+        409,
+        { needsRelink: true },
+      );
+    }
     // A 0-SUI wallet fails gas selection here: fund-and-retry (409), never a
     // bare 500/"Internal error" with no next action.
     throw classifyBuildError(e, { accountId: raw?.accountId ?? null }) || e;

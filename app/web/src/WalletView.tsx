@@ -178,6 +178,11 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
       if (e instanceof ApiError && e.retiredDeployment) {
         setStatus((s) => (s ? { ...s, retiredDeployment: true } : s));
         setErr(null);
+      } else if (e instanceof ApiError && e.needsRelink && kind === 'create') {
+        // The vault already exists onchain (discovery missed it): skip
+        // straight to the link step instead of failing the setup.
+        setErr(null);
+        return signAndComplete('link', retry);
       } else {
         fail(e, 'Vault setup did not finish — nothing was saved.', retry);
       }
