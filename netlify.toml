@@ -26,6 +26,11 @@
 # the CDN; without `force`, existing files win over this redirect, so only
 # dynamic routes reach the Express function.
 [[redirects]]
+  from = "/demo.mp4"
+  to = "/app/demo.mp4"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/.netlify/functions/api"
   status = 200
