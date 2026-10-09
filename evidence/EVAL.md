@@ -1,6 +1,6 @@
 # RED-TEAM RUN — memory guard eval
 
-Generated: 2026-10-10T07:17:18.524Z  ·  mode: local (no LLM, no network)
+Generated: 2026-10-10T08:31:44.739Z  ·  mode: local (no LLM, no network)
 
 **30/30 checks passed, 0 failed.**
 

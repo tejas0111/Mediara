@@ -93,21 +93,23 @@ export function formatResetIn(
 
 /** Map a wire response onto a renderable assistant message. */
 export function toAssistantMessage(res: ChatResponse): ChatMessage {
+  const safe = (res ?? {}) as Partial<ChatResponse>;
   let verdict: Verdict | undefined;
-  const g = res.guard ?? undefined;
-  if (g?.verdict === 'STOP' || /^STOP\b/.test(res.reply)) verdict = 'STOP';
-  else if (g?.verdict === 'CAUTION' || /^CAUTION\b/.test(res.reply)) verdict = 'CAUTION';
-  const text = res.reply.replace(/^(STOP|CAUTION)\s*[—–-]\s*/, '');
+  const g = safe.guard ?? undefined;
+  const replyText = String(safe.reply ?? '');
+  if (g?.verdict === 'STOP' || /^STOP\b/.test(replyText)) verdict = 'STOP';
+  else if (g?.verdict === 'CAUTION' || /^CAUTION\b/.test(replyText)) verdict = 'CAUTION';
+  const text = replyText.replace(/^(STOP|CAUTION)\s*[—–-]\s*/, '');
   return {
     role: 'assistant',
     text,
-    thinking: res.thinking ?? [],
-    recalled: res.recalledMeta ?? [],
+    thinking: safe.thinking ?? [],
+    recalled: safe.recalledMeta ?? [],
     verdict,
     guardReason: g?.reason,
     cited: g?.cited ?? [],
-    savedBlob: res.savedBlob ?? null,
-    memoryPersisted: res.memoryPersisted,
-    budget: res.budget,
+    savedBlob: safe.savedBlob ?? null,
+    memoryPersisted: safe.memoryPersisted,
+    budget: safe.budget,
   };
 }

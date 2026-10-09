@@ -282,6 +282,24 @@ export default function ChatView(props: ChatViewProps) {
   const lastSent = useRef('');
   const titledFor = useRef('');
 
+  /* Word-by-word display pacing: provider flushes arrive in bursts (and the
+     proxy delivers the whole body at once), so paint words on a steady clock
+     instead of dumping chunks. Content and order are byte-identical — only
+     the paint rhythm changes. Reduced-motion users get instant text. */
+  const paceQueue = useRef<string[]>([]);
+  const paceTimer = useRef<number | null>(null);
+  const paceReduced = useMemo(
+    () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches,
+    [],
+  );
+  const stopPace = useCallback(() => {
+    if (paceTimer.current != null) {
+      clearInterval(paceTimer.current);
+      paceTimer.current = null;
+    }
+  }, []);
+  useEffect(() => stopPace, [stopPace]);
+
   /* ------------------------------------------------- reset on swap */
   /* The rendered turns come from props (App's per-namespace store), so a
      wallet flip mid-stream only swaps which stored turns show — the
@@ -405,6 +423,8 @@ export default function ChatView(props: ChatViewProps) {
       };
       props.pushMsg(target, userMsg, ns);
       setStream({ text: '', thinking: [], recalled: [] });
+      stopPace();
+      paceQueue.current = [];
 
       const patchStream = (
         fn: (s: { text: string; thinking: ThinkStep[]; recalled: RecalledItem[] }) => {
@@ -414,7 +434,29 @@ export default function ChatView(props: ChatViewProps) {
         },
       ) => setStream((prev) => (prev ? fn(prev) : prev));
 
+      // Drain paced words into the provisional row; stops itself when the
+      // queue empties or the row is gone (error/abort/swap).
+      const drainPace = () => {
+        const take = paceQueue.current.splice(0, 2).join('');
+        if (!take) {
+          stopPace();
+          return;
+        }
+        patchStream((s) => ({ ...s, text: s.text + take }));
+        if (paceQueue.current.length === 0) stopPace();
+      };
+      const paceToken = (t: string) => {
+        if (paceReduced || !t) {
+          if (t) patchStream((s) => ({ ...s, text: s.text + t }));
+          return;
+        }
+        for (const w of t.match(/\S+\s*|\s+/g) || [t]) paceQueue.current.push(w);
+        if (paceTimer.current == null) paceTimer.current = window.setInterval(drainPace, 45);
+      };
+
       const finish = (res: Parameters<typeof toAssistantMessage>[0]) => {
+        stopPace();
+        paceQueue.current = [];
         const asst = toAssistantMessage(res);
         props.pushMsg(target, asst, ns);
         setStream(null);
@@ -432,9 +474,7 @@ export default function ChatView(props: ChatViewProps) {
           {
             onThinking: (thinking, recalledMeta) =>
               patchStream((s) => ({ ...s, thinking, recalled: recalledMeta })),
-            onToken: (t) => {
-              patchStream((s) => ({ ...s, text: s.text + t }));
-            },
+            onToken: (t) => paceToken(t),
           },
         );
         finish(res);
@@ -455,12 +495,33 @@ export default function ChatView(props: ChatViewProps) {
           // Retry as ONE buffered REST turn through the same-origin proxy:
           // long-lived SSE bodies get truncated on this path (proxy cuts the
           // stream, reader sees no `done`), but a single JSON body survives.
-          // It costs a second budget turn; a dead end costs the user everything.
+          // Each attempt is hard-bounded at 24s (proxy kills slow responses
+          // with a 504 anyway): a cut attempt is retried ONCE more on the now
+          // warm relayer session instead of dead-ending. Retries only run
+          // when no server verdict rendered, so a retried turn cannot
+          // double-charge (the non-stream path charges at the tail, and an
+          // incomplete turn never reaches it).
           try {
-            const res = await chat(userId, text, {
-              model: model || undefined,
-              memory: memoryOn,
-            });
+            const attempt = async (ms: number) => {
+              const ctrl = new AbortController();
+              const t = setTimeout(() => ctrl.abort(), ms);
+              try {
+                return await chat(userId, text, {
+                  model: model || undefined,
+                  memory: memoryOn,
+                  signal: ctrl.signal,
+                });
+              } finally {
+                clearTimeout(t);
+              }
+            };
+            let res;
+            try {
+              res = await attempt(24000);
+            } catch (first) {
+              if (first instanceof ApiError) throw first;
+              res = await attempt(24000);
+            }
             finish(res);
             setBusy(false);
             return;
