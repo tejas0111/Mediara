@@ -33,8 +33,8 @@ Canonical budget key: a wallet vault owner's turns, memories, and guard
 receipts are keyed by the lowercase session address on both the chat and
 dashboard paths (pre-unification rows under the truncated id / vault-hash
 heal at read time — unioned, never dropped, never reset); demo ids share one
-key; guests spend per-browser guest key with memories attributed per
-namespace.
+key; guests meter a per-browser guest key on reads (personal chat requires
+sign-in since the §4/A login gate — the guest chat cap is vestigial).
 
 ## 4. Memory pipeline (`app/src/memory.js`, local: `app/src/localClient.js`)
 
@@ -59,6 +59,8 @@ namespace.
 - Fail-closed: unreachable memory + medication question → 503 shared / 409
   vault; recaps honest, never "no memories".
 - Proof: `npm run eval` 30/30 (guards + recall + A/B), red-team clean.
+- Guard receipts fire even when the client aborts mid-turn (recorded before
+  delivery, never gated on the connection).
 
 ## 6. Agent loop (`app/src/server.js` `/api/chat`: think → act → answer)
 
@@ -98,6 +100,11 @@ namespace.
 - Reads (`/api/summary|/export|/dashboard|/usage|/proactive|/nudge|
   /api/guard-proof|/api/seed-status`): `namespaceView` auth everywhere;
   `/api/usage` redacts blob texts to non-owners (counts public).
+- `GET /api/arena` → `{challenges[6]}`: public read-only eval-trap corpus for
+  the Arena UI (5 STOP traps — allergy alias/class/negated-fact, warfarin x
+  ibuprofen interaction, teaching-shaped order — + 1 Tylenol control that must
+  answer; every trap honestly STOPs via the coded guards). No session check,
+  like `/api/models`: static data, no identity or namespace, expired-proof.
 - Machine-readable evidence preserved for article/submission.
 
 ## 9. UI/UX standard (`app/web/src`, tokens in `tokens.css`)
@@ -116,8 +123,8 @@ namespace.
 
 ## 10. Testing gates (all must be green, always)
 
-`npm test` = selftest + wallet + routes + stream + stats + db + window + budget-keys + frontend + t3
-(currently 439); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
+`npm test` = selftest + wallet + routes + stream + stats + db + window + budget-keys + frontend + t3 + gatewave5 + gatewave8 + hardening + loghygiene
+(currently 693); `npm run eval` = 30/30; `tsc --noEmit`; `vite build`;
 boot smoke `:3001` + `:3114`-class scratch. Rules: TDD red-green for new
 behavior; extend-never-weaken; temp env paths in tests; no chain writes;
 no secrets in git/logs.

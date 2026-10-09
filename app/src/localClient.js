@@ -14,7 +14,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Read dynamically (not once at import) so selftest/eval pick up a temp store
 // even when the env var is set after import.
 const storePath = () => process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
-const STORE = process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
 
 function load() {
   // Distinguish "empty" from "unreadable": a corrupt store must fail LOUD so the
@@ -47,7 +46,7 @@ function withLock(fn) {
 const GROUPS = [
   ['med', 'meds', 'medication', 'medications', 'pill', 'pills', 'dose', 'doses', 'dosage', 'tablet', 'tablets', 'prescription', 'rx'],
   ['take', 'takes', 'taking', 'took'],
-  ['allergy', 'allergies', 'allergic'],
+  ['allergy', 'allergies', 'allergic', 'alergic', 'alergie', 'alergies', 'alergy'],
   ['routine', 'dinner', 'bedtime', 'breakfast', 'lunch', 'reminder', 'reminders', 'morning', 'evening', 'walk', 'sleep'],
   ['mom', 'mother', 'mum', 'mummy'],
   ['dad', 'father'],
@@ -114,10 +113,26 @@ export function createLocalClient({ namespace }) {
       const m = (db.namespaces[ns] || []).find((x) => x.job_id === job_id);
       return { blob_id: m?.blob_id || null, owner: 'local', namespace: ns };
     },
-    async recall({ query, limit = 5 }) {
+    async recall({ query, limit = 5, signal } = {}) {
       // Test-only fault injection (mirrors DD_LOCAL_STORE / DD_REGISTRY_PATH).
       if (process.env.DD_FAULT_RECALL === 'throw') throw new Error('relayer 503 Service Unavailable');
       if (process.env.DD_FAULT_RECALL === 'hang') return new Promise(() => {});
+      // Abort cooperation (E): a pre-aborted signal does no work; an abort
+      // landing mid-slow-recall resolves promptly instead of serving the full
+      // 1.5s window to a gone client.
+      const abortErr = () => Object.assign(new Error('recall aborted'), { code: 'ABORT_ERR' });
+      if (signal?.aborted) throw abortErr();
+      // Test-only slow-recall window for the pre-first-token-abort pin: recall
+      // resolves normally, but well after a test abort lands mid-flight.
+      if (process.env.DD_FAULT_RECALL === 'slow') {
+        await new Promise((res, rej) => {
+          const t = setTimeout(res, 1500);
+          if (signal) {
+            if (signal.aborted) { clearTimeout(t); rej(abortErr()); }
+            else signal.addEventListener('abort', () => { clearTimeout(t); rej(abortErr()); }, { once: true });
+          }
+        });
+      }
       let n = Number(limit);
       if (!Number.isFinite(n)) n = 5;
       n = Math.max(0, Math.floor(n));

@@ -44,6 +44,7 @@ import {
   cn,
 } from './ui';
 import './App.css';
+import logoUrl from './assets/logo.svg';
 
 const NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'chat', label: 'Chat' },
@@ -51,7 +52,9 @@ const NAV: Array<{ key: ViewKey; label: string }> = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'memory', label: 'Memory' },
   { key: 'replay', label: 'Replay' },
+  { key: 'compare', label: 'Compare' },
   { key: 'proof', label: 'Guard proof' },
+  { key: 'stats', label: 'Stats' },
   { key: 'print', label: 'Print' },
   { key: 'wallet', label: 'Wallet' },
 ];
@@ -117,7 +120,12 @@ export default function App() {
   const [draftId, setDraftId] = React.useState('demo-mom');
   const [memoryOn, setMemoryOn] = React.useState(loadMemoryOn);
   const [route, setRoute] = React.useState<Route>('chat');
-  const [sessions, setSessions] = React.useState<ChatSession[]>(() => loadSessions('demo-mom'));
+  // Chat history is cached PER user namespace in memory (the persisted keys
+  // stay per-user — see keyFor in chat.ts). A late wallet flip (guest default
+  // id -> vault address) loads the new namespace on demand but never wipes
+  // the old one, so in-memory turns are never discarded and flipping back
+  // restores them.
+  const [stores, setStores] = React.useState<Record<string, ChatSession[]>>(() => ({ 'demo-mom': loadSessions('demo-mom') }));
   const [filter, setFilter] = React.useState('');
   const [drawer, setDrawer] = React.useState(false);
   const [mode, setMode] = React.useState<'local' | 'mainnet' | null>(null);
@@ -146,7 +154,6 @@ export default function App() {
 
   const view = routeView(route);
   const activeId = routeSessionId(route);
-  const active = sessions.find((s) => s.id === activeId) ?? null;
   // Demo chat is locked to the shared demo namespace: the sidebar user
   // editor is ignored while on it, so guests always read premade memory.
   const DEMO_USER = 'demo-mom';
@@ -165,6 +172,10 @@ export default function App() {
   const vaultUserId =
     userId === DEFAULT_USER && wallet?.onboarded && wallet.address ? wallet.address : userId;
   const chatUser = view === 'demo' ? DEMO_USER : personalUserId;
+  // History for the active namespace: loaded once on demand (effect below),
+  // then kept — switching namespaces never discards another one's turns.
+  const sessions = stores[chatUser] ?? [];
+  const active = sessions.find((s) => s.id === activeId) ?? null;
 
   const refreshWallet = React.useCallback(async () => {
     try {
@@ -221,8 +232,13 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // Load each namespace once, on demand. Returning the previous map object
+  // when already loaded avoids re-renders; crucially this never REPLACES
+  // another namespace's in-memory turns (the old blind reload wiped the
+  // just-sent session whenever the wallet status resolved late and
+  // personalUserId flipped demo-mom -> vault address mid-conversation).
   React.useEffect(() => {
-    setSessions(loadSessions(chatUser));
+    setStores((prev) => (prev[chatUser] === undefined ? { ...prev, [chatUser]: loadSessions(chatUser) } : prev));
   }, [chatUser]);
 
   React.useEffect(() => {
@@ -254,7 +270,7 @@ export default function App() {
 
   function handleNewChat() {
     const s = makeSession();
-    setSessions(saveSession(chatUser, s));
+    setStores((prev) => ({ ...prev, [chatUser]: saveSession(chatUser, s) }));
     navigate(view === 'demo' ? 'demo' : 'chat', s.id);
     setDrawer(false);
   }
@@ -266,14 +282,19 @@ export default function App() {
 
   function handleNewSessionProp(): string {
     const s = makeSession();
-    setSessions(saveSession(chatUser, s));
+    setStores((prev) => ({ ...prev, [chatUser]: saveSession(chatUser, s) }));
     navigate(view === 'demo' ? 'demo' : 'chat', s.id);
     return s.id;
   }
 
-  function pushMsg(sessionId: string, msg: ChatMsg) {
-    setSessions((prev) => {
-      const found = prev.find((s) => s.id === sessionId);
+  // ns is the send-time namespace passed by the calling ChatView: both turns
+  // of one send persist under the same per-user key even if chatUser flips
+  // mid-stream (wallet resolving late), so a session never splits across two
+  // namespaces with half its turns missing from each.
+  function pushMsg(sessionId: string, msg: ChatMsg, ns: string) {
+    setStores((prev) => {
+      const list = prev[ns] ?? loadSessions(ns);
+      const found = list.find((s) => s.id === sessionId);
       const base = found ?? { ...makeSession(), id: sessionId };
       const firstUser = base.msgs.length === 0 && msg.role === 'user';
       const next: ChatSession = {
@@ -281,14 +302,14 @@ export default function App() {
         title: firstUser ? titleFor(msg.text) : base.title,
         msgs: [...base.msgs, msg],
       };
-      saveSession(chatUser, next);
-      return [next, ...prev.filter((s) => s.id !== next.id)];
+      saveSession(ns, next);
+      return { ...prev, [ns]: [next, ...list.filter((s) => s.id !== next.id)] };
     });
   }
 
   function handleDelete(id: string) {
     const next = delSess(chatUser, id);
-    setSessions(next);
+    setStores((prev) => ({ ...prev, [chatUser]: next }));
     if (activeId === id) navigate(view === 'demo' ? 'demo' : 'chat');
   }
 
@@ -298,7 +319,8 @@ export default function App() {
 
   function commitRename() {
     if (!renameTarget) return;
-    setSessions(renSess(chatUser, renameTarget.id, renameTarget.value));
+    const next = renSess(chatUser, renameTarget.id, renameTarget.value);
+    setStores((prev) => ({ ...prev, [chatUser]: next }));
     setRenameTarget(null);
   }
 
@@ -368,7 +390,7 @@ export default function App() {
 
       <aside className={cn('sidebar', drawer && 'open')} aria-label="Sidebar">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">M</span>
+          <img src={logoUrl} className="brand-mark brand-logo" alt="Mediara" aria-hidden="true" />
           <span className="brand-name">Mediara</span>
           <button type="button" className="icon-btn only-mobile" aria-label="Close menu" onClick={() => setDrawer(false)}>
             <IconX />
@@ -425,6 +447,15 @@ export default function App() {
                 >
                   <span className="sess-ic" aria-hidden="true"><IconChat /></span>
                   <span className="sess-title">{s.title}</span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn sess-rename"
+                  aria-label={`Rename ${s.title}`}
+                  title="Rename chat"
+                  onClick={() => handleRename(s.id, s.title)}
+                >
+                  Rename
                 </button>
                 <button
                   type="button"
@@ -557,8 +588,34 @@ export default function App() {
               onSignIn={() => setWmodal(true)}
             />
           ) : view === 'demo' ? (
-            <ChatView
-              userId={DEMO_USER}
+            <>
+              <p className="demo-readonly" role="note">
+                Shared demo · read-only — nothing you type here is saved. Your own chats live under{' '}
+                <button type="button" className="link-btn" onClick={() => navigate('chat')}>
+                  Chat
+                </button>
+                .
+              </p>
+              {!active || active.msgs.length === 0 ? (
+                <ol className="demo-walk" aria-label="Demo walkthrough">
+                  <li>
+                    <strong>Ask what she avoids</strong> — tap <q>What is she allergic to?</q> below.
+                  </li>
+                  <li>
+                    <strong>Test a conflict</strong> — type <q>Can she take ibuprofen for her headache?</q> and
+                    expect a STOP verdict.
+                  </li>
+                  <li>
+                    <strong>Verify it</strong> — open{' '}
+                    <button type="button" className="link-btn" onClick={() => navigate('proof')}>
+                      Guard proof
+                    </button>{' '}
+                    to check the safety record.
+                  </li>
+                </ol>
+              ) : null}
+              <ChatView
+                userId={DEMO_USER}
               memoryOn={memoryOn}
               sessions={sessions}
               active={active}
@@ -571,7 +628,8 @@ export default function App() {
                 setDraftId(id); setUserId(id); navigate('chat');
               }}
               onSignIn={() => setWmodal(true)}
-            />
+              />
+            </>
           ) : view === 'dashboard' ? (
             <DashboardView userId={vaultUserId} />
           ) : view === 'wallet' ? (
@@ -674,12 +732,26 @@ export default function App() {
           </div>
           {envError ? <FieldHint>{envError}</FieldHint> : null}
           <Separator />
+          <FieldLabel>Wallet</FieldLabel>
           <div className="foot-row">
             <Badge variant={wallet?.signedIn ? 'ok' : 'default'}>
-              {wallet?.signedIn ? `wallet ${wallet.address ?? ''}`.trim() : 'Not connected'}
+              {wallet?.signedIn
+                ? `Signed in ${wallet.address ? `${wallet.address.slice(0, 6)}…${wallet.address.slice(-4)}` : ''}`.trim()
+                : 'Not signed in'}
             </Badge>
             <Badge variant={suiAccount ? 'mainnet' : 'default'}>
-              {suiAccount ? `sui ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)}` : 'Not connected'}
+              {suiAccount ? `Connected ${suiAccount.address.slice(0, 6)}…${suiAccount.address.slice(-4)}` : 'No wallet connected'}
+            </Badge>
+            <Badge variant={wallet?.signedIn && wallet.onboarded && !wallet.needsRelink && !wallet.pendingPhase ? 'ok' : 'warn'}>
+              {wallet?.signedIn
+                ? wallet.needsRelink
+                  ? 'Vault action needed'
+                  : wallet.pendingPhase
+                    ? `Setup paused at ${wallet.pendingPhase}`
+                    : wallet.onboarded
+                      ? 'Vault ready'
+                      : 'Vault setup needed'
+                : 'Vault unavailable while signed out'}
             </Badge>
             <Button
               size="sm"
@@ -691,6 +763,13 @@ export default function App() {
               Wallet details
             </Button>
           </div>
+          {wallet?.signedIn && (wallet.needsRelink || wallet.pendingPhase) ? (
+            <FieldHint>
+              {wallet.needsRelink
+                ? 'Your vault needs attention — open Wallet details, run Relink, then finish the link step.'
+                : `Setup paused at ${wallet.pendingPhase} — open Wallet details to resume where you left off.`}
+            </FieldHint>
+          ) : null}
         </Dialog>
       ) : null}
     </div>

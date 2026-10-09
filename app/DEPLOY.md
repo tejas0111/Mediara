@@ -19,4 +19,4 @@ demo channel and the Telegram bot only.
 4. Seed: from your machine with the same `.env`, `node src/seed10.js demo-mom` (writes 12 Mainnet blobs; serverless has no disk — see below).
 5. Verify: `/demo?persona=day1` vs `day7`, `/memory?user=demo-mom`, `/api/summary?user=demo-mom`.
 
-CRITICAL: serverless has ephemeral disk — `MEMWAL_MODE=local` on Vercel loses memory between requests. PROD MUST BE `mainnet`. Local mode is dev/offline-demo only (honest statement for the article: the graded path is Mainnet).
+CRITICAL: serverless disk is ephemeral, so don't run `MEMWAL_MODE=local` on Vercel in prod — you'll lose memory between requests. PROD MUST BE `mainnet`. Local mode is dev/offline-demo only (honest statement for the article: the graded path is Mainnet).

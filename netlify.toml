@@ -1,22 +1,25 @@
 # Netlify deploy config for Mediara (Express app -> serverless function).
-# The app is Express + a React SPA (app/web); Netlify runs it through serverless-http.
-# NOTE: production MUST set MEMWAL_MODE=mainnet + keys, SESSION_SECRET, and
-# OPENROUTER_API_KEY in the Netlify UI (Site settings -> Environment variables).
+# The app is Express + a React SPA (app/web); the api function serves
+# everything (API + /app SPA + legacy pages) via serverless-http.
+# NOTE: production MUST set MEMWAL_MODE=mainnet + keys, SESSION_SECRET,
+# OPENROUTER_API_KEY, and the /tmp DD_* store paths in the Netlify UI
+# (Site settings -> Environment variables). See DEPLOY-RUNBOOK.md.
 [build]
   base = "app"
   command = "npm --prefix web install --no-audit --no-fund && npm --prefix web run build"
-  publish = "public"
+  publish = "web/dist"
 
 [build.environment]
   NODE_VERSION = "22"
 
 [functions]
-  directory = "netlify/functions"
+  directory = "app/netlify/functions"
   node_bundler = "esbuild"
-  included_files = ["public/**", "src/**", "web/dist/**"]
+  included_files = ["src/**", "web/dist/**"]
 
-# All dynamic routes go to the Express function; existing static files under
-# app/public (e.g. /assets/app.js) are served directly by Netlify first.
+# Static files under web/dist (the /app SPA bundle) are served directly by
+# the CDN; without `force`, existing files win over this redirect, so only
+# dynamic routes reach the Express function.
 [[redirects]]
   from = "/*"
   to = "/.netlify/functions/api"

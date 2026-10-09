@@ -88,7 +88,9 @@ export default function DashboardView({ userId }: { userId: string }) {
 
   const personal = data.personal ?? null;
   const budget = personal?.budget ?? null;
-  const vault = data.vault ?? vaultLive ?? null;
+  // Session vault wins over the viewed id: signed-in state comes from the
+  // wallet session, never from the ?user namespace being inspected.
+  const vault = vaultLive ?? data.vault ?? null;
   const demo = data.demo ?? null;
   const mode = data.mode === 'mainnet' ? 'mainnet' : 'local';
   const cap = typeof budget?.cap === 'number' && budget.cap > 0 ? budget.cap : null;
@@ -112,7 +114,7 @@ export default function DashboardView({ userId }: { userId: string }) {
         <Card>
           <CardHeader>
             <CardTitle>My memories</CardTitle>
-            <CardDescription>Facts stored under your namespace</CardDescription>
+            <CardDescription>Facts saved in your chats</CardDescription>
           </CardHeader>
           <CardContent>
             <p className="dash-num">{num(personal?.memories)}</p>
@@ -224,6 +226,12 @@ export default function DashboardView({ userId }: { userId: string }) {
           </CardContent>
         </Card>
       </div>
+
+      <p className="dash-muted dash-foot">
+        Counts are live, never estimates: memory totals reflect recall (up to 25 facts per query),
+        guard hits are counted over your saved history. A zero means none on record — an em dash (—)
+        means the endpoint did not answer, so retry before relying on it.
+      </p>
 
       <QuickLinks />
     </div>

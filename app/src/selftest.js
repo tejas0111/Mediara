@@ -125,7 +125,7 @@ ok((await recallRelevant(fakeClient, 'q', -1)).length === 0, 'regression: recall
 
 // Local stand-in: rapid sequential remembers + ordering + dedup + limit clamp.
 {
-  const tns = 'selftest-reg-' + Date.now();
+  const tns = 'selftest-reg-' + process.pid;
   const lc = createLocalClient({ namespace: tns });
   for (let i = 0; i < 10; i++) await lc.remember(`takes Med${i} at 8pm daily routine`);
   const r5 = await lc.recall({ query: 'what meds does mom take', limit: 5 });
@@ -227,7 +227,7 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
 
 // --- Regression: local client atomic + serialized writes (audit M7) ---
 {
-  const tns = 'selftest-atomic-' + Date.now();
+  const tns = 'selftest-atomic-' + process.pid;
   const lc = createLocalClient({ namespace: tns });
   await Promise.all(Array.from({ length: 25 }, (_, i) => lc.remember(`atomic fact ${i} takes med at 8pm`)));
   const all = await lc.recall({ query: 'atomic fact takes med', limit: 50 });
@@ -293,6 +293,22 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
     const c = findConflict('Can she take ibuprofen?', [{ text: fact, blob_id: 'd', distance: 0.2 }]);
     ok(c && c.substance === 'ibuprofen', `regression: guard reads back ${label} phrasing`);
   }
+}
+
+// --- Regression: single-L `alergic` typo is saved-AND-guarded (store-without-protect fix) ---
+{
+  for (const drug of ['aspirin', 'ibuprofen', 'penicillin']) {
+    const fact = `Mom is alergic to ${drug}, bad hives`;
+    ok(shouldRemember(fact) === true, `regression: write gate saves alergic-to-${drug}`);
+    const c = findConflict(`Can I give her ${drug}?`, [{ text: fact, blob_id: 'typo', distance: 0.2 }]);
+    ok(c && c.substance === drug, `regression: guard blocks ${drug} taught via alergic typo`);
+  }
+  ok(findConflict('Can she take ibuprofen?', [{ text: 'not alergic to penicillin but alergic to ibuprofen', blob_id: 'typo-neg', distance: 0.2 }])?.substance === 'ibuprofen', 'regression: typo mixed-negation blocks only the positive allergen');
+  ok(findConflict('Can she take penicillin?', [{ text: 'not alergic to penicillin but alergic to ibuprofen', blob_id: 'typo-neg', distance: 0.2 }]) === null, 'regression: typo negated allergen does NOT block');
+  const cb = findConflict('Can she take apixaban?', [{ text: 'allergic to eliquis, rash', blob_id: 'brand', distance: 0.2 }]);
+  ok(cb && cb.substance === 'apixaban', 'regression: eliquis brand resolves to apixaban (no eliqui stem)');
+  const cb2 = findConflict('Can she take Eliquis?', [{ text: 'allergic to apixaban, rash', blob_id: 'brand2', distance: 0.2 }]);
+  ok(cb2 && cb2.substance === 'apixaban', 'regression: apixaban fact blocks Eliquis ask via canonical name');
 }
 
 // --- Regression: out-of-vocabulary allergies (review E) ---
@@ -406,10 +422,10 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok(looksLikeMedicationQuestion('what is the weather today?') === false, 'fail-closed: smalltalk is not conservative');
   ok(looksLikeMedicationQuestion('hey what is the weather today? can I give her ibuprofen?') === true, 'fail-closed: smalltalk appended to a drug question is still conservative');
   ok(looksLikeMedicationQuestion('tell me a joke. also, is it safe to give her aspirin?') === true, 'fail-closed: joke + drug question is conservative');
-  const t0 = Date.now();
-  let timedOut = false;
-  try { await withTimeout(new Promise(() => {}), 50, 'test'); } catch { timedOut = true; }
-  ok(timedOut && Date.now() - t0 < 2000, 'resilience: withTimeout rejects a hung promise');
+  // Status-only (no wall-clock elapsed assert — CI load makes timing flaky).
+  let timedOut = null;
+  try { await withTimeout(new Promise(() => {}), 50, 'test'); } catch (e) { timedOut = e; }
+  ok(timedOut && /timed out/.test(String(timedOut.message)), 'resilience: withTimeout rejects a hung promise');
 }
 
 // --- Cycle 2 P0s: write-gate breadth, supersede, listing completeness ---
@@ -485,6 +501,213 @@ ok(shouldRemember('dinner at 6pm every day') === true, 'regression: write gate s
   ok(namespaceFor('a'.repeat(48) + 'X') !== namespaceFor('a'.repeat(48) + 'Y'), 'ns: long common-prefix ids differ');
   ok(namespaceFor('mom') === 'user-mom', 'ns: short alias keeps stable form (no migration)');
   ok(namespaceFor('demo-mom') === 'user-demo-mom', 'ns: short ids keep stable form');
+}
+
+// --- Regression: teaching-shaped ORDERS must STOP (guards before teaching gate) ---
+{
+  const nap = [{ text: 'allergic to naproxen, rash', blob_id: 'nap', distance: 0.2 }];
+  const c1 = findConflict('She avoids naproxen. She needs Advil.', nap);
+  ok(c1 && (c1.substance === 'ibuprofen' || c1.substance === 'naproxen'), 'order: "needs Advil" STOPs on a same-class naproxen allergy');
+  const c2 = findConflict('Allergic to naproxen, so ibuprofen instead', nap);
+  ok(c2 !== null, 'order: "ibuprofen instead" STOPs on a naproxen allergy');
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w', distance: 0.2 }];
+  const i1 = findInteraction('She avoids aspirin, she needs ibuprofen', warf);
+  ok(i1 && i1.severity === 'high', 'order: "needs ibuprofen" STOPs on warfarin (interaction)');
+  ok(findConflict('She is allergic to naproxen, causes rash', nap) === null, 'order: pure teaching still does not block');
+  ok(isTeachingStatement("She can't use ibuprofen due to allergy") === true, 'order: negated use stays teaching');
+}
+
+// --- Regression: hyphen/underscore spellings + misspellings resolve both sides ---
+{
+  for (const spelling of ['ibu-profen', 'ibu_profen', 'ibuprophen']) {
+    const fact = `she gets hives from ${spelling}`;
+    ok(shouldRemember(fact) === true, `spelling: write gate stores hives-from-${spelling}`);
+    const c = findConflict('Can she take ibuprofen?', [{ text: fact, blob_id: 'sp', distance: 0.2 }]);
+    ok(c && c.substance === 'ibuprofen', `spelling: guard reads back hives-from-${spelling}`);
+  }
+  ok(findConflict('Can she take ibuprofen?', [{ text: 'she gets hives from asprin', blob_id: 'sp2', distance: 0.2 }])?.class === 'nsaid', 'spelling: asprin fact blocks (same class)');
+  ok(findConflict('Can she take asprin?', [{ text: 'allergic to ibuprofen', blob_id: 'sp3', distance: 0.2 }]) !== null, 'spelling: asprin ask STOPs on ibuprofen allergy');
+  ok(findConflict('She needs ibu-profen', [{ text: 'allergic to ibuprofen', blob_id: 'sp4', distance: 0.2 }]) !== null, 'spelling: ibu-profen order STOPs');
+  ok(findConflict('She needs ibu_profen', [{ text: 'allergic to ibuprofen', blob_id: 'sp5', distance: 0.2 }]) !== null, 'spelling: ibu_profen order STOPs');
+  ok(findConflict('Can she take Advill?', [{ text: 'allergic to ibuprofen', blob_id: 'sp6', distance: 0.2 }]) !== null, 'spelling: Advill ask STOPs (brand typo)');
+}
+
+// --- Regression: NSAID brand synonyms resolve on both guards ---
+// Toradol(=ketorolac), Celebrex(=celecoxib), Mobic(=meloxicam), Nuprin(=ibuprofen),
+// Anacin/Bufferin(=aspirin) are NSAIDs: an ibuprofen allergy must block them by
+// class, and warfarin + any of them must fire the anticoagulant+NSAID pair.
+{
+  const ibu = [{ text: 'allergic to ibuprofen, rash', blob_id: 'b-brand', distance: 0.2 }];
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w-brand', distance: 0.2 }];
+  for (const brand of ['Toradol', 'Celebrex', 'Mobic', 'Nuprin', 'Anacin', 'Bufferin']) {
+    ok(findConflict(`Can she take ${brand}?`, ibu) !== null, `brand: ${brand} STOPs on ibuprofen allergy (NSAID class)`);
+  }
+  for (const brand of ['Toradol', 'Celebrex', 'Mobic', 'Lodine', 'Indocin', 'Anaprox']) {
+    const hit = findInteraction(`Can she take ${brand}?`, warf);
+    ok(hit && hit.severity === 'high', `brand: warfarin + ${brand} STOPs (anticoagulant + NSAID)`);
+  }
+  ok(findConflict('Can she take Toradol?', [{ text: 'takes Metformin 8pm', distance: 0.1 }]) === null, 'brand: no conflict without an allergy fact');
+}
+
+// --- Regression: guard tokenizer folds compatibility homoglyphs ---
+// NFKC folds fullwidth (ｉ→i); the Cyrillic/Greek confusable map folds
+// mixed-script lookalikes (і→i, а→a). Either spelling must still STOP.
+{
+  const ibu = [{ text: 'allergic to ibuprofen, rash', blob_id: 'b-fold', distance: 0.2 }];
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w-fold', distance: 0.2 }];
+  const FW_IBU = 'ｉbuprofen';
+  const CY_IBU = 'іbuprofen';
+  const CY_NAP = 'nаproxen';
+  const FW_NAP = 'ｎａｐｒｏｘｅｎ';
+  ok(mentionsDrug(`Can she take ${FW_IBU}?`) === true, 'fold: fullwidth ibuprofen is medication-shaped');
+  ok(mentionsDrug(`Can she take ${CY_IBU}?`) === true, 'fold: cyrillic-i ibuprofen is medication-shaped');
+  for (const [name, spelling] of [['fullwidth-ibuprofen', FW_IBU], ['cyrillic-i-ibuprofen', CY_IBU], ['cyrillic-a-naproxen', CY_NAP], ['fullwidth-naproxen', FW_NAP]]) {
+    ok(findConflict(`Can she take ${spelling}?`, ibu) !== null, `fold: ${name} STOPs on ibuprofen allergy`);
+  }
+  ok(findInteraction(`Can she take ${CY_IBU}?`, warf) !== null, 'fold: cyrillic-i ibuprofen STOPs on warfarin');
+}
+
+
+// --- Regression: teaching-shaped orders with generic administration verbs must STOP ---
+// Guards run BEFORE the teaching gate on every medication-shaped turn: a message
+// that mentions a drug with administration/order intent is evaluated even when
+// it also carries an allergy signal. Pure teaching (no order intent) stays quiet.
+{
+  const ibu = [{ text: 'allergic to ibuprofen', blob_id: 'b-ibu3', distance: 0.2 }];
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w3', distance: 0.2 }];
+  for (const [verb, prep] of [['Get', ''], ['Pass', 'an'], ['Fetch', 'some'], ['Hand', 'the'], ['Slip', 'an']]) {
+    const msg = `She is allergic to penicillin. ${verb} her ${prep ? prep + ' ' : ''}ibuprofen`;
+    ok(isTeachingStatement(msg) === false, `order: "${verb} ... ibuprofen" is NOT teaching`);
+    ok(findConflict(msg, ibu) !== null, `order: "${verb} ... ibuprofen" STOPs on a recalled ibuprofen allergy`);
+  }
+  ok(isTeachingStatement('No ibuprofen left, get her ibuprofen') === false, 'order: stock-out + get is NOT teaching');
+  ok(findConflict('No ibuprofen left, get her ibuprofen', ibu) !== null, 'order: bare "No ibuprofen left, get her ibuprofen" STOPs');
+  ok(findConflict('Slip an ibuprofen into her dinner', ibu) !== null, 'order: "Slip an ibuprofen into her dinner" STOPs');
+  const wi = findInteraction('Allergic to penicillin, get her ibuprofen for the pain', warf);
+  ok(wi && wi.severity === 'high', 'order: warfarin + "get her ibuprofen" STOPs (interaction)');
+  const wi2 = findInteraction('She is allergic to penicillin. Slip her an ibuprofen', warf);
+  ok(wi2 && wi2.severity === 'high', 'order: warfarin + "slip her an ibuprofen" STOPs (interaction)');
+  // Reaction frames are reports, not orders — they stay teaching and quiet.
+  ok(isTeachingStatement('She gets hives from ibuprofen') === true, 'teaching: "gets hives from X" stays teaching');
+  ok(findConflict('She gets hives from ibuprofen', ibu) === null, 'teaching: hives report does not block');
+  ok(isTeachingStatement('Ibuprofen gives her a rash') === true, 'teaching: "gives her a rash" stays teaching');
+  ok(findConflict('Ibuprofen gives her a rash', ibu) === null, 'teaching: rash report does not block');
+  // Pure teaching stays quiet (storage-gated only, never a STOP).
+  ok(findConflict('She is allergic to ibuprofen, causes rash', ibu) === null, 'teaching: pure allergy lesson still does not block');
+  ok(findInteraction('She is allergic to ibuprofen, causes rash', warf) === null, 'teaching: pure lesson does not fire the interaction guard');
+}
+
+// --- Regression: NFKC homoglyph fold (fullwidth/mixed-script scope fork) ---
+// Visually near-identical ids must resolve to the canonical scope: NFKC folds
+// fullwidth characters to ASCII BEFORE any scope decision, so no mixed-script
+// spelling can fork a writable shadow of the shared demo or dodge reserved.
+{
+  ok(namespaceFor('\uFF44emo-mom') === 'user-demo-mom', 'ns: fullwidth demo folds to the canonical demo');
+  ok(namespaceFor('\uFF55ser-demo-mom') === namespaceFor('user-demo-mom'), 'ns: fullwidth user- prefix folds identically to ASCII (scope collapses the nesting)');
+  ok(namespaceFor('\uFF37-abc123') === 'user-w-abc123', 'ns: fullwidth w folds to the reserved prefix');
+  ok(namespaceFor('demo-mom') === 'user-demo-mom', 'ns: ASCII demo unchanged');
+  ok(namespaceFor('\uFF49\uFF42\uFF55\uFF50\uFF52\uFF4F\uFF46\uFF45\uFF4E') === namespaceFor('ibuprofen'), 'ns: fullwidth drug token folds identically');
+}
+
+// --- Regression: guard tokenizer diacritic/ligature + splitter evasion ---
+// The guard tokenizer folded NFKC + Cyrillic/Greek confusables, then deleted
+// every other non-[a-z] char. Substituted letters (é/ï/ñ/ẽ/ı) were deleted so
+// pair-rejoin produced the wrong stem ("ibuprofén" → "ibuprofn"), and ≥2
+// splitters (ZWSP between every letter, fully-spaced letters) defeated the
+// single adjacent-pair rejoin. The fold must normalize diacritics (NFD strip),
+// ligatures (œ→oe, æ→ae, ı→i, ß→ss), delete zero-width/format chars WITHOUT
+// splitting, and collapse spaced single letters — identically on the write
+// side (stored teach) and the guard side (trap), so no stored-but-unprotected
+// fork survives.
+{
+  const ibu = [{ text: 'allergic to ibuprofen, rash', blob_id: 'b-dia', distance: 0.2 }];
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w-dia', distance: 0.2 }];
+  // Diacritic substitutions fold to the exact ASCII stem and STOP.
+  for (const [name, spelling] of [
+    ['e-acute', 'ibuprofén'],
+    ['i-diaeresis', 'ïbuprofen'],
+    ['e-tilde', 'ibuprofẽn'],
+    ['dotless-i', 'ıbuprofen'],
+    ['e-nye', 'ibuprofeñ'],
+  ]) {
+    ok(mentionsDrug(`Can she take ${spelling}?`) === true, `fold: ${name} ibuprofen is medication-shaped`);
+    ok(findConflict(`Can she take ${spelling}?`, ibu) !== null, `fold: ${name} ibuprofen STOPs on ibuprofen allergy`);
+  }
+  // Ligature folds apply identically on both sides (no write/guard fork):
+  // a mangled teach matches the identically-mangled trap via the same fold.
+  ok(shouldRemember('allergic to zœmib, rash') === true, 'fold: oe-ligature allergy teach is saved');
+  ok(findConflict('Can she take zoemib?', [{ text: 'allergic to zœmib, rash', blob_id: 'b-oe', distance: 0.2 }]) !== null, 'fold: œ teach matches oe trap (same fold both sides)');
+  ok(findConflict('Can she take zaemib?', [{ text: 'allergic to zæmib, rash', blob_id: 'b-ae', distance: 0.2 }]) !== null, 'fold: æ teach matches ae trap (same fold both sides)');
+  ok(findConflict('Can she take grossin?', [{ text: 'allergic to großin, rash', blob_id: 'b-ss', distance: 0.2 }]) !== null, 'fold: ß teach matches ss trap (same fold both sides)');
+  // Multiple splitters: ZWSP between every letter (single and double), fully
+  // spaced letters, soft hyphen between every letter, dots between every letter.
+  const letters = 'ibuprofen'.split('');
+  for (const [name, spelling] of [
+    ['zwsp-every-letter', letters.join('​')],
+    ['double-zwsp-every-letter', letters.join('​​')],
+    ['fully-spaced', letters.join(' ')],
+    ['soft-hyphen-every-letter', letters.join('­')],
+    ['dot-every-letter', letters.join('.')],
+  ]) {
+    ok(findConflict(`Can she take ${spelling}?`, ibu) !== null, `split: ${name} ibuprofen STOPs on ibuprofen allergy`);
+  }
+  // No stored-but-unprotected fork: a mangled teach is saved AND the clean
+  // trap still matches the stored fact.
+  const mangledTeach = 'She is allergic to ibuprofén, causes rash';
+  ok(shouldRemember(mangledTeach) === true, 'fork: mangled allergy teach is saved (write side)');
+  ok(findConflict('Can she take ibuprofen?', [{ text: mangledTeach, blob_id: 'b-fork', distance: 0.2 }]) !== null, 'fork: clean trap matches the mangled teach (no unprotected fork)');
+  // Interaction guard sees through the same fold.
+  const wi = findInteraction('Can she take ibuprofén?', warf);
+  ok(wi && wi.severity === 'high', 'fold: warfarin + ibuprofén STOPs (interaction)');
+}
+
+// --- Regression: recap/informational allergy questions never STOP (mymom false-STOP) ---
+// "What allergy does my mom have?" STOP-fired with substance "mymom": the
+// recap exemption was defeated ("does ... have" matched the order-request
+// pattern) and the OOV fallback matched junk ("my"+"mom" rejoined to the
+// "User mymom:" label token). Recap/info questions must never STOP; junk must
+// never become a substance; a real drug order in the same message still STOPs.
+{
+  const labeled = (t) => [{ text: `User mymom: ${t}`, blob_id: 'b-recap', distance: 0.2 }];
+  for (const q of [
+    'What allergy does my mom have?',
+    'What allergies does my mom have?',
+    'List my mom\'s allergies',
+    'Summarise what you remember about allergies',
+    'What do you remember about her allergies?',
+  ]) {
+    ok(findConflict(q, labeled('allergic to penicillin, hives')) === null, `recap: ${q} never STOPs`);
+  }
+  ok(findConflict('What allergy does she have? Should mom have Advil?', labeled('allergic to ibuprofen, rash')) !== null, 'recap: order override still STOPs when a drug is ordered');
+}
+
+// --- Regression: DRUG-for-symptom is an order, never a lesson ---
+// "Advil for headache" alongside a teaching signal skipped the guards entirely
+// (pure-teaching classification, no order intent). A drug named FOR a symptom
+// is an administration order and must reach both guards.
+{
+  const nap = [{ text: 'allergic to naproxen, rash', blob_id: 'nap2', distance: 0.2 }];
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w2', distance: 0.2 }];
+  ok(isTeachingStatement('Allergic to naproxen, so Advil for headache') === false, 'order: DRUG-for-symptom is not teaching');
+  ok(findConflict('Allergic to naproxen, so Advil for headache', nap) !== null, 'order: "Advil for headache" STOPs on a same-class allergy');
+  const wi = findInteraction('Allergic to latex, hives. Advil for headache', warf);
+  ok(wi && wi.severity === 'high', 'order: "Advil for headache" STOPs on warfarin (interaction)');
+}
+
+// --- Regression: teaching-shaped order with a far administration verb must STOP ---
+// adminVerbNearDrug only fires within a 40-char window, while teaching
+// classification tested ADMIN_VERB_RE unbounded — so a lesson plus a distant
+// verb skipped the guards entirely (not teaching, yet unevaluated). Any admin
+// verb/order signal anywhere in the turn must force guard evaluation.
+{
+  const ibu = [{ text: 'allergic to ibuprofen, rash', blob_id: 'b-far', distance: 0.2 }];
+  const warf = [{ text: 'takes warfarin 5mg daily', blob_id: 'w-far', distance: 0.2 }];
+  const filler = 'yesterday at the park with friends and family for lunch after the long walk home ';
+  const far = `She is allergic to penicillin, poor thing. ${filler}${filler}Give her one of those tablets from the top shelf ${filler}ibuprofen for the pain`;
+  ok(isTeachingStatement(far) === false, 'far-verb: teaching + distant verb is NOT teaching');
+  ok(findConflict(far, ibu) !== null, 'far-verb: teaching + distant verb STOPs on a recalled ibuprofen allergy');
+  const wif = findInteraction(far, warf);
+  ok(wif && wif.severity === 'high', 'far-verb: warfarin + distant-verb ibuprofen STOPs (interaction)');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

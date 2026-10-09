@@ -57,7 +57,7 @@ test('SPA bundle is built and CSP-compatible (no inline scripts)', () => {
   assert.ok(!/<script>/.test(html), 'no inline <script> (CSP script-src self holds)');
   assert.ok(!/dangerouslySetInnerHTML/.test(wread('src/App.tsx') + wread('src/ChatView.tsx')), 'chat/shell never inject raw HTML');
   const srcs = ['src/App.tsx', 'src/ChatView.tsx', 'src/WalletView.tsx', 'src/api.ts', 'src/ui.tsx', 'src/chat.ts',
-    'src/views/MemoryView.tsx', 'src/views/DemoView.tsx', 'src/views/ReplayView.tsx', 'src/views/CompareView.tsx',
+    'src/views/MemoryView.tsx', 'src/views/ReplayView.tsx', 'src/views/CompareView.tsx',
     'src/views/GuardProofView.tsx', 'src/views/StatsView.tsx', 'src/views/PrintView.tsx'].map(wread).join('\n');
   assert.equal((srcs.match(/dangerouslySetInnerHTML/g) || []).length, 0, 'no view renders raw HTML anywhere');
 });
@@ -106,6 +106,8 @@ test('SPA shell layout: features above history, account at bottom, topbar always
   assert.ok(app.includes('top-right') && app.includes('Connect wallet'), 'topbar right cluster has the wallet action');
   assert.ok(/\.topbar \{\s*\n?\s*display: flex/.test(css), 'topbar is always visible, not mobile-only');
   assert.ok(css.includes('.side-grow') && css.includes('.acct'), 'history grows+scrolls, account styles exist');
+  assert.ok(app.includes("key: 'compare'") && app.includes("key: 'stats'"), 'Compare + Stats reachable from sidebar nav');
+  assert.ok(app.includes('sess-rename'), 'keyboard-accessible rename button on session rows');
 });
 
 test('SPA print still hides only chrome after the reshuffle', () => {
@@ -116,7 +118,7 @@ test('SPA print still hides only chrome after the reshuffle', () => {
 
 test('SPA wallet uses Sui dAppKit (server verifies Sui signatures only)', () => {
   const srcs = ['src/App.tsx', 'src/ChatView.tsx', 'src/WalletView.tsx', 'src/main.tsx', 'src/api.ts', 'src/ui.tsx', 'src/chat.ts',
-    'src/views/MemoryView.tsx', 'src/views/DemoView.tsx', 'src/views/ReplayView.tsx', 'src/views/CompareView.tsx',
+    'src/views/MemoryView.tsx', 'src/views/ReplayView.tsx', 'src/views/CompareView.tsx',
     'src/views/GuardProofView.tsx', 'src/views/StatsView.tsx', 'src/views/PrintView.tsx'].map(wread).join('\n');
   assert.equal((srcs.match(/window\.ethereum/g) || []).length, 0, 'no ethereum signing path (it can never verify)');
   const main = wread('src/main.tsx');
@@ -185,6 +187,7 @@ test('SPA renders the reasoning trace per reply', () => {
   assert.ok(c.includes('How I decided') && c.includes('m.thinking'), 'assistant cards show the trace');
   assert.ok(c.includes('Sources ({m.recalled.length})'), 'recalled sources live inside the reasoning block');
   assert.ok(wread('src/api.ts').includes('thinking: ThinkStep[]'), 'typed trace in the client');
+  assert.ok(!c.includes('{error} Nothing was saved'), 'mid-stream cut never also claims nothing-was-saved');
 });
 
 test('SPA model picker lives in the composer with clean names', () => {
@@ -202,6 +205,8 @@ test('SPA demo gate: limit prompt + one-click demo switch + low-budget note', ()
   assert.ok(c.includes('budget-note') && c.includes('messages left') && c.includes('Last message'), 'subtle remaining note only when low');
   assert.ok(c.includes('formatResetIn') && c.includes('Resets in'), '429 shows a reset countdown');
   assert.ok(c.includes('Try a memory that already exists') && c.includes('What is she allergic to?'), 'demo greeting makes the premade memory discoverable in one click');
+  assert.ok(c.includes('demo-strip') && c.includes('Shared demo · read-only'), 'demo conversations carry a persistent read-only strip');
+  assert.ok(c.includes('demo-feats') && c.includes('Demo walkthrough — try in order'), 'demo greeting lists the walkthrough; personal chat renders neither');
   assert.ok(!/demo budget/i.test(c), 'no demo-budget wording in the UI');
   assert.ok(!/free only|· free|free tier|free-tier/i.test(c), 'no free-tier wording in the UI');
   assert.ok(wread('src/api.ts').includes('loginRequired') || wread('src/api.ts').includes('data: Record'), '429 body survives on ApiError');
@@ -253,6 +258,14 @@ test('SPEC §3.3: personal chat defaults to the vault for signed-in owners (demo
   // Data views follow the vault only when usable (matrix B keeps demo
   // readiness instead of a 409 wall; matrix C shows vault numbers).
   assert.ok(app.includes('onboarded'), 'vault default for data views is gated on the onboarded flag');
+  // History survives a late wallet flip: namespaces load into a per-user
+  // cache (never a blind reload wiping in-memory turns), storage keys stay
+  // ddChats:<userId>, and both turns of one send persist under the send-time
+  // namespace even if chatUser flips mid-stream.
+  assert.ok(!app.includes('setSessions(loadSessions(chatUser))'), 'no blind reload wiping in-memory turns on namespace switch');
+  assert.ok(/Record<string,\s*ChatSession\[\]>/.test(app), 'history cached per user namespace');
+  const chat = wread('src/ChatView.tsx');
+  assert.ok(chat.includes('props.pushMsg(target, asst, ns)'), 'assistant turn persists under the send-time namespace (no mid-stream split)');
 });
 
 test('SPEC §4/B: personal chat surfaces an unlinked-vault 409 with a vault setup action', () => {

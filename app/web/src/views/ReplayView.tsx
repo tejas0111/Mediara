@@ -77,7 +77,8 @@ export default function ReplayView({ userId }: { userId: string }) {
 
   const facts: ExportResponse['facts'] = data.facts;
   const pct = Math.round((shown / facts.length) * 100);
-  const allergyFact = facts.find((f) => /allerg|penicillin/i.test(f.text)) ?? facts[0];
+  const allergyMatch = facts.find((f) => /allerg|penicillin/i.test(f.text));
+  const allergyFact = allergyMatch ?? facts[0];
   const stopShort = shortBlob(allergyFact.blob_id);
   const stopLink = walruscan(allergyFact.blob_id);
 
@@ -102,7 +103,8 @@ export default function ReplayView({ userId }: { userId: string }) {
         </div>
       </div>
       <p className="replay-hint">
-        Watch how remembered facts accumulated — then see the guard refuse a risky question on the final day.
+        Watch how remembered facts accumulated — each step is a fact saved from a chat turn,
+        with its blob receipt — then see the guard refuse a risky question on the final day.
       </p>
 
       <div
@@ -156,7 +158,7 @@ export default function ReplayView({ userId }: { userId: string }) {
             </CardHeader>
             <CardContent>
               <p className="replay-stop-q">Question: &ldquo;{STOP_QUESTION}&rdquo;</p>
-              <p className="replay-stop-a">No — ibuprofen is refused. Allergy on record: &ldquo;{clean(allergyFact.text)}&rdquo;</p>
+              <p className="replay-stop-a">No — ibuprofen is refused. {allergyMatch ? <>Allergy on record: &ldquo;{clean(allergyFact.text)}&rdquo;</> : <>On record: &ldquo;{clean(allergyFact.text)}&rdquo;</>}</p>
               {stopShort ? (
                 <p className="replay-cite">
                   Source blob <code className="mono">{stopShort}</code>

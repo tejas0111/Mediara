@@ -20,6 +20,19 @@ function shortAddr(a: string): string {
   return a.length > 13 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
 }
 
+function friendlyError(e: unknown): string {
+  if (e instanceof ApiError) {
+    const msg = e.message || 'Request failed.';
+    if (e.status === 401) return `Your session expired — sign in again. (${msg})`;
+    if (e.status === 409) return msg;
+    if (e.status === 429) return `${msg} — please wait, then try again.`;
+    if (e.status === 503) return `${msg} — please retry in a moment.`;
+    return `Server error (${e.status}): ${msg}`;
+  }
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
 export default function WalletModal({ onClose, onAuth }: { onClose: () => void; onAuth: () => void }) {
   const account = useCurrentAccount();
   const signPersonalMessage = useSignPersonalMessage();
@@ -45,9 +58,10 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
       if (!res.ok) throw new Error('Server did not confirm sign-in.');
       const st = await walletStatus();
       onAuth();
-      setStep(st.onboarded ? 'done' : 'setup');
+      const ready = !!st.onboarded && !st.needsRelink && !st.pendingPhase;
+      setStep(ready ? 'done' : 'setup');
     } catch (e) {
-      setError(e instanceof ApiError ? `Server error (${e.status}): ${e.message}` : e instanceof Error ? e.message : String(e));
+      setError(friendlyError(e));
     } finally {
       setBusy(false);
     }
@@ -69,15 +83,15 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
       {step === 'connect' ? (
         <div className="stack">
           <p className="eyebrow">Step 1 of 4 · Connect</p>
-          <p className="soon-copy" style={{ marginTop: 0 }}>
-            Connect your Sui wallet to unlock your private memory vault.
+          <p className="modal-copy" style={{ marginTop: 0 }}>
+            Connect your wallet to unlock your private memory vault.
             Signing in and vault setup follow right here — skip anytime and
             keep chatting as a guest.
           </p>
           <div className="btn-row">
-            <ConnectButton connectText="Connect Sui wallet" />
+            <ConnectButton connectText="Connect wallet" />
           </div>
-          <FieldHint>No wallet yet? Install Slush (slush.app), then come back.</FieldHint>
+          <FieldHint>No wallet yet? Install a Sui wallet in your browser, then return here to connect.</FieldHint>
           {error ? <Alert variant="danger" role="alert">{error}</Alert> : null}
           <div className="btn-row">
             <Button size="sm" onClick={onClose}>Skip for now</Button>
@@ -88,9 +102,9 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
       {step === 'sign' ? (
         <div className="stack">
           <p className="eyebrow">Step 2 of 4 · Sign in</p>
-          <p className="soon-copy" style={{ marginTop: 0 }}>
+          <p className="modal-copy" style={{ marginTop: 0 }}>
             Signing as <span className="mono">{account ? shortAddr(account.address) : ''}</span> —
-            a free message that proves ownership. No gas, no transaction.
+            a message that proves ownership. No transaction is submitted.
           </p>
           <div className="btn-row">
             <Button variant="primary" onClick={() => void signIn()} disabled={busy || !account} aria-busy={busy}>
@@ -99,22 +113,29 @@ export default function WalletModal({ onClose, onAuth }: { onClose: () => void; 
             <Button size="sm" onClick={onClose} disabled={busy}>Skip for now</Button>
           </div>
           {busy ? <FieldHint>Approve the signature request in your wallet.</FieldHint> : null}
-          {error ? <Alert variant="danger" role="alert">{error}</Alert> : null}
+          {error ? (
+            <Alert variant="danger" role="alert">
+              <span>{error}</span>
+              <span className="btn-row">
+                <Button size="sm" onClick={() => void signIn()} disabled={busy || !account}>Try again</Button>
+              </span>
+            </Alert>
+          ) : null}
         </div>
       ) : null}
 
       {step === 'setup' ? (
         <div className="stack">
           <p className="eyebrow">Step 3 of 4 · Vault</p>
-          <p className="soon-copy" style={{ marginTop: 0 }}>
+          <p className="modal-copy" style={{ marginTop: 0 }}>
             You&apos;re signed in. Your private vault needs a
-            one-time setup — two mainnet transactions, you pay gas.
+            one-time setup — two transactions submitted from your wallet.
           </p>
           <div className="btn-row">
             <Button variant="primary" onClick={() => { onClose(); navigate('wallet'); }}>Set up vault</Button>
             <Button size="sm" onClick={onClose}>Skip for now</Button>
           </div>
-          <FieldHint>“Set up vault” continues on the Wallet page with full transaction detail.</FieldHint>
+          <FieldHint>“Set up vault” continues on the Wallet page with full transaction detail. If setup was interrupted, the Wallet page resumes where you left off.</FieldHint>
         </div>
       ) : null}
 

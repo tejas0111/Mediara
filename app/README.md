@@ -1,7 +1,7 @@
 # Mediara — caregiver chatbot that never re-asks a dose
 
 Express chatbot + Telegram bot with long-term memory on Walrus Memory (`@mysten-incubation/memwal`).
-Remembers meds, allergies, routines across sessions; compiles doctor-visit summaries from recall only.
+You teach it meds, allergies, routines once and it doesn't forget across sessions; doctor-visit summaries come from recall only.
 
 ## 2-min quickstart (local, no keys)
 
@@ -59,12 +59,13 @@ dev mode is never presented as Mainnet.
 | `GET` | `/` | — | Dark premium landing (hero, 3-step how-it-works, live evidence strip, Launch app → `/app`) |
 | `GET` | `/app` (+ `/app/*` fallback, static `/app/*` assets) | — | React SPA (hash routing; without a build falls back to the legacy server chat) |
 | `POST` | `/api/chat` | JSON `{userId, message}` (≤500 chars) | `{reply, recalled[], recalledMeta[], memoryScope, identity, savedBlob, mode, disclaimer}` — recalls top-5, coded allergy guard, LLM, gated auto-save. Signed-in wallet users read/write **their own vault** |
-| `POST` | `/api/chat/stream` | Same body as `/api/chat` (same pipeline, same budgets, same `chatLimiter`) | SSE live tokens: `thinking` → `token*` → `done` (guards stay instant JSON, keyless fallback is chunk-streamed — see below) |
+| `POST` | `/api/chat/stream` | Same body as `/api/chat` (same pipeline, same budgets, same `chatLimiter`) | SSE live tokens: `thinking` → `token*` → `done` (guards stay instant JSON with zero tokens, whole-at-once replies go as a single token — see below) |
 | `GET` | `/api/summary` | `?user=<id>` (default `demo-mom`) | `{user, mode, medications[], allergies[], routine[], familyAndCare[], blobCount, disclaimer}` from recall only |
 | `GET` | `/memory` | `?user=<id>` | HTML memory receipts page (wallet users see their own vault) |
 | `GET` | `/demo` | `?persona=day1\|day7` | LIVE before/after: real recall on empty `demo-day1` vs taught namespace |
 | `GET` | `/guard-proof` | — | Public tamper-evident ledger of every STOP/CAUTION (hash-chained; `verify()` runs on every view) |
 | `GET` | `/api/guard-proof` | — | Ledger as JSON with `{count, verify, entries}` |
+| `GET` | `/api/arena` | — | Public eval-trap corpus `{challenges[6]}` (5 STOP traps + 1 Tylenol control; static, no auth — like `/api/models`) |
 | `GET` | `/api/usage` | `?format=md` | Usage evidence: per-user memory counts vs the ≥3×≥10 requirement (markdown via `format=md`) |
 | `GET` | `/api/proactive` | `?user=<id>` | Morning med plan + whole-namespace interaction cross-check (recall only, deterministic) |
 | `POST` | `/api/nudge` | `{users:[id], hour}` | Runs the proactive tick per user on demand (scheduler-equivalent; hour 0–11 → morning brief) |
@@ -93,16 +94,27 @@ delivery differs; `Content-Type` is `text/event-stream`:
 
 | Event | Payload | When |
 |---|---|---|
-| `thinking` | `{thinking[], recalledMeta[]}` (full reasoning trace + cited facts) | FIRST, before any token (sent twice on the keyless path: preliminary, then final with write entries) |
-| `token` | `{t:"..."}` (answer chunks; concatenated = `done.reply`) | Zero or more (never for safety verdicts) |
-| `done` | `{reply, recalled[], recalledMeta[], memoryScope, identity, savedBlob, memoryPersisted, memoryOff, thinking, mode, disclaimer, budget}` (same shapes as `/api/chat`) | LAST, exactly once |
-| `error` | Same JSON error contract as `/api/chat` (`401`/`403`/`409`/`429`/`503`, e.g. `{error, loginRequired, demoUser, remaining, resetsAt, resetAt, resetInHrs}`) with the same HTTP status | Instead of tokens, exactly once |
+| `thinking` | `{thinking[], recalledMeta[]}` (full reasoning trace + cited facts) | FIRST, before any token, exactly once per stream (the full trace, with Answer + Memory-write entries, rides on `done`) |
+| `token` | `{t:"..."}` (one live provider chunk each — forwarded as it arrives, flushed per write, never synthesized/word-split/timed; concatenated = `done.reply`) | One or more on the NON-guard path (exactly one for whole-at-once replies — keyless fallback, non-streaming provider body); zero for safety verdicts |
+| `done` | `{reply, recalled[], recalledMeta[], memoryScope, identity, savedBlob, memoryPersisted, memoryOff, thinking, mode, disclaimer, budget}` (same shapes as `/api/chat`) | LAST, exactly once (budget rides here only — never on tokens) |
+| `error` | Same JSON error contract as `/api/chat` (`400`/`401`/`403`/`409`/`429`/`503`, e.g. `{error, loginRequired, demoUser, remaining, resetsAt, resetAt, resetInHrs}`) with the same HTTP status | Instead of tokens, exactly once |
 
 Rules: STOP/CAUTION guard replies are deterministic templates — they arrive
-as immediate `thinking` + `done` with **no** `token` events (a safety verdict
-is never streamed token-by-token). The keyless/memory-fallback answer is
-chunk-streamed too, so the endpoint works with zero keys. Budget turns are
-consumed exactly once per request (same `touchUser` semantics as `/api/chat`).
+as immediate `thinking` + `done` with **zero** `token` events (a safety
+verdict never dribbles out token-by-token). The keyless/memory-fallback
+answer and any non-streaming provider body each arrive whole as a **single**
+`token` + `done` (degraded but honest — no fake typing on the server).
+Budget turns are consumed exactly once per request (same `touchUser`
+semantics as `/api/chat`), pre-charged before any work is served (non-stream:
+right after the budget check, before recall; stream: before the first token
+is emitted): a turn that streams ≥1 token stays charged even if the client
+disconnects mid-stream (at-least-once — no free provider tokens), while only
+an abort before the charge stays uncharged. A client that disconnects mid-stream still stores no
+partial memory (no transcript trace, no blob) and gets no `done`. Order is
+always `thinking` → `token*` → `done`, with nothing after
+`done`; every write flushes (`X-Accel-Buffering: no`). A ledger failure
+before the first token is a pure `error` event with zero tokens sent (never
+`thinking` → `token` → `error`).
 
 ```bash
 curl -N -X POST localhost:3001/api/chat/stream -H 'Content-Type: application/json' \
@@ -113,12 +125,14 @@ curl -N -X POST localhost:3001/api/chat/stream -H 'Content-Type: application/jso
 
 | Script | Command | Notes |
 |---|---|---|
-| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stream.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/window.test.js && node --test src/budget-keys.test.js && node --test src/frontend.test.js && node --test src/t3.test.js` | 439 checks (211 core + 71 wallet + 65 route + 10 stream + 12 stats + 7 db + 11 window + 14 budget-keys + 28 frontend + 10 t3), no network |
+| `npm test` | `node src/selftest.js && node src/wallet.test.js && node --test src/routes.test.js && node --test src/stream.test.js && node --test src/stats.test.js && node --test src/db.test.js && node --test src/window.test.js && node --test src/budget-keys.test.js && node --test src/frontend.test.js && node --test src/t3.test.js && node --test src/gatewave5.test.js && node --test src/gatewave8.test.js && node --test src/hardening.test.js && node --test src/loghygiene.test.js` | 693 checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene), no network |
 | `npm run stats` | `node src/stats.js` | **Judge command**: per-user memory counts → the ≥3 users × ≥10 memories requirement. `-- --live` reads Walrus itself; `-- --json` is machine-readable. Exit 0 = requirement met. Appends `evidence/USAGE-LEDGER.md` |
 | `npm run dev` / `npm start` | `node src/server.js` | Web widget on `$PORT` (default 3001) |
 | `npm run demo:seed` | `node src/seed-demo.js` | 3-fact local quickstart for `demo-day7` (no keys); full 12-fact seed = `seed:10` (mainnet) |
 | `npm run seed` / `npm run seed:10` | `node src/seed10.js [userId]` | Writes 12 facts, needs mainnet keys; appends to `evidence/blob-ledger.md` |
 | `npm run verify:memwal` | `node src/verify.js [userId]` | Health + write/recall probe, needs mainnet keys |
+
+Test-only fault hooks (never set in prod): `DD_FAULT_RECALL=throw|slow|hang` (degraded/slow/hung recall) + `DD_FAULT_LEDGER=throw` (budget-charge failure) — the degraded-recall, pre-token-abort, and ledger-failure pins.
 
 ## File map
 
@@ -141,12 +155,12 @@ curl -N -X POST localhost:3001/api/chat/stream -H 'Content-Type: application/jso
 - Signatures verified server-side (`verifyPersonalMessageSignature`); the client-supplied address is never trusted — it is re-derived from the verified key.
 - Sessions: HMAC-signed tokens, HttpOnly + SameSite=Lax cookies, Secure flag on https, 7-day expiry; no session store to lose.
 - Delegate private keys encrypted at rest (AES-256-GCM); wrong `SESSION_SECRET` fails closed (null), never garbage.
-- All write surfaces rate-limited per IP (auth 10/min, onboarding 12/min, chat 30/min); per-user daily chat budgets (anon 20/day per browser-guest-key, vault 200/day via `DD_DAY_LIMIT_ANON`/`DD_DAY_LIMIT_WALLET`); shared demo namespaces are anonymous-read-only. JSON bodies capped at 16 KB; chat messages capped at 500 chars.
+- All write surfaces rate-limited per IP (auth 10/min, onboarding 12/min, chat 30/min); per-user chat budgets, all on a rolling 24h window (vault 30/rolling-24h via `DD_DAY_LIMIT_WALLET`; demo namespaces capped by `DD_DAY_LIMIT_DEMO`; the anon per-browser `guest:<hash12>` day budget now meters reads only — personal chat requires sign-in, 401 otherwise); shared demo namespaces are anonymous-read-only. JSON bodies capped at 16 KB; chat messages capped at 500 chars.
 - Cost today is $0 (relayer-sponsored Walrus writes + free OpenRouter models, both upstream-rate-limited) — the budgets above guard rate, not money. If usage ever outgrows free tiers, the decision is per-vault daily caps vs user-pays (Sui micropayment before chat), not passthrough billing without caps.
 - Security headers on every response: CSP (default-src 'none'), nosniff, DENY framing, no-referrer, restrictive Permissions-Policy.
 - Identity separation is enforced server-side: wallet users get a delegate client scoped to their own account; the shared channel is never mixed into their namespace.
 - `src/verify.js` — Mainnet health + write/recall probe.
-- `src/selftest.js` — 211 offline tests (memory/safety/regression core + dead-credential tagging + chain-id pins + census scope + save-intent + research gate); `src/wallet.test.js` — 71 wallet/auth/crypto/rate-limit (+build-error classifier); `src/routes.test.js` — 65 HTTP-level (guards, identity, budgets, demo read-only, dashboard, thinking trace, seed-status honesty, explicit-save, demo-bypass, demo-hijack, scope matrix, G3-FIX wave); `src/stream.test.js` — 10 SSE streaming (guard instant-JSON, keyless chunk-stream, budget-once, 429 error event, demo read-only, SSE parser units, fixpoint parity); `src/stats.test.js` — 12 usage/proof (anon-redacted); `src/db.test.js` — 7 SQLite store; `src/window.test.js` — 11 rolling-window units + route contract; `src/budget-keys.test.js` — 14 canonical-union units; `src/frontend.test.js` — 5 legacy + 23 SPA checks; `src/t3.test.js` — 10 lose-list P0s — `npm test` runs all ten = 439.
+- `src/selftest.js` — 317 offline tests (memory/safety/regression core + dead-credential tagging + chain-id pins + census scope + save-intent + research gate + teaching-order intent + spelling variants + generic-admin-verb orders + NFKC homoglyph fold + tokenizer diacritic/ligature/splitter fold + recap-exemption/OOV-junk + DRUG-for-symptom orders); `src/wallet.test.js` — 71 wallet/auth/crypto/rate-limit (+build-error classifier); `src/routes.test.js` — 79 HTTP-level (guards, identity, budgets, demo read-only, dashboard, thinking trace, seed-status honesty, explicit-save, demo-bypass, demo-hijack, scope matrix, G3-FIX wave, teaching-order STOP incl. memory-off, recap honesty, for-symptom orders, expired-parser 401, vault-badge session scope, overlong-400 parity); `src/stream.test.js` — 27 SSE streaming (per-token live chunks, STOP/CAUTION instant-JSON with zero tokens, single-token whole-reply fallback + non-streaming body, budget-once, 400/401/expired-401/429 parity, charge-on-abort + pre-token-abort-uncharged + abort-transcript-clean + ledger-failure-zero-tokens, recap-abort parity, rewrite parity, single-thinking, abort propagation, guarded error-end, demo read-only, SSE parser units, fixpoint parity, teaching-order STOP); `src/stats.test.js` — 12 usage/proof (anon-redacted); `src/db.test.js` — 8 SQLite store; `src/window.test.js` — 15 rolling-window units + route contract + prune-to-cap + fail-closed cap; `src/budget-keys.test.js` — 14 canonical-union units; `src/frontend.test.js` — 5 legacy + 23 SPA checks; `src/t3.test.js` — 10 lose-list P0s; `src/gatewave5.test.js` — 25 wave-5 hunter repros; `src/gatewave8.test.js` — 13 final-gate repros (compare/nudge guard, IP backstop, capped/stale flags); `src/hardening.test.js` — 70 read backstop, junk-id refusals, union honesty, budget edges, eval cleanup, 0X carve-out, whitespace fixpoint, wave-12 scope fork + wave-13 leading-dash/credential/verify fixes + reviewer/README parity + memory-off guard enforcement (H8) + object-id 400s (H9) + teaching-shaped orders (H10) + NFKC homoglyph fork (H11) + usage id uniformity (H12) + undefined-body guard (H13) + dispensing-verb/modal orders (H14) + allergy-question yielding to orders (H15) + 48-prefix summary isolation (H16) + spaced can-not teaching (H17) + user-x9/invisible demo nesting (H18) + single-letter drug-typo guards (H19) + transposed-spelling guards (H20) + dotted-spelling guards (H21) + short-brand typo guards (H22) + multi-ingredient brand guards (H23) + distance-2 typo guards (H24) + class-word typo guards (H25) + fragment/common-word false-STOP guards (H26) + homoglyph scope fold (H27) + shattered class names (H28) + definitional hard-STOP pin (H29) + extended fold parity (H30) + long-id invisible-hash parity (H31) + cross-clause allergy widening (H32) + wallet 30-cap/rolling + 429-shape pins (H33-H35) + union scan bound (H36) + credential-400 sign-in action (H37) + NEL uniformity (H38) + session strictness/quoted-cookie honesty (H39) + novel ingestion-verb orders (H40) + infix clause-splitter rejoin (H41) + injection write-gate (A) + research-verify refusal (B) + burst pre-charge (C) + hyphen compounds (D) + abort-signal recall (E) + abort receipt (F) + obfuscated-injection write-gate (A2) + demo-seed integrity (G) + disclosure-verb write-gate (A3); `src/loghygiene.test.js` — 4 static log-allowlist checks — `npm test` runs all fourteen = 693.
 - `api/index.js` + `vercel.json` + `DEPLOY.md` — Vercel deploy wiring (serverless entry, rewrites, 5-min guide; prod MUST be mainnet — serverless disk is ephemeral).
 
 ## Local vs Mainnet — honesty box
@@ -186,18 +200,19 @@ Per-chat namespace is `user-tg-<chatId>`; `/reset` clears local rows only (mainn
 
 Vite + React 18 + TypeScript, hand-vendored shadcn-style primitives (zero runtime
 deps, MIT-clean), charcoal dark premium shell: sidebar history + centered chat.
-Guests chat instantly with per-browser memory (persisted `X-Device-Id` → server
-`guest:<hash12>` day budget) — no wallet wall; wallet sign-in unlocks your own
+Guests browse the shared demo instantly with per-browser memory (persisted `X-Device-Id` → server
+`guest:<hash12>` day budget on reads); personal chat requires wallet sign-in
+(401 + sign-in action when signed out) — wallet sign-in opens your own
 vault + the bigger `DD_DAY_LIMIT_WALLET` budget.
 
 | Env | Meaning |
 |---|---|
-| Demo (same-origin, default) | Local stand-in memory; anonymous guests budgeted per browser (`DD_DAY_LIMIT_ANON`/day, demo namespaces capped by `DD_DAY_LIMIT_DEMO`) |
+| Demo (same-origin, default) | Local stand-in memory; anonymous guests metered per browser on reads (`DD_DAY_LIMIT_ANON`/day, demo namespaces capped by `DD_DAY_LIMIT_DEMO`; personal chat requires sign-in) |
 | Mainnet (reachable candidate backend) | Real Walrus memory; wallet vaults; coming-soon gate while unreachable — never a URL prompt |
 
 | Command | Purpose |
 |---|---|
-| `npm run build:web` (in `app/`) | install `web/` deps + `vite build` → `web/dist/` (committed, so clone-and-run works) |
+| `npm run build:web` (in `app/`) | install `web/` deps + `vite build` → `web/dist/` (committed, so clone-and-run works; clears a user-level `allow-scripts` npmrc entry that otherwise fails `--prefix` installs with EALLOWSCRIPTS) |
 | `npm run dev --prefix web` | Vite dev on :5173, `/api` proxied to the Express server on :3001 |
 
 - Hash routing (`#/memory`, `#/demo`, `#/replay`, `#/compare`, `#/proof`, `#/stats`, `#/print`, `#/wallet`) — only `/app` + static `/app/*` need serving.

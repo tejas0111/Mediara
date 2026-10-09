@@ -6,6 +6,7 @@
 // proactive, nudge) over the real Express app.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,9 +21,12 @@ process.env.SESSION_SECRET = 'stats-test-secret';
 process.env.OPENROUTER_API_KEY = '';
 process.env.DD_CHAT_LIMIT = '10000';
 process.env.DD_READ_LIMIT = '10000';
+process.env.DD_REGISTRY_PATH = path.join(TMPDIR, 'registry.json');
 
 const { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce, USERS } = await import('./usage.js');
 const { default: app } = await import('./server.js');
+const { issueSession: issueSessionTop } = await import('./walletAuth.js');
+const { upsertUser: upsertUserTop } = await import('./userRegistry.js');
 
 let server, base;
 before(async () => {
@@ -35,9 +39,26 @@ after(() => {
   try { fs.rmSync(TMPDIR, { recursive: true, force: true }); } catch {}
 });
 
-const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-const get = (p) => fetch(base + p);
-const chat = async (userId, message) => (await post('/api/chat', { userId, message })).json();
+const post = (p, body, headers) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(headers || {}) }, body: JSON.stringify(body) });
+const get = (p, headers) => fetch(base + p, { headers: headers || {} });
+// Personal-chat login gate (SPEC §4/A): anonymous personal chat is 401, so
+// behavior tests chat through a per-label vault session (named userId passes
+// through untouched; the session vault answers).
+let autoVaultN = 0;
+const vaultAddrFor = (label) => '0x' + crypto.createHash('sha256').update(`stats-vault:${label}`).digest('hex');
+const vaultSeen = new Set();
+const vh = (label, extra) => {
+  const addr = vaultAddrFor(label);
+  if (!vaultSeen.has(addr)) {
+    vaultSeen.add(addr);
+    upsertUserTop({ address: addr, accountId: `obj-SX-AUTO-${++autoVaultN}`, delegatePrivateKey: '11'.repeat(32), delegatePublicKey: '22'.repeat(64), delegateAddress: '0x' + '33'.repeat(32), pendingPhase: null, pendingTxBytes: null });
+  }
+  return { Cookie: `dd_session=${issueSessionTop(addr)}`, ...(extra || {}) };
+};
+const chat = async (userId, message, headers) => (await post('/api/chat', { userId, message }, vh(userId, headers))).json();
+// Deterministic counter ids (no Date.now() — parallel-stable, no collisions).
+let stn = 0;
+const stid = (p) => `${p}-${String(++stn).padStart(6, '0')}`;
 
 test('UsageTracker: dedups by blob id, counts qualifying users, exports JSON + markdown', () => {
   const t = new UsageTracker({ persistPath: null });
@@ -147,7 +168,7 @@ test('/api/usage: zero-state is honest (meetsMinimum false, no fake users)', asy
 });
 
 test('/guard-proof + /api/guard-proof: renders, and the fired STOP is on the ledger with a blob', async () => {
-  const u = `stats-gp-${Date.now()}`;
+  const u = stid('stats-gp');
   await chat(u, 'She is allergic to ibuprofen, causes rash');
   await chat(u, 'Can she take ibuprofen for her headache?'); // fires the guard
   const api = await (await get('/api/guard-proof')).json();
@@ -164,9 +185,14 @@ test('/guard-proof + /api/guard-proof: renders, and the fired STOP is on the led
 });
 
 test('/api/proactive: morning plan + cross-check from recall only', async () => {
-  const u = `stats-pro-${Date.now()}`;
-  await chat(u, 'My mom takes warfarin 5mg at 8pm');
-  await chat(u, 'She takes sertraline 50mg every morning');
+  // Login gate (SPEC §4/A): the personal namespace is seeded directly (reads
+  // stay world-readable), so the brief compiles from seeded recall.
+  const u = stid('stats-pro');
+  const { createLocalClient } = await import('./localClient.js');
+  const { namespaceFor: nsf } = await import('./memory.js');
+  const seedClient = createLocalClient({ namespace: nsf(u) });
+  await seedClient.remember('My mom takes warfarin 5mg at 8pm');
+  await seedClient.remember('She takes sertraline 50mg every morning');
   const j = await (await get(`/api/proactive?user=${encodeURIComponent(u)}`)).json();
   assert.match(j.morning, /Good morning/);
   assert.match(j.morning, /warfarin/);
@@ -174,8 +200,12 @@ test('/api/proactive: morning plan + cross-check from recall only', async () => 
 });
 
 test('/api/nudge: runs the tick on demand and returns per-user items', async () => {
-  const u = `stats-nudge-${Date.now()}`;
-  await chat(u, 'My mom takes warfarin 5mg at 8pm');
+  // Login gate (SPEC §4/A): the target namespace is seeded directly (nudge is
+  // a read surface and stays anonymous).
+  const u = stid('stats-nudge');
+  const { createLocalClient } = await import('./localClient.js');
+  const { namespaceFor: nsf2 } = await import('./memory.js');
+  await (createLocalClient({ namespace: nsf2(u) })).remember('My mom takes warfarin 5mg at 8pm');
   const r = await post('/api/nudge', { users: [u], hour: 8 });
   assert.equal(r.status, 200);
   const j = await r.json();

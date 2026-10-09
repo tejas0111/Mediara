@@ -17,6 +17,13 @@
 // Canonical rule under test: wallet turns/memories/guards key on the lowercase
 // session address everywhere; pre-unification rows heal at read time (union,
 // never rewrite, never drop).
+//
+// WAVE-5 EXCEPTION (fail-closed vault evidence): the vault dashboard's displayed
+// `memories` derive from the vault-namespace recall and `guardHits` counts only
+// vault-namespaced (`ns`) receipts — pre-fix rows without `ns` stay out, because
+// caller-writable keys are plantable by anyone. Budget enforcement (used/turns)
+// still unions legacy spend: nothing is dropped from the ledger, only the vault
+// display is vault-grounded. /api/usage + stats attribution are byte-identical.
 // Run: node --test src/budget-keys.test.js  (part of `npm test`)
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -66,6 +73,9 @@ const { default: app } = await import('./server.js');
 const { issueSession } = await import('./walletAuth.js');
 const { upsertUser } = await import('./userRegistry.js');
 
+// Deterministic counter ids (no Date.now() — parallel-stable, no collisions).
+let bkn = 0;
+const bkid = (p) => `${p}-${String(++bkn).padStart(6, '0')}`;
 let server, base;
 before(async () => {
   server = app.listen(0);
@@ -125,13 +135,20 @@ test('wallet: mixed-case userId still spends on the canonical key', async () => 
   assert.equal(dash.personal.budget.used, 1, 'mixed-case spend lands on the canonical key');
 });
 
-test('dashboard: guard ledger unions pre-unification trunc receipts (no rewrite)', async () => {
-  // Seeded pre-import: one guard receipt under LEGACY_TRUNC (lowercase legacy
-  // chat-side key). The dashboard must count it via the trunc union keys.
+test('dashboard: legacy un-namespaced guard receipts stay out of the vault view (fail-closed)', async () => {
+  // Seeded pre-import: one guard receipt under LEGACY_TRUNC with NO ns field
+  // (pre-fix shape). Caller-writable keys are plantable by anyone, so the vault
+  // view counts only vault-namespaced receipts — legacy stays out, fail-closed.
   mkVault(LEGACY_ADDR, 'legacy-guard');
   const h = { ...vaultHeaders(LEGACY_ADDR), 'Content-Type': 'application/json' };
   const dash = await (await get('/api/dashboard', { Cookie: h.Cookie })).json();
-  assert.ok(dash.personal.guardHits >= 1, 'dashboard counts the legacy trunc-keyed guard receipt');
+  assert.equal(dash.personal.guardHits, 0, 'legacy receipt without a vault namespace stays out');
+  // A guard fired INSIDE the vault (namespaced receipt) still counts.
+  await post('/api/chat', { userId: LEGACY_ADDR, message: 'She is allergic to ibuprofen, causes rash' }, h);
+  const trap = await post('/api/chat', { userId: LEGACY_ADDR, message: 'Can she take ibuprofen for her headache?' }, h);
+  assert.match((await trap.json()).reply, /^STOP/, 'vault guard fires');
+  const after = await (await get('/api/dashboard', { Cookie: h.Cookie })).json();
+  assert.ok(after.personal.guardHits >= 1, 'namespaced vault receipt counts');
 });
 
 test('mixed-case legacy trunc rows heal on chat + dashboard (no rewrite)', async () => {
@@ -143,17 +160,24 @@ test('mixed-case legacy trunc rows heal on chat + dashboard (no rewrite)', async
   assert.equal(chatJ.budget.used, 2, 'chat enforces legacy mixed-case turn + fresh turn together');
   const dash = await (await get('/api/dashboard', { Cookie: h.Cookie })).json();
   assert.equal(dash.personal.budget.used, 2, 'dashboard shows legacy mixed-case + fresh spend');
-  assert.ok(dash.personal.guardHits >= 1, 'dashboard counts the mixed-case guard receipt');
+  assert.equal(dash.personal.guardHits, 0, 'mixed-case legacy receipt without a vault namespace stays out (fail-closed)');
+  await post('/api/chat', { userId: MIXED_ADDR, message: 'She is allergic to ibuprofen, causes rash' }, h);
+  const trap = await post('/api/chat', { userId: MIXED_ADDR, message: 'Can she take ibuprofen for her headache?' }, h);
+  assert.match((await trap.json()).reply, /^STOP/, 'vault guard fires');
+  const after = await (await get('/api/dashboard', { Cookie: h.Cookie })).json();
+  assert.ok(after.personal.guardHits >= 1, 'namespaced vault receipt counts');
   assert.ok(dash.personal.memories >= 1, 'legacy mixed-case memory still attributed');
 });
 
-test('guest: turns still agree on the guest key (unchanged)', async () => {  const dev = `bk-guest-${Date.now()}`;
-  const u = `bk-gu-${Date.now()}`;
+test('guest: anonymous personal chat is login-gated (401) and burns no guest budget — guest cap vestigial, machinery kept', async () => {  const dev = bkid('bk-guest');
+  const u = bkid('bk-gu');
   const h = { 'X-Device-Id': dev };
-  await post('/api/chat', { userId: u, message: 'hello one' }, h);
-  await post('/api/chat', { userId: u, message: 'hello two' }, h);
+  const r1 = await post('/api/chat', { userId: u, message: 'hello one' }, h);
+  assert.equal(r1.status, 401, 'anon personal chat gated, never served');
+  assert.equal((await r1.json()).action, 'sign-in');
+  assert.equal((await post('/api/chat', { userId: u, message: 'hello two' }, h)).status, 401);
   const dash = await (await get(`/api/dashboard?user=${encodeURIComponent(u)}`, h)).json();
-  assert.equal(dash.personal.budget.used, 2, 'guest dashboard agrees with guest chat turns');
+  assert.equal(dash.personal.budget.used, 0, 'gated turns burn no guest budget (machinery intact, unenforced on chat)');
 });
 
 // ---- store-level: union healing on BOTH impls ----
@@ -205,7 +229,9 @@ test('unit: union heals mixed-case legacy keys case-insensitively (both stores)'
     ['sqlite', new SqliteGuards({ dbPath: ':memory:' })],
   ]) {
     gp.record({ userId: mixedTrunc, kind: 'conflict', substance: 'penicillin', severity: 'high', reason: 'r', fact: 'f', blobId: null, message: 'm' });
-    assert.equal(BK.unionGuardCount(gp, [canon, canon.slice(0, 48)]), 1, `${name}: mixed-case receipt heals`);
+    const ug = BK.unionGuardCount(gp, [canon, canon.slice(0, 48)]);
+    assert.equal(ug.count, 1, `${name}: mixed-case receipt heals`);
+    assert.equal(ug.stale, false, `${name}: exact small scan is not stale`);
   }
 });
 // ---- F1 (RED): caller-typed legacy rows heal on BOTH paths (same keyset) ----
@@ -217,7 +243,7 @@ test('wallet: caller-typed legacy rows heal on chat AND dashboard (same keyset)'
   fs.mkdirSync(dir, { recursive: true });
   const ul = path.join(dir, 'usage.json');
   const gp = path.join(dir, 'gp.json');
-  const CALLER = `caller-acme-mom-${Date.now() % 100000}`;
+  const CALLER = bkid('caller-acme-mom');
   {
     const seed = new UsageTracker({ persistPath: ul });
     seed.touchUser(CALLER, { turn: true });
@@ -247,7 +273,12 @@ test('wallet: caller-typed legacy rows heal on chat AND dashboard (same keyset)'
     assert.equal(dj.personal.budget.used, 3, 'dashboard shows the same caller-typed spend as chat (same keyset)');
     assert.equal(dj.personal.turns, 3, 'dashboard turns agree with chat turns');
     assert.ok(dj.personal.memories >= 1, 'caller-typed memory still attributed');
-    assert.ok(dj.personal.guardHits >= 1, 'dashboard counts the caller-typed guard receipt');
+    assert.equal(dj.personal.guardHits, 0, 'caller-typed legacy receipt without a vault namespace stays out (fail-closed)');
+    await fetch(b + '/api/chat', { method: 'POST', headers: h, body: JSON.stringify({ userId: CALLER, message: 'She is allergic to ibuprofen, causes rash' }) });
+    const trap = await (await fetch(b + '/api/chat', { method: 'POST', headers: h, body: JSON.stringify({ userId: CALLER, message: 'Can she take ibuprofen for her headache?' }) })).json();
+    assert.match(trap.reply, /^STOP/, 'vault guard fires');
+    const dj2 = await (await fetch(b + `/api/dashboard?user=${encodeURIComponent(CALLER)}`, { headers: { Cookie: h.Cookie } })).json();
+    assert.ok(dj2.personal.guardHits >= 1, 'namespaced vault receipt counts');
   } finally {
     try { s.close(); } catch {}
   }
@@ -306,13 +337,19 @@ test('unit: union resolution dedupes store-equivalent keys, keeps case variants'
 });
 
 // ---- M3a (RED): reserved ids fail fast with 400 even on an exhausted budget ----
+// Login gate (SPEC §4/A): the warmup spends the shared demo budget (the only
+// anon-writable channel left); the reserved refusal still fires before budget.
 test('reserved ids fail fast: 400 even with an exhausted budget (never 429)', async () => {
-  const dev = `m3a-dev-${Date.now()}`;
+  const dev = bkid('m3a-dev');
   const h = { 'X-Device-Id': dev, 'Content-Type': 'application/json' };
-  const u = `m3a-u-${Date.now()}`;
-  for (let i = 0; i < 20; i++) {
-    const r = await post('/api/chat', { userId: u, message: `hello number ${i}` }, h);
-    assert.equal(r.status, 200, `warmup turn ${i} spends guest budget`);
+  process.env.DD_DAY_LIMIT_DEMO = '10';
+  try {
+    for (let i = 0; i < 12; i++) {
+      const r = await post('/api/chat', { userId: 'demo-mom', message: `hello number ${i}` }, h);
+      assert.equal(r.status, i < 10 ? 200 : 429, `warmup turn ${i} ${i < 10 ? 'spends' : 'exhausts'} the shared demo budget`);
+    }
+  } finally {
+    delete process.env.DD_DAY_LIMIT_DEMO;
   }
   const bad = await post('/api/chat', { userId: 'w-0xabc', message: 'my mom takes Metformin 500mg at 8pm' }, h);
   assert.equal(bad.status, 400, 'reserved id fails fast with 400, not 429, on an exhausted budget');

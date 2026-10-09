@@ -1,4 +1,4 @@
-# Mediara 🐘
+# Mediara
 
 **A caregiver chatbot that never re-asks a dose.** It remembers your mother's medications, allergies, and routines across conversations — permanently, on Walrus — and flags unsafe answers before the model replies.
 
@@ -35,7 +35,7 @@ git clone https://github.com/tejas0111/mediara.git
 cd mediara/app
 npm install
 cp .env.example .env        # defaults = local keyless demo; Mainnet needs keys
-npm test                    # 439 checks (211 core + 71 wallet + 65 route + 10 stream + 12 stats + 7 db + 11 window + 14 budget-keys + 28 frontend + 10 t3), no network
+npm test                    # 693 checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene), no network
 npm run dev                 # server on :3001
 ```
 
@@ -68,7 +68,7 @@ open 'localhost:3001/print?user=demo-mom'
 open 'localhost:3001/replay?user=demo-mom'
 ```
 
-Without an LLM key the bot still works (echo replies that prove the memory flow). Add `OPENROUTER_API_KEY` to `.env` for real Gemini-powered replies. See `app/README.md` for the full endpoint table, Telegram setup, and troubleshooting.
+Without an LLM key the bot still works (echo replies that prove the memory flow). Add `OPENROUTER_API_KEY` to `.env` if you want real Gemini-powered replies. You'll find the full endpoint table, Telegram setup, and troubleshooting in `app/README.md`.
 
 ## How it works
 
@@ -95,7 +95,7 @@ Full architecture, request lifecycle, safety model, and API: [docs/ARCHITECTURE.
 ## Repository layout
 
 ```
-app/                  Express server (API + React SPA at /), Telegram bot, MemWal wrapper, seeder, 439 offline checks (211 core + 71 wallet + 65 route + 10 stream + 12 stats + 7 db + 11 window + 14 budget-keys + 28 frontend + 10 t3)
+app/                  Express server (API + React SPA at /), Telegram bot, MemWal wrapper, seeder, 693 offline checks (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene)
 docs/images/          Architecture + demo visuals (sources included)
 evidence/             Append-only proof: blob ledger, test log, transcripts, load probe
 ```
@@ -110,7 +110,7 @@ Everything claimed here is verifiable:
 | Recall + STOP guard + summary E2E | [evidence/TEST-LOG.md](evidence/TEST-LOG.md) — 44 dated probes |
 | Full teach→recall→reply transcripts | [evidence/DEMO-TRANSCRIPT.md](evidence/DEMO-TRANSCRIPT.md) |
 | 50/50 requests, p95 12ms, 0 errors | [evidence/LOAD-PROBE.md](evidence/LOAD-PROBE.md) |
-| 439/439 offline checks pass (211 core + 71 wallet + 65 route + 10 stream + 12 stats + 7 db + 11 window + 14 budget-keys + 28 frontend + 10 t3) | `npm test` — run it yourself |
+| 693/693 offline checks pass (317 core + 71 wallet + 79 route + 27 stream + 12 stats + 8 db + 15 window + 14 budget-keys + 28 frontend + 10 t3 + 25 gatewave5 + 13 gatewave8 + 70 hardening + 4 loghygiene) | `npm test` — run it yourself |
 | **Real-use requirement (≥3 users × ≥10 memories) — judged from Walrus, not vibes** | `npm run stats` (`--live` reads the relayer; every blob id links to walruscan) · [`/api/usage`](app/README.md) |
 | **Every STOP/CAUTION is public and tamper-evident** | [`/guard-proof`](app/src/page.js) — append-only hash-chain ledger; `/api/guard-proof` includes a chain verification |
 | **Memory that reaches out** | morning med brief + nightly interaction cross-check over the whole namespace — `/api/proactive` (on demand), `/api/nudge` (per-user tick), 6-hourly scheduler in dev |

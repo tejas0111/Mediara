@@ -106,7 +106,12 @@ export function issueSession(address) {
 export function readSession(token) {
   try {
     if (typeof token !== 'string') return null;
-    const [body, sig] = token.split('.');
+    // Strict 2-part check (hunter note): base64url halves never contain '.',
+    // so anything but exactly [body, sig] is malformed — reject, never accept
+    // the first two parts of a longer token.
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [body, sig] = parts;
     if (!body || !sig) return null;
     const expected = hmac(body);
     const a = Buffer.from(sig), b = Buffer.from(expected);
@@ -138,6 +143,10 @@ export function sessionFromReq(req) {
     if (!m) return null;
     let token;
     try { token = decodeURIComponent(m[1]); } catch { return null; }
+    // Strip RFC 6265 DQUOTE wrapping (mirrors server.js sessionCookieValue):
+    // a quoted VALID token still authenticates instead of false-expiring.
+    token = token.trim().replace(/^"(.*)"$/s, '$1').trim();
+    if (!token) return null;
     return readSession(token);
   } catch {
     return null;

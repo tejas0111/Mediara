@@ -69,4 +69,4 @@ the in-app **Mainnet** environment toggle (Account → Mainnet server URL).
 - `railway.json` (here): nixpacks build, `node src/server.js`, `/healthz` check.
 - `web/dist` is committed, so no frontend build runs on Railway.
 - Trial credit ($5) covers this easily (one 512MB service, low traffic).
-- Never put real keys in git — Variables only.
+- Don't put real keys in git. Keep them in Variables only.

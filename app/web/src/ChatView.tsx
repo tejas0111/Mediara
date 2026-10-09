@@ -6,11 +6,12 @@ import {
   getModels,
   loadModel,
   postChat,
+  postChatStream,
   saveModel,
   shortBlob,
   walruscan,
 } from './api';
-import type { Budget } from './api';
+import type { Budget, ChatResponse, RecalledMeta, ThinkStep } from './api';
 import type { ChatMsg, ChatSession } from './chat';
 import { msgId } from './chat';
 import { Alert, Badge, Button, IconShield, Spinner, cn } from './ui';
@@ -23,7 +24,7 @@ export interface ChatViewProps {
   active: ChatSession | null;
   selectSession: (id: string) => void;
   newSession: () => string;
-  pushMsg: (sessionId: string, msg: ChatMsg) => void;
+  pushMsg: (sessionId: string, msg: ChatMsg, ns: string) => void;
   onSwitchUser?: (userId: string) => void;
   onSignIn?: () => void;
   onMode?: (mode: 'local' | 'mainnet') => void;
@@ -178,6 +179,9 @@ export default function ChatView(props: ChatViewProps) {
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [needLogin, setNeedLogin] = React.useState<string | null>(null);
+  // Which gate raised the sign-in prompt: 429 = over budget, 401 = personal
+  // chat needs a session. The card title differs; the actions are the same.
+  const [needLoginStatus, setNeedLoginStatus] = React.useState<number | null>(null);
   const [needRelink, setNeedRelink] = React.useState<string | null>(null);
   // Signed-in but vault not linked (SPEC §4/B): the server 409s without a
   // needsRelink flag (no dead key, just no vault row). Offer vault setup
@@ -189,6 +193,13 @@ export default function ChatView(props: ChatViewProps) {
   // the 429 reset countdown (resetAt ISO + whole-hour fallback).
   const [budget, setBudget] = React.useState<Budget | null>(null);
   const [limitReset, setLimitReset] = React.useState<{ resetAt: string | null; resetInHrs: number | null } | null>(null);
+  // Live stream state: rendered as a provisional assistant row while pending.
+  // The final message is pushed from the `done` payload, so localStorage only
+  // ever holds completed turns (key `ddChats:<userId>` untouched otherwise).
+  const [streamText, setStreamText] = React.useState('');
+  const [streamThinking, setStreamThinking] = React.useState<ThinkStep[]>([]);
+  const [streamRecalled, setStreamRecalled] = React.useState<RecalledMeta[]>([]);
+  const hasStream = streamText.length > 0 || streamThinking.length > 0;
   const listRef = React.useRef<HTMLDivElement>(null);
   const boxRef = React.useRef<HTMLTextAreaElement>(null);
   // Guest identity: ensure the persisted device id exists before the first
@@ -214,7 +225,7 @@ export default function ChatView(props: ChatViewProps) {
     const el = listRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion() ? 'auto' : 'smooth' });
-  }, [msgs.length, pending]);
+  }, [msgs.length, pending, streamText, streamThinking.length]);
 
   const autogrow = React.useCallback(() => {
     const el = boxRef.current;
@@ -228,30 +239,57 @@ export default function ChatView(props: ChatViewProps) {
   async function send(raw: string) {
     const text = raw.trim();
     if (!text || pending) return;
+    // Pin the persistence namespace for this whole send: the user turn and
+    // the assistant turn below must land under the same `ddChats:<ns>` key
+    // even if the wallet session resolves mid-stream and App's chatUser flips.
+    const ns = userId;
     let sid = active?.id;
     if (!sid) sid = props.newSession();
     const target = sid;
     const userMsg: ChatMsg = { id: msgId(), role: 'user', text: text.slice(0, MAX_LEN), ts: Date.now() };
-    props.pushMsg(target, userMsg);
+    props.pushMsg(target, userMsg, ns);
     setInput('');
     setPending(true);
     setError(null);
+    setStreamText('');
+    setStreamThinking([]);
+    setStreamRecalled([]);
+    // True once at least one live token rendered: a failure after this point
+    // is a mid-stream cut (the turn may already be saved server-side), while
+    // a failure before it falls back to the non-stream endpoint.
+    let gotTokens = false;
     try {
-      const res = await postChat(userId, text, memoryOn, model || undefined);
+      let res: ChatResponse | null = null;
+      try {
+        res = await postChatStream(userId, text, memoryOn, model || undefined, (ev) => {
+          if (ev.type === 'thinking') {
+            setStreamThinking(ev.thinking);
+            setStreamRecalled(ev.recalledMeta);
+          } else if (ev.type === 'token') {
+            gotTokens = true;
+            const t = ev.token;
+            setStreamText((prev) => prev + t);
+          }
+        });
+      } catch (se) {
+        if (gotTokens) throw se;
+        res = await postChat(userId, text, memoryOn, model || undefined);
+      }
+      const finalRes = res as ChatResponse;
       const asst: ChatMsg = {
         id: msgId(),
         role: 'assistant',
-        text: res.reply,
-        savedBlob: res.savedBlob,
-        memoryPersisted: res.memoryPersisted,
-        recalled: (res.recalledMeta ?? []).map((m) => ({ text: m.text, blob_id: m.blob_id })),
-        thinking: res.thinking ?? [],
+        text: finalRes.reply,
+        savedBlob: finalRes.savedBlob,
+        memoryPersisted: finalRes.memoryPersisted,
+        recalled: (finalRes.recalledMeta ?? []).map((m) => ({ text: m.text, blob_id: m.blob_id })),
+        thinking: finalRes.thinking ?? [],
         ts: Date.now(),
       };
-      props.pushMsg(target, asst);
-      setMode(res.mode);
-      props.onMode?.(res.mode);
-      setBudget(res.budget ?? null);
+      props.pushMsg(target, asst, ns);
+      setMode(finalRes.mode);
+      props.onMode?.(finalRes.mode);
+      setBudget(finalRes.budget ?? null);
       setLimitReset(null);
       setNeedLogin(null);
       setNeedVault(null);
@@ -261,7 +299,14 @@ export default function ChatView(props: ChatViewProps) {
       const msg = e instanceof Error ? e.message : 'request failed';
       setLastFailed(text);
       const data = e instanceof ApiError ? (e.data as Record<string, unknown>) : {};
-      setNeedLogin(e instanceof ApiError && e.status === 429 && data?.loginRequired === true ? msg : null);
+      // Both gates carry loginRequired: 429 over-budget and 401 personal-chat
+      // without a session (signed-out custom id, expired session). Either way
+      // the fix is sign in or use the demo — never a bare Retry loop.
+      const loginGate = e instanceof ApiError
+        && (e.status === 429 || e.status === 401)
+        && data?.loginRequired === true;
+      setNeedLogin(loginGate ? msg : null);
+      setNeedLoginStatus(loginGate ? status : null);
       setLimitReset(e instanceof ApiError && e.status === 429
         ? {
           resetAt: typeof data?.resetAt === 'string' ? (data.resetAt as string) : null,
@@ -271,11 +316,21 @@ export default function ChatView(props: ChatViewProps) {
       setNeedRelink(e instanceof ApiError && e.status === 409 && (e as ApiError).data?.needsRelink === true ? msg : null);
       setNeedVault(e instanceof ApiError && e.status === 409 && (e as ApiError).data?.needsRelink !== true ? msg : null);
       const cleanMsg = msg.replace(/[.\u2026\s]+$/, '');
-      setError(status === 503
-        ? `Server is degraded right now: ${cleanMsg}. Your message was not answered.`
-        : `Send failed${status ? ` (${status})` : ''}: ${cleanMsg}`);
+      if (gotTokens) {
+        // Mid-stream cut: the turn may already be saved server-side, so this
+        // message stands alone — it must NOT also claim nothing was saved.
+        setError(`The answer stopped mid-stream: ${cleanMsg}. It may have been saved — check Memory before resending.`);
+      } else {
+        const notSaved = 'Nothing was saved for this turn — you can retry safely.';
+        setError(status === 503
+          ? `Server is degraded right now: ${cleanMsg}. Your message was not answered. ${notSaved}`
+          : `Send failed${status ? ` (${status})` : ''}: ${cleanMsg}. ${notSaved}`);
+      }
     } finally {
       setPending(false);
+      setStreamText('');
+      setStreamThinking([]);
+      setStreamRecalled([]);
     }
   }
 
@@ -285,7 +340,17 @@ export default function ChatView(props: ChatViewProps) {
 
   const empty = msgs.length === 0;
   const isDemo = DEMO_USERS.has(userId);
-  const suggestions = isDemo ? DEMO_SUGGESTIONS : SUGGESTIONS;
+  // Provisional streaming message: verdict-first on a guard fire (never bury
+  // a STOP), reasoning first otherwise — same order as completed turns.
+  const streamMsg: ChatMsg = {
+    id: 'streaming',
+    role: 'assistant',
+    text: streamText,
+    thinking: streamThinking,
+    recalled: streamRecalled.map((m) => ({ text: m.text, blob_id: m.blob_id })),
+    ts: Date.now(),
+  };
+  const streamGuard = guardFired(streamMsg);  const suggestions = isDemo ? DEMO_SUGGESTIONS : SUGGESTIONS;
   const lowBudget = budget && budget.remaining <= 3 && budget.remaining >= 1 ? budget : null;
   const lowCountdown = lowBudget?.remaining === 1 ? formatResetIn(lowBudget.resetAt) : null;
 
@@ -295,6 +360,11 @@ export default function ChatView(props: ChatViewProps) {
         <Alert variant="warn" className="chat-memoff">
           Memory is off — I will answer without saving or recalling. Turn memory on to keep facts for {userId}.
         </Alert>
+      ) : null}
+      {isDemo ? (
+        <p className="demo-strip" role="note">
+          Shared demo · read-only — nothing you type here is saved. Your own chats live under Chat.
+        </p>
       ) : null}
       <div className="chat-list" ref={listRef} role="log" aria-label="Conversation" aria-live="polite">
         {empty ? (
@@ -326,6 +396,17 @@ export default function ChatView(props: ChatViewProps) {
                 </button>
               ))}
             </div>
+            {isDemo ? (
+              <div className="demo-feats" aria-label="Demo walkthrough">
+                <p className="demo-feats-h">Demo walkthrough — try in order</p>
+                <ol>
+                  <li>Ask what she is allergic to — the answer cites a saved blob.</li>
+                  <li>Ask if ibuprofen is okay — watch it STOP before answering.</li>
+                  <li>Open <a href="#/proof">Guard proof</a> — every STOP is verifiable there.</li>
+                </ol>
+                <p className="demo-feats-note">Shared demo is read-only: your turns are never saved here. Teach in Chat to keep your own memory.</p>
+              </div>
+            ) : null}
           </div>
         ) : (
           msgs.map((m) =>
@@ -384,7 +465,50 @@ export default function ChatView(props: ChatViewProps) {
             ),
           )
         )}
-        {pending ? (
+        {pending && hasStream ? (
+          <div className="row row-asst">
+            <div className="asst-card streaming" aria-live="polite">
+              {streamGuard ? <AssistantBody msg={streamMsg} mode={mode} /> : null}
+              {streamThinking.length > 0 ? (
+                <details
+                  className="think think-live"
+                  open={streamGuard || undefined}
+                >
+                  <summary>How I decided ({streamThinking.length} steps)</summary>
+                  <ol>
+                    {streamThinking.map((t, i) => (
+                      <li key={i} style={{ '--i': i } as React.CSSProperties}>
+                        <strong>{t.label}.</strong> <span>{t.detail}</span>
+                      </li>
+                    ))}
+                  </ol>
+                  {streamRecalled.length > 0 ? (
+                    <>
+                      <p className="cite">Sources ({streamRecalled.length})</p>
+                      <ul className="src">
+                        {streamRecalled.map((r, i) => (
+                          <li key={i}>
+                            <span>{clean(r.text)}</span>
+                            {r.blob_id ? (
+                              <span className="mono cite"> · blob {shortBlob(r.blob_id) ?? r.blob_id}</span>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                </details>
+              ) : null}
+              {streamGuard ? (
+                <span className="caret" aria-hidden="true" />
+              ) : streamText ? (
+                <p className="asst-text">{clean(streamText)}<span className="caret" aria-hidden="true" /></p>
+              ) : (
+                <p className="asst-text streaming-wait"><Spinner /> Thinking…</p>
+              )}
+            </div>
+          </div>
+        ) : pending ? (
           <div className="row row-asst">
             <div className="asst-card typing"><Spinner /> Thinking…</div>
           </div>
@@ -393,13 +517,13 @@ export default function ChatView(props: ChatViewProps) {
 
       {needLogin ? (
         <Alert variant="warn" className="send-error" role="alert">
-          <span><strong>Message limit reached.</strong> {needLogin}{(() => {
+          <span><strong>{needLoginStatus === 401 ? 'Sign-in needed.' : 'Message limit reached.'}</strong> {needLogin}{(() => {
             const cd = formatResetIn(limitReset?.resetAt ?? null, limitReset?.resetInHrs ?? null);
             return cd ? ` Resets in ${cd}.` : '';
           })()}</span>
           <span className="btn-row">
-            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(null); setLimitReset(null); if (props.onSignIn) props.onSignIn(); else window.location.hash = '#/wallet'; }}>Sign in</Button>
-            <Button size="sm" onClick={() => { setNeedLogin(null); setLimitReset(null); props.onSwitchUser?.('demo-mom'); }}>Explore the demo</Button>
+            <Button size="sm" variant="primary" onClick={() => { setNeedLogin(null); setNeedLoginStatus(null); setLimitReset(null); if (props.onSignIn) props.onSignIn(); else window.location.hash = '#/wallet'; }}>Sign in</Button>
+            <Button size="sm" onClick={() => { setNeedLogin(null); setNeedLoginStatus(null); setLimitReset(null); props.onSwitchUser?.('demo-mom'); }}>Explore the demo</Button>
           </span>
         </Alert>
       ) : null}
@@ -421,7 +545,7 @@ export default function ChatView(props: ChatViewProps) {
       ) : null}
       {error && !needLogin && !needRelink && !needVault ? (
         <Alert variant="danger" className="send-error">
-          <span>{error} Nothing was saved for this turn — you can retry safely.</span>
+          <span>{error}</span>
           {lastFailed ? (
             <Button size="sm" onClick={retry} disabled={pending}>{pending ? 'Retrying…' : 'Retry'}</Button>
           ) : null}

@@ -30,6 +30,9 @@ const { default: app, __llmForTest, __censusForTest } = await import('./server.j
 const { deviceKey } = await import('./rateLimit.js');
 const { landingPage } = await import('./page.js');
 
+// Deterministic counter ids (no Date.now() — parallel-stable, no collisions).
+let t3n = 0;
+const t3id = (p) => `${p}-${String(++t3n).padStart(6, '0')}`;
 let server, base;
 before(async () => {
   server = app.listen(0);
@@ -134,11 +137,11 @@ test('deviceKey isolates devices on one NAT IP', async () => {
 test('DD_READ_LIMIT override takes effect end-to-end and is device-keyed', async () => {
   process.env.DD_READ_LIMIT = '2';
   try {
-    const h1 = { 'X-Device-Id': `t3-r1-${Date.now()}` };
+    const h1 = { 'X-Device-Id': t3id('t3-r1') };
     assert.equal((await get('/api/summary?user=demo-mom', h1)).status, 200);
     assert.equal((await get('/api/summary?user=demo-mom', h1)).status, 200);
     assert.equal((await get('/api/summary?user=demo-mom', h1)).status, 429, 'override must gate the 3rd read');
-    const h2 = { 'X-Device-Id': `t3-r2-${Date.now()}` };
+    const h2 = { 'X-Device-Id': t3id('t3-r2') };
     assert.equal((await get('/api/summary?user=demo-mom', h2)).status, 200, 'a second device on the same IP keeps its own read budget');
   } finally {
     process.env.DD_READ_LIMIT = '10000';
@@ -148,11 +151,12 @@ test('DD_READ_LIMIT override takes effect end-to-end and is device-keyed', async
 test('DD_CHAT_LIMIT override takes effect end-to-end', async () => {
   process.env.DD_CHAT_LIMIT = '2';
   try {
-    const u = `t3-chat-${Date.now()}`;
-    const h = { 'X-Device-Id': `t3-c-${Date.now()}` };
-    assert.equal((await post('/api/chat', { userId: u, message: 'hello there' }, h)).status, 200);
-    assert.equal((await post('/api/chat', { userId: u, message: 'hello again' }, h)).status, 200);
-    assert.equal((await post('/api/chat', { userId: u, message: 'one more' }, h)).status, 429, 'override must gate the 3rd turn');
+    // Login gate (SPEC §4/A): limiter math runs on the always-open demo
+    // namespace (every POST consumes the device bucket — allowed or denied).
+    const h = { 'X-Device-Id': t3id('t3-c') };
+    assert.equal((await post('/api/chat', { userId: 'demo-mom', message: 'hello there' }, h)).status, 200);
+    assert.equal((await post('/api/chat', { userId: 'demo-mom', message: 'hello again' }, h)).status, 200);
+    assert.equal((await post('/api/chat', { userId: 'demo-mom', message: 'one more' }, h)).status, 429, 'override must gate the 3rd turn');
   } finally {
     process.env.DD_CHAT_LIMIT = '10000';
   }

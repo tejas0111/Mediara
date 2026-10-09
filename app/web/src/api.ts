@@ -158,6 +158,142 @@ export const postChat = (userId: string, message: string, memory: boolean, model
     method: 'POST',
     body: JSON.stringify({ userId, message, memory: memory ? true : 'off', ...(model ? { model } : {}) }),
   });
+
+// ------------------------------------------------------- chat stream ---
+// Live-token SSE client for POST /api/chat/stream. Same request body as
+// /api/chat; the server replies `text/event-stream` with events:
+//   event: thinking  data: { thinking: ThinkStep[], recalledMeta: RecalledMeta[] }
+//   event: token     data: { t: string }
+//   event: done      data: ChatResponse
+//   event: error     data: { error: string, ... } (same body /api/chat sends)
+// A `data: [DONE]` payload (no event) also terminates the stream.
+// onEvent fires for thinking|token|done only; `error` events throw ApiError.
+// Resolves with the `done` payload. Throws ApiError when the stream ends
+// without a `done` event.
+export type ChatStreamEvent =
+  | { type: 'thinking'; thinking: ThinkStep[]; recalledMeta: RecalledMeta[] }
+  | { type: 'token'; token: string }
+  | { type: 'done'; done: ChatResponse };
+export type ChatStreamHandler = (ev: ChatStreamEvent) => void;
+
+function parseStreamBlock(block: string): { event: string; data: string } | null {
+  let event = '';
+  const dataLines: string[] = [];
+  for (const raw of block.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith(':')) continue; // comment keep-alive
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+    else if (line === '') continue;
+  }
+  if (dataLines.length === 0) return null;
+  return { event, data: dataLines.join('\n') };
+}
+
+function errorFromStreamText(status: number, text: string): ApiError {
+  let message = `request failed (${status})`;
+  let data: Record<string, unknown> = {};
+  for (const raw of String(text).split('\n')) {
+    const line = raw.trim();
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    try {
+      const obj = JSON.parse(payload) as Record<string, unknown>;
+      if (obj && typeof obj === 'object') {
+        data = obj;
+        if (typeof obj.error === 'string' && obj.error) message = obj.error;
+      }
+    } catch {
+      /* keep scanning — malformed JSON never fails the error path */
+    }
+  }
+  return new ApiError(status, message, data);
+}
+
+export async function postChatStream(
+  userId: string,
+  message: string,
+  memory: boolean,
+  model: string | undefined,
+  onEvent: ChatStreamHandler,
+): Promise<ChatResponse> {
+  const r = await fetch(`${getApiBase()}/api/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Device-Id': getDeviceId() },
+    body: JSON.stringify({ userId, message, memory: memory ? true : 'off', ...(model ? { model } : {}) }),
+  });
+  if (!r.ok) {
+    throw errorFromStreamText(r.status, await r.text().catch(() => ''));
+  }
+  if (!r.body) throw new ApiError(r.status || 500, 'stream unavailable', {});
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let done: ChatResponse | null = null;
+  const handleBlock = (block: string) => {
+    if (!block.trim()) return;
+    const parsed = parseStreamBlock(block);
+    if (!parsed) return;
+    if (parsed.data === '[DONE]') {
+      // Termination marker with no payload (upstream passthrough).
+      if (!done) throw new ApiError(500, 'stream ended before the answer arrived', {});
+      return;
+    }
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(parsed.data) as Record<string, unknown>;
+    } catch {
+      return; // malformed JSON is skipped, the stream continues
+    }
+    if (parsed.event === 'thinking') {
+      onEvent({
+        type: 'thinking',
+        thinking: Array.isArray(obj.thinking) ? (obj.thinking as ThinkStep[]) : [],
+        recalledMeta: Array.isArray(obj.recalledMeta) ? (obj.recalledMeta as RecalledMeta[]) : [],
+      });
+    } else if (parsed.event === 'token') {
+      const t = typeof obj.t === 'string' ? obj.t
+        : typeof obj.text === 'string' ? (obj.text as string)
+        : typeof obj.token === 'string' ? (obj.token as string) : '';
+      if (t) onEvent({ type: 'token', token: t });
+    } else if (parsed.event === 'done') {
+      done = obj as unknown as ChatResponse;
+      onEvent({ type: 'done', done });
+    } else if (parsed.event === 'error') {
+      const status = typeof obj.status === 'number' ? (obj.status as number) : 500;
+      const msg = typeof obj.error === 'string' && obj.error ? (obj.error as string) : 'stream failed';
+      throw new ApiError(status, msg, obj);
+    }
+  };
+  for (;;) {
+    const { value, done: rd } = await reader.read();
+    if (value?.length) buf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      handleBlock(block);
+      if (done) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return done;
+      }
+    }
+    if (rd) break;
+  }
+  buf += decoder.decode();
+  if (buf.trim()) {
+    for (const block of buf.split(/\n\n/)) {
+      handleBlock(block);
+      if (done) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return done;
+      }
+    }
+  }
+  if (done) return done;
+  throw new ApiError(500, 'stream ended before the answer arrived', {});
+}
 export interface ModelInfo {
   id: string;
 }

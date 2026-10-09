@@ -134,6 +134,10 @@ export default function MemoryView({ userId }: { userId: string }) {
           : 'Every fact below carries its local demo id — on Mainnet these are Walrus blob receipts. Allergies are quoted verbatim — confirm with the patient or carer before acting.'}
       </p>
 
+      <p className="mem-hint">
+        Only your own care record is shown here — facts belonging to anyone else stay redacted.
+      </p>
+
       {stale ? (
         <Alert variant="warn">
           {data.stale

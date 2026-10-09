@@ -11,7 +11,7 @@ try { ASSET_V = String(Math.floor(fs.statSync(path.join(__pdir, '..', 'public', 
 const TOP = (title, mode) => `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>${esc(title)}</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/app.css?v=${ASSET_V}">
+<title>${esc(title)}</title><link rel="icon" type="image/svg+xml" href="/app/logo.svg"><link rel="stylesheet" href="/assets/app.css?v=${ASSET_V}">
 <style>
 /* Compat-view charcoal shim: these server pages are shareable legacy views
    (kept because tests + evidence link them); the app lives at /app. The
@@ -39,7 +39,7 @@ select,option,optgroup{color-scheme:dark;background-color:#1a1c23;color:#f4f4f5;
 <script type="module" src="/assets/app.js?v=${ASSET_V}"></script></head><body>
 <a class="skip" href="#main">Skip to content</a>
 <header class="top"><div class="bar">
-  <div class="brand"><span class="logo">M</span>
+  <div class="brand"><span class="logo" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="16" fill="#f4f4f5"/><path d="M32 12 L50 20 V33 C50 44 42 51 32 54 C22 51 14 44 14 33 V20 Z" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linejoin="round"/><path d="M24 32.5 L29.5 38 L40 26" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="47" r="2.4" fill="#0c0d10"/></svg></span>
     <div><h1>Mediara</h1><p>a caregiver chatbot that never re-asks a dose</p></div></div>
   <nav class="topnav" aria-label="Primary">
     <a href="/app">Chat</a><a href="/app#/demo">Demo chat</a><a href="/app#/memory">Memory</a><a href="/app#/proof">Guard&nbsp;proof</a><a href="/app#/print">Print</a><a href="/app#/replay">Replay</a><a href="/app#/compare">Isolation</a>
@@ -74,7 +74,7 @@ export function chatPage({ mode }) {
   <div class="grid">
     <section class="chat card" aria-label="Chat with Mediara">
       <div class="chat-head">
-        <div class="ava">M</div>
+        <div class="ava" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="16" fill="#f4f4f5"/><path d="M32 12 L50 20 V33 C50 44 42 51 32 54 C22 51 14 44 14 33 V20 Z" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linejoin="round"/><path d="M24 32.5 L29.5 38 L40 26" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="47" r="2.4" fill="#0c0d10"/></svg></div>
         <div><div class="who">Mediara</div>
           <div class="status"><span class="live"></span><span>memory on &middot; <span id="chatmode">local demo</span></span></div></div>
       </div>
@@ -132,13 +132,13 @@ export function landingPage({ mode, demoBlobs, guardCount }) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <meta name="description" content="Mediara — a caregiver chatbot that never re-asks a dose.">
-<title>Mediara — never re-asks a dose</title><link rel="icon" href="data:,">
+<title>Mediara — never re-asks a dose</title><link rel="icon" type="image/svg+xml" href="/app/logo.svg">
 <style>
 :root{color-scheme:dark;--lbg:#0c0d10;--lsurf:#14151b;--lbrd:rgb(255 255 255/.08);--ltx:#f4f4f5;--lmut:#a1a1aa;--lhi:#fafafa;--llo:#52525b;--lr:12px;--le:cubic-bezier(.32,.72,0,1)}
 *{box-sizing:border-box}body{margin:0;background:var(--lbg);color:var(--ltx);font:15px/1.6 Inter,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 a{color:inherit}.skip{position:absolute;left:-9999px;top:0;background:#f4f4f5;color:#0c0d10;padding:8px 14px;border-radius:0 0 10px 0;z-index:100}.skip:focus{left:0}
 .hero{max-width:860px;margin:0 auto;padding:72px 20px 28px;text-align:center}
-.mark{width:52px;height:52px;margin:0 auto 18px;display:flex;align-items:center;justify-content:center;border-radius:16px;background:linear-gradient(135deg,var(--lhi),var(--llo));color:#0c0d10;font-weight:800;font-size:24px}
+.mark{width:52px;height:52px;margin:0 auto 18px;display:flex;align-items:center;justify-content:center;border-radius:16px;background:linear-gradient(135deg,var(--lhi),var(--llo))}.mark svg{width:34px;height:34px;display:block}
 .kicker{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--lmut);margin:0 0 10px}
 h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacing:-.03em}
 .promise{margin:0 auto 26px;max-width:52ch;color:var(--lmut);font-size:16px}
@@ -150,7 +150,12 @@ h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacin
 .step b{display:block;font-size:13px;margin-bottom:6px}.step p{margin:0;font-size:13.5px;color:var(--lmut)}
 .strip{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;max-width:860px;margin:26px auto 0;padding:0 20px}
 .pill{font-size:12.5px;font-weight:600;border:1px solid var(--lbrd);border-radius:999px;padding:4px 12px;color:var(--ltx);background:var(--lsurf);font-variant-numeric:tabular-nums}
+.stopdemo{max-width:640px;margin:24px auto 0;padding:12px 16px;border:1px solid rgb(248 113 113/.4);border-radius:var(--lr);background:rgb(248 113 113/.07);text-align:left;font-size:13.5px;line-height:1.55}
+.stopdemo b{display:block;margin-bottom:4px}.stopdemo span{color:var(--lmut)}.stopdemo .ghost{margin:6px 0 0;display:inline-block}
 .note{max-width:860px;margin:26px auto 0;padding:0 20px 60px;color:var(--lmut);font-size:13px;text-align:center}
+.watch{max-width:640px;margin:26px auto 0;padding:14px 16px;border:1px solid var(--lbrd);border-radius:var(--lr);background:var(--lsurf);text-align:left}
+.watch b{display:block;font-size:13.5px;margin-bottom:8px}.watch video{width:100%;border-radius:8px;background:#000}
+.watch-note{margin:8px 0 0;font-size:12.5px;color:var(--lmut)}.watch-note .mono{font-family:ui-monospace,monospace}
 .foot{border-top:1px solid var(--lbrd);padding:18px 20px 34px;text-align:center;color:var(--lmut);font-size:12.5px}
 @media(max-width:640px){.steps{grid-template-columns:1fr}.hero{padding-top:52px}}
 @media(prefers-reduced-motion:reduce){*{animation-duration:.001ms!important;transition-duration:.001ms!important}}
@@ -158,15 +163,17 @@ h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacin
 </style></head><body>
 <a class="skip" href="#main">Skip to content</a>
 <main class="hero" id="main">
-<div class="mark" aria-hidden="true">M</div>
+<div class="mark" aria-hidden="true"><svg viewBox="0 0 64 64"><defs><linearGradient id="mlg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fafafa"/><stop offset="1" stop-color="#52525b"/></linearGradient></defs><rect x="4" y="4" width="56" height="56" rx="16" fill="url(#mlg)"/><path d="M32 12 L50 20 V33 C50 44 42 51 32 54 C22 51 14 44 14 33 V20 Z" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linejoin="round"/><path d="M24 32.5 L29.5 38 L40 26" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="47" r="2.4" fill="#0c0d10"/></svg></div>
 <p class="kicker">Mediara &middot; ${esc(modeLabel)}</p>
-<h1>A caregiver chatbot that never re-asks a dose</h1>
-<p class="promise">Tell it once — meds, allergies, routines — and every future answer is checked against that memory before it speaks.</p>
+<h1>Taught once. Checked every time.</h1>
+<p class="promise">Mediara is a caregiver chatbot with a real memory. Tell it about medications, allergies, and routines once — it stores them as encrypted Walrus blobs, and every later answer is checked against that memory before the model speaks. When something is unsafe, it stops and shows its evidence.</p>
+<div class="stopdemo" role="note" aria-label="Example safety block"><b>STOP — possible safety conflict</b><span>“Can she take ibuprofen for her headache?” → refused: allergy on record, blob cited. Try it live in the demo chat.</span><a class="ghost" href="/app#/demo">run this exact trap</a></div>
 <a class="cta" href="/app">Launch app</a><a class="ghost" href="/app#/demo">see the live demo chat</a>
+<div class="watch" aria-label="Demo video"><b>Watch it stop a bad dose</b><video controls preload="none" poster="/app/logo.svg" src="/app/demo.mp4"><p>Demo video drops here at submit — until then, <a href="/app#/demo">run the trap live in the demo chat</a>.</p></video><p class="watch-note">Video file <span class="mono">demo.mp4</span> lands in the app bundle before submit; this player serves it.</p></div>
 <div class="steps">
-<div class="step"><b>1 · Teach it once</b><p>Medications with times, allergies, routines — stored as encrypted Walrus blobs, not chat logs.</p></div>
-<div class="step"><b>2 · Guards run first</b><p>Every question is checked for allergy conflicts and drug interactions before any model answers.</p></div>
-<div class="step"><b>3 · Proof, not vibes</b><p>Every STOP cites its blob; the guard ledger is hash-chained and publicly verifiable.</p></div>
+<div class="step"><b>1 · Yours, not the prompt's</b><p>Sign in with your Sui wallet for a private vault. No login, no personal chat — the shared demo is read-only and identical for everyone.</p></div>
+<div class="step"><b>2 · Guards run first</b><p>Allergy conflicts and drug interactions are checked in code, before any model answers. A block cites the exact blob that fired it.</p></div>
+<div class="step"><b>3 · Proof, not vibes</b><p>Every block lands in a hash-chained guard ledger anyone can re-verify. Print the emergency card for the fridge.</p></div>
 </div>
 <div class="strip" aria-label="Live evidence">
 <span class="pill">12/12 A/B memory checks</span>
@@ -174,7 +181,7 @@ h1{margin:0 0 10px;font-size:clamp(30px,6vw,46px);line-height:1.08;letter-spacin
 <span class="pill">${esc(blobs == null ? '—' : String(blobs))} demo memories live</span>
 <span class="pill">${esc(guards == null ? '—' : String(guards))} guard stops on record</span>
 </div>
-<p class="note">${esc(demoNote)} Guests chat instantly with personal memory — no wallet needed; sign in later for your own vault and a bigger budget.</p>
+<p class="note">${esc(demoNote)} No login, no personal chat — guests use the shared read-only demo; sign in with a wallet for your own vault and a bigger budget.</p>
 </main>
 <footer class="foot">Mediara · built for Walrus Session 8 · Confirm with your doctor — this is not medical advice.</footer>
 </body></html>`;
@@ -292,7 +299,7 @@ export function printPage({ user, mode, facts, groups, agentShort, stale }) {
   ${stale ? '<div class="notice local"><b>Memory temporarily unreachable</b> \u2014 this card may be incomplete. Do not rely on it for medication decisions until it reloads.</div>' : ''}
   <div class="sheet">
     <div class="ecard">
-      <div class="ecard-head"><span class="logo">&#129461;</span><div><b>Emergency card</b><div class="muted">Mediara \u00b7 <span class="mono">${esc(user)}</span></div></div></div>
+      <div class="ecard-head"><span class="logo" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="16" fill="#f4f4f5"/><path d="M32 12 L50 20 V33 C50 44 42 51 32 54 C22 51 14 44 14 33 V20 Z" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linejoin="round"/><path d="M24 32.5 L29.5 38 L40 26" fill="none" stroke="#0c0d10" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="32" cy="47" r="2.4" fill="#0c0d10"/></svg></span><div><b>Emergency card</b><div class="muted">Mediara \u00b7 <span class="mono">${esc(user)}</span></div></div></div>
       <div class="ecard-sec allergy"><h4>Allergies</h4>${cell(allergyRows)}</div>
       <div class="ecard-sec"><h4>Current medications</h4>${cell(medRows)}</div>
       <div class="ecard-sec"><h4>Emergency contacts</h4>${cell(contactRows)}</div>

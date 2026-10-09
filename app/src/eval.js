@@ -61,7 +61,7 @@ G('write gate skips a question', () => shouldRemember('What meds does mom take?'
 
 // ---------- 2. RECALL probes (local stand-in; offline) ----------
 if (!process.env.DD_LOCAL_STORE) { const _o = (await import('node:os')).default; const _pa = (await import('node:path')).default; process.env.DD_LOCAL_STORE = _pa.join(_o.tmpdir(), `dd-eval-${process.pid}-${Date.now()}.json`); }
-const ns = 'eval-' + Date.now();
+const ns = 'eval-' + process.pid + '-run';
 const lc = createLocalClient({ namespace: ns });
 await lc.remember('Mom takes Metformin 500mg at 8pm after food');
 await lc.remember('She is allergic to ibuprofen, causes rash');
@@ -75,9 +75,12 @@ check('recall', 'allergy query returns the ibuprofen fact', await recallHit('Wha
 check('recall', 'routine query returns the dinner fact', await recallHit('What time is dinner?', 'dinner'));
 check('recall', 'unrelated chit-chat returns no med fact', !(await recallHit('What is the weather today?', 'metformin')));
 
-// cleanup local store
+// cleanup local store — resolve the SAME path the code under test honored
+// (DD_LOCAL_STORE override, else the repo demo file), mirroring the selftest
+// storePath fix: cleaning a hardcoded path while the run wrote elsewhere
+// leaves the eval namespace behind (and touches a file the run never used).
 try {
-  const store = path.join(__dirname, '..', '.local-memory.json');
+  const store = process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
   const db = JSON.parse(fs.readFileSync(store, 'utf8'));
   if (db.namespaces) delete db.namespaces[ns];
   const tmp = store + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(db, null, 2)); fs.renameSync(tmp, store);

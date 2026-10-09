@@ -24,8 +24,10 @@
 @media print {
   .sidebar, .topbar, .demo-banner, .backdrop, .no-print { display: none !important; }
   .main, .main-col { padding: 0 !important; margin: 0 !important; }
-  .pr-wrap { gap: 10px; }
-  .pr-allergies { break-inside: avoid; }
+  .pr-wrap { gap: 10px; background: #fff; color: #000; }
+  .pr-wrap .card { background: #fff; border-color: #999; box-shadow: none; }
+  .pr-allergies { break-inside: avoid; background: #fff; }
+  .pr-allergy-h { color: #000; }
   .pr-blobids { display: block !important; }
   a { text-decoration: none; color: inherit; }
   /* Blob URLs must survive on paper: links are not clickable in print, so

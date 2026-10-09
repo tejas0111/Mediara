@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { namespaceFor } from './memory.js';
+import { guardBody } from './guardBody.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_DB_PATH = path.join(__dirname, 'data', 'dosedughter.db');
@@ -62,20 +63,39 @@ export function openDb(dbPath = DEFAULT_DB_PATH) {
       at TEXT, userId TEXT, kind TEXT,
       substance TEXT, withSubstance TEXT, severity TEXT,
       reason TEXT, fact TEXT, blobId TEXT, message TEXT,
+      ns TEXT,
       prev TEXT NOT NULL DEFAULT '', hash TEXT NOT NULL DEFAULT ''
     );
   `);
+  // Additive `ns` column for pre-existing DB files (fail-closed vault evidence
+  // needs vault-namespaced receipts; legacy rows keep NULL and stay out).
+  try { db.exec('ALTER TABLE guards ADD COLUMN ns TEXT'); } catch { /* already present */ }
   return db;
 }
 
 // UTC day bucket. Same rule as UsageTracker.todayStr; a plain 'YYYY-MM-DD'
 // string passed as dayOverride keeps exercising persist+rollover without
 // faking the clock. An object { mode, now, day } selects the rolling 24h
-// window (default) or the legacy UTC-day bucket (wallet channel).
+// window (default) or the legacy UTC-day bucket (retained store capability —
+// no live channel uses it since the wallet moved to the rolling window).
 export const todayStr = (d = new Date()) => d.toISOString().slice(0, 10);
 
 export const WINDOW_MS = 24 * 60 * 60 * 1000;
 const WINDOW_KEEP = 50;
+// Write-path safety bound (cap unknown at write time — touchUser records
+// turns without the budget cap): ~300x the largest real rolling cap (30) and
+// covering the test-suite disable values, while keeping per-key rows bounded
+// so unbounded growth is impossible.
+export const WINDOW_KEEP_MAX = 10_000;
+// Prune target wherever the cap is known: the 50-row floor stands for small
+// caps, larger caps keep exactly what they may need to count. (The old
+// fixed-50 prune pinned `used` at 50, so any rolling cap above 50 silently
+// never fired — fail-open.)
+function keepFor(cap, fallback) {
+  return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0
+    ? Math.max(WINDOW_KEEP, Math.ceil(cap))
+    : fallback;
+}
 
 function normOpts(modeOrDay) {
   if (typeof modeOrDay === 'string') return { mode: 'daily', day: modeOrDay, now: undefined };
@@ -114,25 +134,38 @@ export class SqliteUsage {
     return Date.now();
   }
 
-  #liveTurns(u, nowMs) {
+  #liveTurns(u, nowMs, keep = WINDOW_KEEP_MAX) {
     const cutoff = nowMs - WINDOW_MS;
     this.db.prepare('DELETE FROM turns WHERE userId = ? AND at <= ?').run(u, cutoff);
-    // Cap the stored list (last 50): keep the newest rows per key.
+    // Purge malformed rows for this key (TEXT from a hand-edited DB): they are
+    // never turns, must not count, and must not occupy the prune target below.
+    try { this.db.prepare("DELETE FROM turns WHERE userId = ? AND typeof(at) NOT IN ('integer','real')").run(u); } catch { /* fail open — the JS filter below still contains them */ }
+    // Cap the stored list: keep the newest rows per key (max(50, cap) where
+    // the cap is known, else the write-path safety bound).
     this.db.prepare(
       'DELETE FROM turns WHERE userId = ? AND rowid NOT IN (SELECT rowid FROM turns WHERE userId = ? ORDER BY at DESC, rowid DESC LIMIT ?)',
-    ).run(u, u, WINDOW_KEEP);
-    return this.db.prepare('SELECT at FROM turns WHERE userId = ? ORDER BY at ASC').all(u).map((r) => r.at);
+    ).run(u, u, keep);
+    // Containment (mirrors UsageTracker.#prune): only finite numbers are
+    // turns — a malformed row (TEXT from a hand-edited DB) is ignored, never
+    // counted, and can never poison resetAt with an Invalid Date.
+    return this.db.prepare('SELECT at FROM turns WHERE userId = ? ORDER BY at ASC').all(u).map((r) => r.at)
+      .filter((a) => typeof a === 'number' && Number.isFinite(a));
   }
 
-  #recordTurn(u, nowMs) {
+  #recordTurn(u, nowMs, keep = WINDOW_KEEP_MAX) {
     this.db.prepare('INSERT INTO turns(userId, at) VALUES(?,?)').run(u, nowMs);
-    this.#liveTurns(u, nowMs);
+    this.#liveTurns(u, nowMs, keep);
   }
 
   #windowCheck(cap, live, nowMs) {
     const used = live.length;
     const reset = todayStr(new Date(nowMs));
-    if (!used) return { ok: true, used: 0, remaining: cap, reset, resetAt: null, resetInHrs: null };
+    // Even an empty window consults the cap: a fail-closed 0 cap denies.
+    if (!used) {
+      return 0 < cap
+        ? { ok: true, used: 0, remaining: cap, reset, resetAt: null, resetInHrs: null }
+        : { ok: false, used: 0, remaining: 0, reset, resetAt: null, resetInHrs: null };
+    }
     const oldest = live[0];
     const resetAt = new Date(oldest + WINDOW_MS).toISOString();
     const resetInHrs = Math.max(1, Math.ceil((oldest + WINDOW_MS - nowMs) / 3_600_000));
@@ -189,6 +222,9 @@ export class SqliteUsage {
   }
 
   checkDay(userId, cap, modeOrDay = null) {
+    // Fail-closed bound (mirrors UsageTracker): a non-numeric or negative
+    // cap coerces to 0 — it can never open the gate, empty window or not.
+    if (typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) cap = 0;
     const u = String(userId || '').slice(0, 64);
     const opts = normOpts(modeOrDay);
     if (opts.mode === 'daily') {
@@ -200,7 +236,7 @@ export class SqliteUsage {
         : { ok: false, used, remaining: 0, reset: today, resetAt: null, resetInHrs: null };
     }
     const nowMs = this.#nowMs(opts.now);
-    const live = u ? this.#liveTurns(u, nowMs) : [];
+    const live = u ? this.#liveTurns(u, nowMs, keepFor(cap, WINDOW_KEEP)) : [];
     return this.#windowCheck(cap, live, nowMs);
   }
 
@@ -220,7 +256,9 @@ export class SqliteUsage {
     const r = this.#row(u);
     this.db.prepare('UPDATE usage SET dayDate = ?, dayCount = ? WHERE userId = ?')
       .run(today, r && r.dayDate === today ? Number(r.dayCount || 0) + 1 : 1, u);
-    this.#recordTurn(u, nowMs);
+    // The write path never knows the budget cap (no caller passes one), so it
+    // always keeps the safety bound.
+    this.#recordTurn(u, nowMs, WINDOW_KEEP_MAX);
   }
 
   snapshot(userId) {
@@ -298,6 +336,9 @@ export class SqliteUsage {
   }
 }
 
+// Guard body serialisation lives in ./guardBody.js — ONE shared definition
+// with usage.js (byte-identical hashes on both stores, so mixed chains verify).
+
 // ---------------------------------------------------------------------------
 // SqliteGuards — GuardProof-compatible tamper-evident ledger over SQLite.
 // ---------------------------------------------------------------------------
@@ -317,7 +358,7 @@ export class SqliteGuards {
     return this.db.prepare('SELECT COUNT(*) AS c FROM guards').get().c;
   }
 
-  record({ userId, kind, substance, withSubstance, severity, reason, fact, blobId, message }) {
+  record({ userId, kind, substance, withSubstance, severity, reason, fact, blobId, message, ns }) {
     const last = this.db.prepare('SELECT hash FROM guards ORDER BY n DESC LIMIT 1').get();
     const prev = last ? last.hash : '';
     const f = String(fact || '').slice(0, 500);
@@ -327,15 +368,15 @@ export class SqliteGuards {
     // JSON.stringify drops undefined-valued keys, and a JSON persist/load
     // round-trip drops them too — so undefined stays undefined in the body
     // (NULL in the row, mapped back to undefined on read in toEntry()).
-    const body = JSON.stringify({ userId, kind, substance, withSubstance, severity, reason, fact: f, blobId: b, message: m, prev });
+    const body = guardBody({ userId, kind, substance, withSubstance, severity, reason, fact: f, blobId: b, message: m, ns, prev });
     const h = hash(body);
     const at = new Date().toISOString();
     const info = this.db.prepare(
-      'INSERT INTO guards(at, userId, kind, substance, withSubstance, severity, reason, fact, blobId, message, prev, hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-    ).run(at, userId, kind, substance ?? null, withSubstance ?? null, severity ?? null, reason ?? null, f, b, m, prev, h);
+      'INSERT INTO guards(at, userId, kind, substance, withSubstance, severity, reason, fact, blobId, message, ns, prev, hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    ).run(at, userId, kind, substance ?? null, withSubstance ?? null, severity ?? null, reason ?? null, f, b, m, ns ?? null, prev, h);
     return {
       n: Number(info.lastInsertRowid), at, userId, kind, substance, withSubstance, severity, reason,
-      fact: f, blobId: b, message: m, prev, hash: h,
+      fact: f, blobId: b, message: m, ...(ns != null ? { ns } : {}), prev, hash: h,
     };
   }
 
@@ -347,15 +388,27 @@ export class SqliteGuards {
     return this.db.prepare('SELECT COUNT(*) AS c FROM guards WHERE userId = ?').get(String(userId)).c;
   }
 
+  // Vault-namespaced receipt count (fail-closed vault evidence; legacy rows
+  // with NULL ns never match).
+  countByNs(ns) {
+    return this.db.prepare('SELECT COUNT(*) AS c FROM guards WHERE ns = ?').get(String(ns)).c;
+  }
+
   // Recompute the whole chain over SQL-read rows; same contract as
-  // GuardProof.verify(): { ok, brokenAt }.
+  // GuardProof.verify(): { ok, brokenAt }. Same sliced-primary + legacy-
+  // unsliced fallback (reviewer wave-13), so mixed chains verify identically
+  // on both stores.
   verify() {
+    const sliced = (v) => (typeof v === 'string' ? v.slice(0, 500) : v);
     const rows = this.db.prepare('SELECT * FROM guards ORDER BY n ASC').all().map(toEntry);
     let prev = '';
     for (const e of rows) {
-      const body = JSON.stringify({ userId: e.userId, kind: e.kind, substance: e.substance, withSubstance: e.withSubstance, severity: e.severity, reason: e.reason, fact: e.fact, blobId: e.blobId, message: e.message, prev });
-      if (e.prev !== prev || e.hash !== hash(body)) return { ok: false, brokenAt: e.n };
-      prev = e.hash;
+      const fields = { userId: e.userId, kind: e.kind, substance: e.substance, withSubstance: e.withSubstance, severity: e.severity, reason: e.reason, blobId: e.blobId, ns: e.ns };
+      const bodyNow = guardBody({ ...fields, fact: sliced(e.fact), message: sliced(e.message), prev });
+      if (e.prev === prev && e.hash === hash(bodyNow)) { prev = e.hash; continue; }
+      const bodyLegacy = guardBody({ ...fields, fact: e.fact, message: e.message, prev });
+      if (e.prev === prev && e.hash === hash(bodyLegacy)) { prev = e.hash; continue; }
+      return { ok: false, brokenAt: e.n };
     }
     return { ok: true, brokenAt: null, count: rows.length };
   }
@@ -371,6 +424,7 @@ function toEntry(r) {
     substance: opt(r.substance), withSubstance: opt(r.withSubstance),
     severity: opt(r.severity), reason: opt(r.reason),
     fact: r.fact, blobId: r.blobId, message: r.message,
+    ...(r.ns == null ? {} : { ns: r.ns }),
     prev: r.prev, hash: r.hash,
   };
 }

@@ -18,6 +18,7 @@ import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { namespaceFor, recallAllMeta, findInteraction, classifyFacts } from './memory.js';
+import { guardBody } from './guardBody.js';
 
 export const USERS = ['demo-mom', 'user-a', 'user-b'];
 
@@ -95,7 +96,9 @@ export class UsageTracker {
       let nowMs = Date.now();
       try { const n = this.now(); if (typeof n === 'number' && Number.isFinite(n)) nowMs = n; } catch { /* clock fallback */ }
       rec.window.push(nowMs);
-      if (rec.window.length > UsageTracker.WINDOW_KEEP) rec.window = rec.window.slice(-UsageTracker.WINDOW_KEEP);
+      // Cap unknown on this path (server records turns via touchUser without
+      // the budget cap): keep up to the safety bound, never pin at 50.
+      if (rec.window.length > UsageTracker.WINDOW_KEEP_MAX) rec.window = rec.window.slice(-UsageTracker.WINDOW_KEEP_MAX);
       const today = UsageTracker.todayStr();
       if (!rec.day || rec.day.date !== today) rec.day = { date: today, count: 1 };
       else rec.day = { date: today, count: Number(rec.day.count || 0) + 1 };
@@ -124,10 +127,17 @@ export class UsageTracker {
   // not money.
   //
   // DEMO + ANON channels roll on a 24h sliding window: each key stores its turn
-  // timestamps (ms epoch, capped at the last 50) and usedInWindow counts only
-  // timestamps within the last 24h. The WALLET channel (200/day UTC) keeps the
-  // legacy UTC-day bucket — pass { mode: 'daily' } (or the legacy positional
-  // dayOverride string) to checkDay/noteDay for that path.
+  // timestamps (ms epoch) and usedInWindow counts only timestamps within the
+  // last 24h. Pruning keeps max(50, cap) rows wherever the cap is known
+  // (checkDay): the old fixed-50 prune pinned `used` at 50, so any
+  // rolling-mode cap above 50 silently never fired (fail-open). Where the cap
+  // is NOT known at write time (touchUser/noteDay), history is kept up to the
+  // WINDOW_KEEP_MAX safety bound, so growth stays bounded while no live turn
+  // a real cap could count is ever dropped early. The WALLET channel (30 per
+  // rolling 24h — owner cost cap) rolls on the same sliding window — pass
+  // { mode: 'daily' } (or the legacy positional dayOverride string) to
+  // checkDay/noteDay only for the legacy UTC-day bucket the stores retain as
+  // a capability (no live channel uses it).
   //
   // checkDay(userId, cap, opts?) -> { ok, used, remaining, reset, resetAt, resetInHrs }
   //   opts: undefined (rolling now) | 'YYYY-MM-DD' (legacy daily override) |
@@ -140,6 +150,17 @@ export class UsageTracker {
   }
   static WINDOW_MS = 24 * 60 * 60 * 1000;
   static WINDOW_KEEP = 50;
+  // Write-path safety bound (cap unknown at write time): ~300x the largest
+  // real rolling cap (30) and covering the test-suite disable values, while
+  // keeping per-key history bounded so unbounded growth is impossible.
+  static WINDOW_KEEP_MAX = 10_000;
+  // Prune target wherever the cap is known: the 50-row floor stands for small
+  // caps, larger caps keep exactly what they may need to count.
+  static #keepFor(cap, fallback) {
+    return typeof cap === 'number' && Number.isFinite(cap) && cap >= 0
+      ? Math.max(UsageTracker.WINDOW_KEEP, Math.ceil(cap))
+      : fallback;
+  }
   #nowMs(opts) {
     if (opts && typeof opts.now === 'number' && Number.isFinite(opts.now)) return opts.now;
     try {
@@ -158,20 +179,28 @@ export class UsageTracker {
     }
     return { mode: 'rolling', day: null, now: undefined };
   }
-  #prune(rec, nowMs) {
+  #prune(rec, nowMs, keep = UsageTracker.WINDOW_KEEP_MAX) {
     if (!Array.isArray(rec.window)) rec.window = [];
     const cutoff = nowMs - UsageTracker.WINDOW_MS;
-    rec.window = rec.window.filter((t) => typeof t === 'number' && t > cutoff);
-    if (rec.window.length > UsageTracker.WINDOW_KEEP) {
-      rec.window = rec.window.slice(-UsageTracker.WINDOW_KEEP);
+    // Containment: only finite numbers are turns. Non-finite values (Infinity
+    // from a corrupt ledger, strings/objects from hand-edited JSON) are
+    // dropped, never counted — and an all-malformed window reads empty instead
+    // of throwing on `new Date(Infinity)`. NaN was already excluded by `>` but
+    // Infinity was not.
+    rec.window = rec.window.filter((t) => typeof t === 'number' && Number.isFinite(t) && t > cutoff);
+    if (rec.window.length > keep) {
+      rec.window = rec.window.slice(-keep);
     }
     return rec.window;
   }
   #windowCheck(rec, cap, nowMs) {
-    const live = rec ? this.#prune(rec, nowMs) : [];
+    const live = rec ? this.#prune(rec, nowMs, UsageTracker.#keepFor(cap, UsageTracker.WINDOW_KEEP)) : [];
     const used = live.length;
     if (!used) {
-      return { ok: true, used: 0, remaining: cap, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt: null, resetInHrs: null };
+      // Even an empty window consults the cap: a fail-closed 0 cap denies.
+      return 0 < cap
+        ? { ok: true, used: 0, remaining: cap, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt: null, resetInHrs: null }
+        : { ok: false, used: 0, remaining: 0, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt: null, resetInHrs: null };
     }
     const oldest = Math.min(...live);
     const resetAt = new Date(oldest + UsageTracker.WINDOW_MS).toISOString();
@@ -181,6 +210,11 @@ export class UsageTracker {
       : { ok: false, used, remaining: 0, reset: UsageTracker.todayStr(new Date(nowMs)), resetAt, resetInHrs };
   }
   checkDay(userId, cap, modeOrDay) {
+    // Fail-closed bound: a non-numeric (undefined/NaN/string/Infinity) or
+    // negative cap can never open the gate — it coerces to 0, so every path
+    // below denies with remaining:0. The empty-window branch used to return
+    // ok:true without consulting the cap at all.
+    if (typeof cap !== 'number' || !Number.isFinite(cap) || cap < 0) cap = 0;
     const u = String(userId || '').slice(0, 64);
     const opts = UsageTracker.#normOpts(modeOrDay);
     if (opts.mode === 'daily') {
@@ -203,10 +237,10 @@ export class UsageTracker {
     if (!Array.isArray(rec.window)) rec.window = [];
     return rec;
   }
-  #noteTurn(u, nowMs) {
+  #noteTurn(u, nowMs, keep = UsageTracker.WINDOW_KEEP_MAX) {
     const rec = this.#ensureRec(u);
     rec.window.push(nowMs);
-    this.#prune(rec, nowMs);
+    this.#prune(rec, nowMs, keep);
     const today = UsageTracker.todayStr(new Date(nowMs));
     if (!rec.day || rec.day.date !== today) rec.day = { date: today, count: 1 };
     else rec.day = { date: today, count: Number(rec.day.count || 0) + 1 };
@@ -221,7 +255,9 @@ export class UsageTracker {
       else rec.day = { date: opts.day, count: Number(rec.day.count || 0) + 1 };
       return;
     }
-    this.#noteTurn(u, this.#nowMs(opts));
+    // The write path never knows the budget cap (no caller passes one — the
+    // check-time cap was dead threading), so it always keeps the safety bound.
+    this.#noteTurn(u, this.#nowMs(opts), UsageTracker.WINDOW_KEEP_MAX);
   }
   snapshot(userId) {
     // Slice to 64 exactly like the write paths (touchUser/recordMemory):
@@ -293,6 +329,8 @@ export class UsageTracker {
 // ---------------------------------------------------------------------------
 // GuardProof — tamper-evident, append-only STOP/CAUTION ledger
 // ---------------------------------------------------------------------------
+// Guard body serialisation lives in ./guardBody.js — ONE shared definition
+// with db.js (byte-identical hashes on both stores, so mixed chains verify).
 export class GuardProof {
   constructor({ persistPath = null } = {}) {
     this.persistPath = persistPath;
@@ -316,16 +354,23 @@ export class GuardProof {
     fs.renameSync(tmp, this.persistPath);
   }
 
-  record({ userId, kind, substance, withSubstance, severity, reason, fact, blobId, message }) {
+  record({ userId, kind, substance, withSubstance, severity, reason, fact, blobId, message, ns }) {
     const prev = this.entries.length ? this.entries[this.entries.length - 1].hash : '';
-    const body = JSON.stringify({ userId, kind, substance, withSubstance, severity, reason, fact, blobId, message, prev });
+    const f = String(fact || '').slice(0, 500);
+    const m = String(message || '').slice(0, 500);
+    const b = blobId || null;
+    // Slice BEFORE hashing (same as SqliteGuards): verify() recomputes over
+    // the stored (sliced) values, so >500-char receipts verify identically on
+    // both stores. Short facts hash byte-identical to before (slice is a no-op).
+    const body = guardBody({ userId, kind, substance, withSubstance, severity, reason, fact: f, blobId: b, message: m, ns, prev });
     const entry = {
       n: this.entries.length + 1,
       at: new Date().toISOString(),
       userId, kind, substance, withSubstance, severity, reason,
-      fact: String(fact || '').slice(0, 500),
-      blobId: blobId || null,
-      message: String(message || '').slice(0, 500),
+      fact: f,
+      blobId: b,
+      message: m,
+      ...(ns != null ? { ns } : {}),
       prev,
       hash: hash(body),
     };
@@ -340,14 +385,30 @@ export class GuardProof {
 
   // Recompute the whole chain; returns { ok, brokenAt } — brokenAt = 1-based n of
   // the first entry whose hash (or prev-link) no longer verifies.
+  // Migration fallback (reviewer wave-13): record() hashes the SLICED
+  // fact/message, but pre-existing rows hashed the UNSLICED values. The sliced
+  // body is tried first, then the legacy unsliced body — a row verifies under
+  // either historically-real serialisation; anything else is still tamper
+  // (the fallback never trusts: both attempts are full hash comparisons, and
+  // the prev-link is always enforced).
   verify() {
+    const sliced = (v) => (typeof v === 'string' ? v.slice(0, 500) : v);
     let prev = '';
     for (const e of this.entries) {
-      const body = JSON.stringify({ userId: e.userId, kind: e.kind, substance: e.substance, withSubstance: e.withSubstance, severity: e.severity, reason: e.reason, fact: e.fact, blobId: e.blobId, message: e.message, prev });
-      if (e.prev !== prev || e.hash !== hash(body)) return { ok: false, brokenAt: e.n };
-      prev = e.hash;
+      const fields = { userId: e.userId, kind: e.kind, substance: e.substance, withSubstance: e.withSubstance, severity: e.severity, reason: e.reason, blobId: e.blobId, ns: e.ns };
+      const bodyNow = guardBody({ ...fields, fact: sliced(e.fact), message: sliced(e.message), prev });
+      if (e.prev === prev && e.hash === hash(bodyNow)) { prev = e.hash; continue; }
+      const bodyLegacy = guardBody({ ...fields, fact: e.fact, message: e.message, prev });
+      if (e.prev === prev && e.hash === hash(bodyLegacy)) { prev = e.hash; continue; }
+      return { ok: false, brokenAt: e.n };
     }
     return { ok: true, brokenAt: null, count: this.entries.length };
+  }
+
+  // Vault-namespaced receipt count (server.js vaultGuardCount falls back to
+  // list() filtering when this is absent — keep both in agreement).
+  countByNs(ns) {
+    return this.entries.filter((e) => e && e.ns === ns).length;
   }
 }
 

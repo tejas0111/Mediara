@@ -74,7 +74,8 @@ export default function GuardProofView({ userId }: { userId: string }) {
         )}
       </div>
       <p className="gp-hint">
-        Every STOP the guard fired, newest first — each entry quotes the fact that triggered it and cites the Walrus blob behind it.
+        Public ledger — no sign-in needed. Every STOP the guard fired, newest first — each entry
+        quotes the fact that triggered it and cites the blob behind it.
       </p>
       {!data.verify.ok ? (
         <Alert variant="danger">
@@ -123,6 +124,10 @@ export default function GuardProofView({ userId }: { userId: string }) {
                     <p className="gp-line gp-cite">Source blob unavailable (local record)</p>
                   )}
                   <blockquote className="gp-quote gp-msg">&ldquo;{clean(e.message)}&rdquo;</blockquote>
+                  <p className="gp-line gp-cite gp-hash">
+                    Hash chain <code className="mono">{String(e.prev ?? '').slice(0, 12)}…</code>
+                    {' → '}<code className="mono">{String(e.hash ?? '').slice(0, 12)}…</code>
+                  </p>
                   <p className="gp-time">Entry #{e.n} · {e.at} · user {e.userId}</p>
                 </CardContent>
               </Card>
