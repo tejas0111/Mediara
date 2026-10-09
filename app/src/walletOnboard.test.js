@@ -302,3 +302,71 @@ test('an unreachable submit is an actionable 409, never a bare 500', async () =>
   assert.match(body.error, /press the step again/i, 'the user is told what to do next');
   assert.equal(body.pendingPhase ?? undefined, undefined, 'the pending step stays server-side, not in the error');
 });
+
+// --- Regression: the live "Repair my vault" loop (production, wallet 0xf355…) ---
+// The link tx landed on a previous attempt, so the SECOND link prepare re-adds
+// the same delegate key → the build aborts → the old classifier matched the
+// MoveAbort message and labelled the CURRENT-package account "retired", so the
+// UI offered "Repair my vault", which 409s on create and loops forever.
+test('a duplicate link (delegate already registered) reports alreadyLinked — no tx, no loop', async () => {
+  mode.build = 'ok';
+  mode.execute = 'ok';
+  mode.objects = [obj(ACCOUNT, `${PKG}::account::MemWalAccount`, { account_id: ACCOUNT, owner: WALLET })];
+  mode.type = `${PKG}::account::MemWalAccount`;
+  // The on-chain account ALREADY carries this server's delegate: the earlier
+  // link landed; only the completion step was lost.
+  mode.delegates = [DELEGATE_ADDRESS];
+  upsertUser({
+    address: WALLET,
+    accountId: ACCOUNT,
+    delegatePrivateKey: 'ab'.repeat(32),
+    delegatePublicKey: 'cd'.repeat(32),
+    delegateAddress: DELEGATE_ADDRESS,
+    pendingPhase: null,
+    pendingTxBytes: null,
+  });
+  const r = await post('/api/wallet/onboard/link', {});
+  assert.equal(r.status, 200, 'nothing to sign: the link already landed');
+  const body = await r.json();
+  assert.equal(body.alreadyLinked, true, 'the client lands straight on Done');
+  const st = await statusOf();
+  assert.equal(st.onboarded, true, 'the account is usable without a second wallet prompt');
+  assert.equal(st.needsRelink, false);
+});
+
+test('a link build failure on a CURRENT-package account never claims the vault is retired', async () => {
+  mode.build = 'abort'; // any build failure (e.g. transient relayer error)
+  mode.execute = 'ok';
+  mode.objects = [obj(ACCOUNT, `${PKG}::account::MemWalAccount`, { account_id: ACCOUNT, owner: WALLET })];
+  mode.type = `${PKG}::account::MemWalAccount`;
+  mode.delegates = []; // not registered yet → a real link tx is offered
+  upsertUser({
+    address: WALLET,
+    accountId: ACCOUNT,
+    delegatePrivateKey: 'ab'.repeat(32),
+    delegatePublicKey: 'cd'.repeat(32),
+    delegateAddress: DELEGATE_ADDRESS,
+    pendingPhase: null,
+    pendingTxBytes: null,
+  });
+  const r = await post('/api/wallet/onboard/link', {});
+  assert.equal(r.status, 409, 'the failed build is an actionable retry');
+  const body = await r.json();
+  assert.ok(!body.retiredDeployment, 'a CURRENT-package account is never called retired');
+  assert.match(body.error, /again to regenerate/i, 'the user is told to retry, not to start a fresh vault');
+  const st = await statusOf();
+  assert.equal(st.retiredDeployment, false, 'status stays linkable');
+});
+
+test('a RETIRED-typed account still offers the fresh-vault path', async () => {
+  mode.build = 'abort';
+  mode.execute = 'ok';
+  mode.objects = [obj(RETIRED_ACCOUNT, `${RETIRED_PKG}::account::MemWalAccount`, { account_id: RETIRED_ACCOUNT, owner: WALLET })];
+  mode.type = `${RETIRED_PKG}::account::MemWalAccount`;
+  mode.delegates = [];
+  clearUser(WALLET);
+  const r = await post('/api/wallet/onboard/link', {});
+  assert.equal(r.status, 409);
+  const body = await r.json();
+  assert.equal(body.retiredDeployment, true, 'a truly retired-typed account still offers repair');
+});

@@ -176,16 +176,53 @@ export async function prepareLinkDelegate(address) {
     delegateAddress = delegate.suiAddress;
     upsertUser({ address, accountId, delegatePrivateKey, delegatePublicKey: delegatePublicKeyHex, delegateAddress });
   }
+  // ALREADY LINKED ON-CHAIN? A previous link landed but completion was lost
+  // (container restart between the signed tx and the verify). Re-adding the
+  // SAME delegate key aborts on-chain, and that abort used to be misread as
+  // "retired vault" — an infinite "Repair my vault" loop. There is nothing to
+  // sign: report it so the UI lands straight on Done.
+  try {
+    const already = await verifyAccount(accountId, { expectOwner: address, expectDelegateAddress: delegateAddress });
+    if (already.ok) {
+      upsertUser({ address, accountId, pendingPhase: null, pendingTxBytes: null });
+      return { alreadyLinked: true, accountId, txBytesBase64: '' };
+    }
+  } catch { /* not verifiable yet — build the tx below */ }
   const delegatePublicKey = Uint8Array.from(Buffer.from(delegatePublicKeyHex, 'hex'));
   const tx = buildLinkDelegateTx(address, accountId, delegatePublicKey);
   let bytes;
   try {
     bytes = await tx.build({ client: buildClient() });
   } catch (e) {
-    // Retired-typed accounts fail the Move type check permanently (409 + flag
-    // so the UI can offer a fresh vault); 0-SUI wallets fail gas selection
+    // Retired-typed accounts fail the Move type check permanently. Decide that
+    // by reading the account's ACTUAL on-chain type — never by matching the
+    // abort message: a duplicate-delegate abort (the link already landed in an
+    // earlier attempt) was misread as "retired vault" and looped the user into
+    // a pointless fresh-vault repair. 0-SUI wallets fail gas selection
     // (409 fund-and-retry). Transient/network failures rethrow masked.
-    throw classifyBuildError(e, { accountId }) || e;
+    let retired = false;
+    try {
+      const chk = await verifyAccount(accountId, {});
+      retired = !chk.ok || !String(chk.type || '').startsWith(PACKAGE_ID);
+    } catch { /* unreadable — not proof of retirement */ }
+    if (retired) {
+      throw clientError(
+        'This vault was created under a retired Walrus Memory deployment and can no longer link — start a fresh vault (create + link) to use the live deployment. Memories in the old vault are not transferable.',
+        409,
+        { retiredDeployment: true },
+      );
+    }
+    if (/insufficient.*sui|insufficient funds|gas selection|no gas|empty.*coin|not enough.*gas/i.test(String((e && e.message) || e))) {
+      throw clientError(
+        'This wallet has no SUI for gas — fund it with a little SUI on Sui mainnet, then press the step again to regenerate the transaction.',
+        409,
+        { needsFunding: true },
+      );
+    }
+    throw clientError(
+      'The link transaction could not be built just now — press the step again to regenerate it, then sign.',
+      409,
+    );
   }
   const txBytesBase64 = Buffer.from(bytes).toString('base64');
   // Persist the account id with the pending phase: if the user signs but
