@@ -189,8 +189,10 @@ export async function chatStream(
   message: string,
   opts: ChatOpts,
   handlers: StreamHandlers,
+  baseOverride?: string,
 ): Promise<ChatResponse> {
-  const r = await fetch(`${streamBase()}/api/chat/stream`, {
+  const base = (baseOverride ?? streamBase()).replace(/\/+$/, '');
+  const r = await fetch(`${base}/api/chat/stream`, {
     method: 'POST',
     headers: headers(),
     credentials: 'include',

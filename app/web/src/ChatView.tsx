@@ -439,18 +439,27 @@ export default function ChatView(props: ChatViewProps) {
         );
         finish(res);
       } catch (e) {
-        // The primary stream (direct API host) fails on a NETWORK error (CORS
-        // hiccup, DNS, offline) — then the same-origin proxy path is attempted.
-        // A 429 (budget) or 401 is a REAL answer from the server: the stream
-        // path reached it fine, so falling back would double-spend the message
-        // (the proxy retries a chargeable turn). Show it instead.
-        const networkOnly = e instanceof ApiError && (e.status === 0 || e.status === 404);
-        if (networkOnly) {
+        // A NETWORK-level failure (fetch itself threw: DNS, blocked host,
+        // rejected preflight, offline) carries no HTTP status — there is no
+        // server verdict to show and no charge to protect. Retry the SAME
+        // turn once through the same-origin proxy (/api/* → Railway), which
+        // carries the session cookie and cannot be blocked cross-origin.
+        // A REAL status (429 budget, 401 session) IS a server verdict: the
+        // direct path reached the API, so a proxy retry would charge the turn
+        // twice. Show it instead.
+        const networkLevel = !(e instanceof ApiError) || e.status === 0 || e.status === 404;
+        if (networkLevel) {
           try {
-            const res = await chat(userId, text, {
+            const res = await chatStream(userId, text, {
               model: model || undefined,
               memory: memoryOn,
-            });
+            }, {
+              onThinking: (thinking, recalledMeta) =>
+                patchStream((s) => ({ ...s, thinking, recalled: recalledMeta })),
+              onToken: (t) => {
+                patchStream((s) => ({ ...s, text: s.text + t }));
+              },
+            }, '');
             finish(res);
             setBusy(false);
             return;

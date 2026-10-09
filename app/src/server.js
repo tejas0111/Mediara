@@ -834,7 +834,7 @@ async function streamLLM(system, userMessage, history = [], modelOverride, onTok
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return { text: null, model: null, streamed: false };
   const models = freeModelChain(modelOverride);
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + 15_000;
   for (const m of models) {
     if (Date.now() > deadline) break;
     if (parentSignal?.aborted) return { text: null, model: null, streamed: false };
@@ -922,7 +922,7 @@ async function callLLM(system, userMessage, history = [], modelOverride) {
   let lastErr = '';
   // Overall budget across the whole chain so one stalled provider can't run for
   // 6 × 15s; the socket timeout is 120s, so the handler must return well before.
-  const deadline = Date.now() + 25_000;
+  const deadline = Date.now() + 15_000;
   for (const m of models) {
     if (Date.now() > deadline) break;
     try {
