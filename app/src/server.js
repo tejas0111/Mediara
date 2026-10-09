@@ -614,12 +614,28 @@ app.use((req, res, next) => {
   }
   next();
 });
-// CSRF: a browser sends Origin on cross-site POSTs; require same-origin. Non-
-// browser clients (no Origin) are unaffected.
+// CSRF + CORS: a browser sends Origin on cross-site requests. Same-host always
+// passes; the hosted UI origin (Netlify → Railway split) is allowlisted so the
+// in-app "Mainnet server URL" override and direct API calls work. Anything
+// else on a state-changing request is rejected. Allowlisted origins get ACAO
+// echo + preflight handling (demo reads are cookieless; the session cookie
+// flows through the same-origin Netlify proxy, never cross-site).
+const UI_ORIGINS = new Set(['mediara.netlify.app', 'localhost', '127.0.0.1']);
 app.use((req, res, next) => {
-  if (req.method === 'POST' && req.headers.origin) {
-    try { if (new URL(req.headers.origin).host !== req.headers.host) return res.status(403).json({ error: 'cross-origin request blocked' }); }
+  const origin = req.headers.origin;
+  if (origin) {
+    let hostname = '';
+    try { hostname = new URL(origin).hostname; }
     catch { return res.status(403).json({ error: 'invalid origin' }); }
+    const same = hostname === (req.headers.host || '').split(':')[0];
+    if (!same && !UI_ORIGINS.has(hostname)) return res.status(403).json({ error: 'cross-origin request blocked' });
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    return res.status(204).end();
   }
   next();
 });
