@@ -25,10 +25,10 @@ import { limiter, clientKey, deviceKey, deviceId } from './rateLimit.js';
 import { encryptionEnabled } from './cryptoUtils.js';
 import { UsageTracker, GuardProof, morningBriefFromRecall, nightlyCrossCheckFromRecall, tickOnce } from './usage.js';
 import { createStores, DEFAULT_DB_PATH } from './db.js';
-import { srcDir } from './srcDir.js';
+import { srcDir, lambdaTmpOr } from './srcDir.js';
 
-const __dirname = srcDir(import.meta.url);
-const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const srcDirname = srcDir(import.meta.url);
+const PUBLIC_DIR = path.join(srcDirname, '..', 'public');
 // esc (HTML escaping) lives in page.js — single definition, no drift.
 // Map an error to a status. Client-state errors carry `status` (e.g. 409 from
 // onboarding); everything else is a real 500 and is logged, never echoed raw.
@@ -510,8 +510,8 @@ const MODE = process.env.MEMWAL_MODE === 'mainnet' ? 'mainnet' : 'local';
 function buildStores() {
   if (process.env.DD_USAGE_LEDGER || process.env.DD_GUARD_PROOF) {
     return {
-      usage: new UsageTracker({ persistPath: process.env.DD_USAGE_LEDGER || path.join(__dirname, 'usage-ledger.json') }),
-      guardProof: new GuardProof({ persistPath: process.env.DD_GUARD_PROOF || path.join(__dirname, 'guard-proof.json') }),
+      usage: new UsageTracker({ persistPath: process.env.DD_USAGE_LEDGER || lambdaTmpOr('usage-ledger.json', path.join(srcDirname, 'usage-ledger.json')) }),
+      guardProof: new GuardProof({ persistPath: process.env.DD_GUARD_PROOF || lambdaTmpOr('guard-proof.json', path.join(srcDirname, 'guard-proof.json')) }),
     };
   }
   return createStores({ dbPath: process.env.DD_DB_PATH || DEFAULT_DB_PATH });
@@ -627,7 +627,7 @@ app.use((req, res, next) => {
 app.use('/assets', express.static(PUBLIC_DIR, { maxAge: '1h', index: false }));
 // React SPA bundle (Vite build in app/web/dist, served under /app). Hashed
 // filenames are immutable; index.html is served explicitly at / (never cached).
-const WEB_DIST = path.join(__dirname, '..', 'web', 'dist');
+const WEB_DIST = path.join(srcDirname, '..', 'web', 'dist');
 app.use('/app', express.static(WEB_DIST, { maxAge: '1y', index: false, immutable: true, redirect: false }));
 // 16 KB JSON bodies — chat messages and tx signatures are tiny; anything
 // larger is abuse. (Express's json parser rejects oversize with 413.)

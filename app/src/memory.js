@@ -84,11 +84,34 @@ export function namespaceFor(userId) {
   return `user-${fullClean}`;
 }
 
+// Strip copy-paste armor (surrounding quotes/whitespace from dashboards) and
+// fail with an ACTIONABLE exposed error: a malformed key otherwise throws deep
+// inside the SDK (hexToBytes) and every mainnet route 500s as "Internal
+// error", hiding a 30-second Variables fix. Never includes key material —
+// only the shape problem.
+function cleanKey(key) {
+  const s = String(key ?? '').trim().replace(/^["']+|["']+$/g, '').trim();
+  if (/^suiprivkey1[0-9a-z]+$/i.test(s)) return s;
+  const hex = s.startsWith('0x') || s.startsWith('0X') ? s.slice(2) : s;
+  if (/^[0-9a-fA-F]+$/.test(hex) && hex.length >= 32) return s;
+  const e = new Error(
+    `Server memory misconfigured: MEMWAL_PRIVATE_KEY is not a hex or suiprivkey1 key (got ${s.length} chars, ` +
+    'check Railway Variables for quotes/truncation — no key material shown)');
+  e.expose = true;
+  e.status = 500;
+  throw e;
+}
+
 export function createClient({ namespace } = {}) {
   const key = process.env.MEMWAL_PRIVATE_KEY;
-  const accountId = process.env.MEMWAL_ACCOUNT_ID;
-  if (!key || !accountId) throw new Error('Missing MEMWAL_PRIVATE_KEY / MEMWAL_ACCOUNT_ID in .env');
-  return MemWal.create({ key, accountId, serverUrl: SERVER_URL, namespace: namespace || 'dosedughter-prod' });
+  const accountId = String(process.env.MEMWAL_ACCOUNT_ID || '').trim().replace(/^["']+|["']+$/g, '');
+  if (!key || !accountId) {
+    const e = new Error('Server memory misconfigured: missing MEMWAL_PRIVATE_KEY / MEMWAL_ACCOUNT_ID (Railway Variables)');
+    e.expose = true;
+    e.status = 500;
+    throw e;
+  }
+  return MemWal.create({ key: cleanKey(key), accountId, serverUrl: SERVER_URL, namespace: namespace || 'dosedughter-prod' });
 }
 
 // Per-user client: acts AS THE USER via their registered delegate key.

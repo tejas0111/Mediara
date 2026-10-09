@@ -1,9 +1,7 @@
-# Netlify deploy config for Mediara (Express app -> serverless function).
-# The app is Express + a React SPA (app/web); the api function serves
-# everything (API + /app SPA + legacy pages) via serverless-http.
-# NOTE: production MUST set MEMWAL_MODE=mainnet + keys, SESSION_SECRET,
-# OPENROUTER_API_KEY, and the /tmp DD_* store paths in the Netlify UI
-# (Site settings -> Environment variables). See DEPLOY-RUNBOOK.md.
+# Netlify = static UI only. The Express API runs on Railway
+# (mediara-production.up.railway.app); /api + server pages proxy there
+# same-origin so wallet sessions/cookies keep working. No function routes —
+# the v1 CJS loader cannot load the ESM-only memwal SDK.
 [build]
   base = "app"
   command = "npm --prefix web install --no-audit --no-fund && npm --prefix web run build"
@@ -19,21 +17,70 @@
 
 [functions]
   directory = "netlify/functions"
-  # nft (no transpilation) instead of esbuild: esbuild's CJS output breaks
-  # import.meta.url and mangles node:sqlite. nft ships real node_modules and
-  # Node 22 runs the ESM sources natively.
-  node_bundler = "nft"
-  included_files = ["src/**", "web/dist/**"]
 
-# Static files under web/dist (the /app SPA bundle) are served directly by
-# the CDN; without `force`, existing files win over this redirect, so only
-# dynamic routes reach the Express function.
+# API + health + server-rendered pages → Railway (order matters: first match wins).
 [[redirects]]
-  from = "/demo.mp4"
-  to = "/app/demo.mp4"
+  from = "/api/*"
+  to = "https://mediara-production.up.railway.app/api/:splat"
   status = 200
+  force = true
 
 [[redirects]]
-  from = "/*"
-  to = "/.netlify/functions/api"
+  from = "/healthz"
+  to = "https://mediara-production.up.railway.app/healthz"
   status = 200
+  force = true
+
+[[redirects]]
+  from = "/demo"
+  to = "https://mediara-production.up.railway.app/demo"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/print"
+  to = "https://mediara-production.up.railway.app/print"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/memory"
+  to = "https://mediara-production.up.railway.app/memory"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/guard-proof"
+  to = "https://mediara-production.up.railway.app/guard-proof"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/compare"
+  to = "https://mediara-production.up.railway.app/compare"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/replay"
+  to = "https://mediara-production.up.railway.app/replay"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/assets/*"
+  to = "https://mediara-production.up.railway.app/assets/:splat"
+  status = 200
+  force = true
+
+# Old SPA path (/app#/demo links in article/forms) → SPA now served at root.
+# Browsers preserve the #fragment across the redirect.
+[[redirects]]
+  from = "/app"
+  to = "/"
+  status = 301
+
+[[redirects]]
+  from = "/app/*"
+  to = "/"
+  status = 301

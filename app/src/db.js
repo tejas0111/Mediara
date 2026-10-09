@@ -23,10 +23,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { namespaceFor } from './memory.js';
 import { guardBody } from './guardBody.js';
-import { srcDir } from './srcDir.js';
+import { srcDir, lambdaTmpOr } from './srcDir.js';
 
-const __dirname = srcDir(import.meta.url);
-export const DEFAULT_DB_PATH = path.join(__dirname, 'data', 'dosedughter.db');
+const srcDirname = srcDir(import.meta.url);
+export const DEFAULT_DB_PATH = lambdaTmpOr('dosedughter.db', path.join(srcDirname, 'data', 'dosedughter.db'));
 
 const hash = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 

@@ -8,13 +8,13 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { srcDir } from './srcDir.js';
+import { srcDir, lambdaTmpOr } from './srcDir.js';
 
-const __dirname = srcDir(import.meta.url);
+const srcDirname = srcDir(import.meta.url);
 // Overridable for tests (DD_LOCAL_STORE) so route tests never mutate the demo store.
 // Read dynamically (not once at import) so selftest/eval pick up a temp store
 // even when the env var is set after import.
-const storePath = () => process.env.DD_LOCAL_STORE || path.join(__dirname, '..', '.local-memory.json');
+const storePath = () => process.env.DD_LOCAL_STORE || lambdaTmpOr('local-memory.json', path.join(srcDirname, '..', '.local-memory.json'));
 
 function load() {
   // Distinguish "empty" from "unreadable": a corrupt store must fail LOUD so the

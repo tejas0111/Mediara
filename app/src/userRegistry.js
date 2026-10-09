@@ -9,11 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encryptSecret, decryptSecret, encryptionEnabled } from './cryptoUtils.js';
-import { srcDir } from './srcDir.js';
+import { srcDir, lambdaTmpOr } from './srcDir.js';
 
-const __dirname = srcDir(import.meta.url);
+const srcDirname = srcDir(import.meta.url);
 // Overridable per-call (tests): set DD_REGISTRY_PATH to a temp file.
-const storePath = () => process.env.DD_REGISTRY_PATH || path.join(__dirname, '..', '.wallet-registry.json');
+const storePath = () => process.env.DD_REGISTRY_PATH || lambdaTmpOr('wallet-registry.json', path.join(srcDirname, '..', '.wallet-registry.json'));
 
 let REGISTRY_COMPROMISED = false;
 function load() {
