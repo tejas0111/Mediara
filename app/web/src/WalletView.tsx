@@ -347,7 +347,9 @@ export default function WalletView({ onChanged }: { onChanged?: () => void }) {
         st = await walletStatus();
         setStatus(st);
       }
-      if (!st?.onboarded && !st?.pendingPhase && !st?.needsRelink) {
+      if (!st?.onboarded && !st?.pendingPhase && (!st?.needsRelink || st?.retiredDeployment)) {
+        // Retired-typed accounts can never link (Move type check) — a retired
+        // wallet must create fresh on the live deployment, never link the dead one.
         const created = await signAndComplete('create', retry);
         if (!created) return;
         st = await walletStatus();

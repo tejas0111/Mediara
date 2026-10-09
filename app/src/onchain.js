@@ -76,8 +76,22 @@ export function buildLinkDelegateTx(userAddress, accountId, delegatePublicKey) {
 
 // Owner → account via AccountCreated events (user is the tx sender, so this
 // always works for users who onboarded through this app).
+const currentAccountType = PACKAGE_ID + '::account::MemWalAccount';
+
 export async function accountForOwner(ownerAddress) {
   const owner = String(ownerAddress).toLowerCase();
+  // Prefer CURRENT-package accounts everywhere: a wallet with both a retired
+  // and a fresh account must resolve to the usable one (fresh-create
+  // completion, link, status). Retired-typed accounts are a fallback only.
+  const currentRe = new RegExp(`^${PACKAGE_ID}::account::MemWalAccount$`);
+  const anyRe = /::account::MemWalAccount$/;
+  let fallback = null;
+  const consider = (accountId, repr, source) => {
+    if (!accountId) return null;
+    if (currentRe.test(String(repr || ''))) return { accountId, source };
+    if (!fallback && anyRe.test(String(repr || ''))) fallback = { accountId, source };
+    return null;
+  };
   // Owned-objects first: no event-window limit, any package. A dashboard-made
   // account older than the last 50 sent events is invisible to the events
   // scan below but still owned — and ownership is exactly what link needs.
@@ -88,11 +102,9 @@ export async function accountForOwner(ownerAddress) {
     );
     for (const node of data?.objects?.nodes || []) {
       const repr = String(node?.asMoveObject?.contents?.type?.repr || '');
-      if (/::account::MemWalAccount$/.test(repr)) {
-        const j = node?.asMoveObject?.contents?.json || {};
-        if (node?.address) return { accountId: node.address, source: 'owned-objects' };
-        if (j?.account_id) return { accountId: j.account_id, source: 'owned-objects' };
-      }
+      const j = node?.asMoveObject?.contents?.json || {};
+      const hit = consider(node?.address || j?.account_id || null, repr, 'owned-objects');
+      if (hit) return hit;
     }
   } catch { /* fall through to the events scan */ }
   for (const pkg of PACKAGE_IDS) {
@@ -102,10 +114,13 @@ export async function accountForOwner(ownerAddress) {
     );
     for (const node of data?.events?.nodes || []) {
       const j = node.contents?.json;
-      if (j?.account_id) return { accountId: j.account_id, source: `events:${pkg.slice(0, 10)}` };
+      // Event payloads carry no type repr; the module filter already tells us
+      // the package — current-package events win, others are fallback.
+      const hit = consider(j?.account_id || null, `${pkg}::account::MemWalAccount`, `events:${pkg.slice(0, 10)}`);
+      if (hit) return hit;
     }
   }
-  return null;
+  return fallback;
 }
 
 // MemWalAccount is a shared object — verify via the object itself.
@@ -125,7 +140,7 @@ export async function verifyAccount(accountId, { expectOwner, expectDelegateAddr
   if (expectDelegateAddress && !(j.delegate_keys || []).some((d) => String(d.sui_address).toLowerCase() === String(expectDelegateAddress).toLowerCase())) {
     return { ok: false, reason: 'delegate not registered' };
   }
-  return { ok: true, account: j };
+  return { ok: true, account: j, type: String(obj?.asMoveObject?.contents?.type?.repr || '') };
 }
 
 // Visitor's SUI balance in nano (0 SUI users may need the sponsor path).

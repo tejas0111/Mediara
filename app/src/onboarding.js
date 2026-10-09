@@ -14,6 +14,7 @@ import {
   accountForOwner,
   verifyAccount,
   executeSigned,
+  PACKAGE_ID,
 } from './onchain.js';
 import { upsertUser, markAccountLinked, getUser, getRawUser, clearUser } from './userRegistry.js';
 
@@ -72,13 +73,25 @@ export async function walletStatus(address) {
   // pending. A half-written row (failed link) must NOT report onboarded:true, or
   // the UI hides the only action and the vault is silently broken.
   const pending = Boolean(user?.pendingPhase);
+  const needsRelink = Boolean(!hasDelegate && accountId);
+  // Retired-typed accounts can never link (Move type check) — report it
+  // server-side so repair offers create-fresh instead of looping on link.
+  // One object read, only in the broken-vault case (never on healthy loads).
+  let retiredDeployment = false;
+  if (needsRelink && accountId && MODE === 'mainnet') {
+    try {
+      const check = await verifyAccount(accountId, {});
+      retiredDeployment = check.ok && !String(check.type || '').startsWith(PACKAGE_ID);
+    } catch { /* unknown — leave false, link will surface the real error */ }
+  }
   return {
     address,
     onboarded: hasDelegate && !pending,
     pendingPhase: user?.pendingPhase || null,
     // true => account exists onchain but this server has no usable delegate row
     // (e.g. redeploy lost the registry): user needs the LINK step, not create.
-    needsRelink: Boolean(!hasDelegate && accountId),
+    needsRelink,
+    retiredDeployment,
     accountId,
   };
 }
